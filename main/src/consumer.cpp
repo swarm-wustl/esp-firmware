@@ -1,13 +1,15 @@
 #include "consumer.h"
 
 #include <utility>
-#include <stdio.h>
 
 #include "freertos/FreeRTOS.h"
 
 #define MAX_QUEUE_LENGTH 25
 
 static QueueHandle_t xQueue = xQueueCreate(MAX_QUEUE_LENGTH, sizeof(Consumer::Message));
+
+// TODO: change to use rvalue refs
+// we want to enforce moving here.
 
 Result Consumer::push_to_queue(MessageTag tag, MessageBody body) {
     // Move the tag and body args into the struct to avoid unnecessary copies

@@ -1,8 +1,15 @@
 #ifndef MOTOR_H
 #define MOTOR_H
 
-#include <stddef.h>
+#include <cstddef>
+#include <type_traits>
+#include <list>
 
+/*
+Motor Namespace
+Defines the abstract types used for a motor.
+This does not represent any physical hardware.
+*/
 namespace Motor {
     enum class Direction {
         FORWARD,
@@ -10,25 +17,17 @@ namespace Motor {
         STOP
     };
 
-    // TODO: make a table
-    enum class ID : size_t {
+    using ID = size_t;
+
+    enum class DifferentialDrive : ID {
         LEFT,
-        RIGHT,
-        SIZE    // Used for sizing table. TODO: see if needed
+        RIGHT
     };
 
     struct Command {
-        ID id;
+        ID name;
         Direction dir;
         double pwm_ratio;
-    };
-
-    class Instance {
-    public:
-        // TODO: constructor that takes GPIO
-        ~Instance();
-
-        void run(Command cmd);
     };
 }
 

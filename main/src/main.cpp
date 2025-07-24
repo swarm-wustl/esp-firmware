@@ -1,9 +1,9 @@
-#include <stdio.h>
-
 #include "consumer.h"
+#include "motor.h"
+#include "esp32.h"
 
 extern "C" void app_main(void) {
-    printf("Hello from ESP32 C++\n");
+    // Motor::Instance<int>();
 
     Consumer::spin();
 }
