@@ -25,5 +25,4 @@ namespace ESP32 {
 static_assert(HAL::MotorDriverTrait<ESP32::L298NMotorDriver>::value, "Invalid motor driver");
 static_assert(HAL::DriveStyleTrait<ESP32::DifferentialDrive>::value, "Invalid drive style");
 
-
 #endif
