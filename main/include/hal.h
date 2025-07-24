@@ -31,7 +31,6 @@ namespace HAL {
     >;
 
     // TODO: actually take twist message
-    // TODO: enforce no constructing. as in, keep this class purely static methods
     template <typename T>
     using DriveStyleTrait = std::conjunction<
         std::negation<std::is_constructible<T>>,
