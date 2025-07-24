@@ -34,6 +34,7 @@ namespace HAL {
     // TODO: enforce no constructing. as in, keep this class purely static methods
     template <typename T>
     using DriveStyleTrait = std::conjunction<
+        std::negation<std::is_constructible<T>>,
         std::is_invocable_r<void, decltype(&T::convert_twist)>
     >;
 }

@@ -16,6 +16,8 @@ namespace ESP32 {
 
     class DifferentialDrive {
     public:
+        DifferentialDrive() = delete;
+
         static void convert_twist();
     };
 }
