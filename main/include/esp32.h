@@ -22,6 +22,7 @@ namespace ESP32 {
     };
 }
 
+// TODO: this would be moved to within the functions that need a MotorDriver generic type for example
 static_assert(HAL::MotorDriverTrait<ESP32::L298NMotorDriver>::value, "Invalid motor driver");
 static_assert(HAL::DriveStyleTrait<ESP32::DifferentialDrive>::value, "Invalid drive style");
 
