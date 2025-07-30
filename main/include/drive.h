@@ -3,7 +3,9 @@
 
 namespace Drive {
     enum class Type {
-        DIFFERENTIAL
+        DIFFERENTIAL,
+        ACKERMANN,
+        OMNI
     };
 }
 
