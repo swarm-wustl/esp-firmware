@@ -35,11 +35,11 @@ namespace HAL {
     >>;
 
     template <typename T>
-    using DriveStyleTrait = std::conjunction<
+    using DriveStyleTrait = Trait<std::conjunction_v<
         std::negation<std::is_constructible<T>>,
         std::is_invocable_r<Drive::Type, decltype(&T::type)>,
         std::is_invocable_r<void, decltype(&T::convert_twist)> // TODO: actually take twist message
-    >;
+    >>;
 }
 
 #endif
