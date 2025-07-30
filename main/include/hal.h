@@ -1,6 +1,7 @@
 #ifndef HAL_H
 #define HAL_H
 
+#include <array>
 #include <type_traits>
 
 #include "motor.h"
@@ -34,11 +35,12 @@ namespace HAL {
         std::is_invocable_r<void, decltype(&T::stop), T&>
     >>;
 
-    template <typename T>
+    template <typename T, size_t N>
     using DriveStyleTrait = Trait<std::conjunction_v<
         std::negation<std::is_constructible<T>>,
         std::is_invocable_r<Drive::Type, decltype(&T::type)>,
-        std::is_invocable_r<void, decltype(&T::convert_twist)> // TODO: actually take twist message
+        // TODO: actually take twist message
+        std::is_invocable_r<void, decltype(&T::template convert_twist<N>), std::array<Motor::Command, N>>
     >>;
 }
 

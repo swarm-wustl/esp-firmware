@@ -29,11 +29,12 @@ namespace Consumer {
     template <
         typename MotorDriver, 
         typename DriveStyle,
+        size_t N,
         typename = HAL::MotorDriverTrait<MotorDriver>,
-        typename = HAL::DriveStyleTrait<DriveStyle>
+        typename = HAL::DriveStyleTrait<DriveStyle, N>
     >
     void spin(MotorDriver driver) {
-        DriveStyle::convert_twist();
+        // DriveStyle::convert_twist(std::array<Motor::Command, 2>{});
 
         while (1) {
             MessageTag tag;
