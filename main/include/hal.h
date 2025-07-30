@@ -24,11 +24,14 @@ namespace HAL {
         LOW = 0
     };
 
+    template <bool B, typename T = void>
+    using Trait = std::enable_if_t<B, T>;
+
     template <typename T>
-    using MotorDriverTrait = std::conjunction<
+    using MotorDriverTrait = Trait<std::conjunction_v<
         std::is_invocable_r<void, decltype(&T::run), T&, Motor::Command>,
         std::is_invocable_r<void, decltype(&T::stop), T&>
-    >;
+    >>;
 
     // TODO: actually take twist message
     template <typename T>

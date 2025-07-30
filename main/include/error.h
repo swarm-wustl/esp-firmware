@@ -1,6 +1,9 @@
 #ifndef ERROR_H
 #define ERROR_H
 
+#include <cstdarg>
+#include <cstdio>
+
 enum class Result {
     SUCCESS
 };
@@ -10,6 +13,13 @@ enum class Result {
 - Appends a newline character
 - Exits the program
 */
-void fatal(const char* fmt, ...);
+inline void fatal(const char* fmt, ...) {
+    va_list args;
+
+    fprintf(stderr, fmt, args);
+    fprintf(stderr, "\n");
+    
+    exit(EXIT_FAILURE);
+}
 
 #endif

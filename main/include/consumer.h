@@ -1,8 +1,11 @@
 #ifndef CONSUMER_H
 #define CONSUMER_H
 
+#include <type_traits>
+
 #include "error.h"
 #include "motor.h"
+#include "hal.h"
 
 namespace Consumer {
     enum class MessageTag {
@@ -20,9 +23,37 @@ namespace Consumer {
     };
 
     Result push_to_queue(MessageTag tag, MessageBody body);
+    Result pop_from_queue(MessageTag& tag, MessageBody& body);
     Result push_motor_command(Motor::Command cmd);
 
-    void spin();
+    template <
+        typename MotorDriver, 
+        typename DriveStyle,
+        typename = HAL::MotorDriverTrait<MotorDriver>,
+        typename = HAL::DriveStyleTrait<DriveStyle>
+    >
+    void spin(MotorDriver driver) {
+        DriveStyle::convert_twist();
+
+        while (1) {
+            MessageTag tag;
+            MessageBody body;
+
+            if (pop_from_queue(tag, body) != Result::SUCCESS) {
+                continue;
+            }
+
+            switch (tag) {
+                case MessageTag::MOTOR_COMMAND:
+                    // TODO: handle motor command message
+                    break;
+
+                default:
+                    fatal("Unhandled message type: tag=%d", tag);
+                    break;
+            }
+        }
+    }
 }
 
 #endif

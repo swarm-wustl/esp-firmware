@@ -9,6 +9,7 @@
 Motor Namespace
 Defines the abstract types used for a motor.
 This does not represent any physical hardware.
+Related abstract types would be for IMU, Control (PID), Robot State (IDLE, ACTIVE), Battery, DistanceSensor, Pose, etc.
 */
 namespace Motor {
     enum class Direction {

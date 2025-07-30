@@ -8,22 +8,20 @@
 namespace ESP32 {
     class L298NMotorDriver {
     public:
-        L298NMotorDriver();
+        // TODO
+        L298NMotorDriver() {}
         
         void run(Motor::Command cmd);
         void stop();
     };
 
-    class DifferentialDrive {
+    class DifferentialDriveController {
     public:
-        DifferentialDrive() = delete;
+        DifferentialDriveController() = delete;
 
-        static void convert_twist();
+        // TODO
+        static void convert_twist() {}
     };
 }
-
-// TODO: this would be moved to within the functions that need a MotorDriver generic type for example
-static_assert(HAL::MotorDriverTrait<ESP32::L298NMotorDriver>::value, "Invalid motor driver");
-static_assert(HAL::DriveStyleTrait<ESP32::DifferentialDrive>::value, "Invalid drive style");
 
 #endif
