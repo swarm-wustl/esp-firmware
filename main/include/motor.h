@@ -18,15 +18,14 @@ namespace Motor {
         STOP
     };
 
-    using ID = size_t;
-
-    enum class DifferentialDrive : ID {
-        LEFT,
-        RIGHT
+    enum class Name {
+        LEFT, RIGHT,
+        UPPER_LEFT, UPPER_RIGHT,
+        LOWER_LEFT, LOWER_RIGHT
     };
 
     struct Command {
-        ID name;
+        Name name;
         Direction dir;
         double pwm_ratio;
     };
