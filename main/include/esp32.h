@@ -15,9 +15,13 @@ namespace ESP32 {
         void stop();
     };
 
-    class DifferentialDriveController {
+    class DriveController {
     public:
-        DifferentialDriveController() = delete;
+        DriveController() = delete;
+
+        static Drive::Type type() {
+            return Drive::Type::DIFFERENTIAL;
+        }
 
         // TODO
         static void convert_twist() {}

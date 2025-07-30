@@ -4,6 +4,7 @@
 #include <type_traits>
 
 #include "motor.h"
+#include "drive.h"
 
 /*
 The design philosophy implemented here is as follows:
@@ -33,11 +34,11 @@ namespace HAL {
         std::is_invocable_r<void, decltype(&T::stop), T&>
     >>;
 
-    // TODO: actually take twist message
     template <typename T>
     using DriveStyleTrait = std::conjunction<
         std::negation<std::is_constructible<T>>,
-        std::is_invocable_r<void, decltype(&T::convert_twist)>
+        std::is_invocable_r<Drive::Type, decltype(&T::type)>,
+        std::is_invocable_r<void, decltype(&T::convert_twist)> // TODO: actually take twist message
     >;
 }
 

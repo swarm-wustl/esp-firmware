@@ -9,7 +9,7 @@ The types declared here represent the physical hardware of the system.
 This namespace should only rely on board-specific implementation types (e.g., ESP32).
 */
 namespace HW {
-    using DriveStyle = ESP32::DifferentialDriveController;
+    using DriveStyle = ESP32::DriveController;
     using MotorDriver = ESP32::L298NMotorDriver;
 }
 
