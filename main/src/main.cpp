@@ -10,5 +10,5 @@ The types used should only be taken from hardware.h's defintions.
 extern "C" void app_main(void) {
     HW::MotorDriver motor_driver;
 
-    Consumer::spin<HW::MotorDriver, HW::DriveStyle, HW::MOTOR_COUNT>(motor_driver);
+    Consumer::spin(motor_driver);
 }

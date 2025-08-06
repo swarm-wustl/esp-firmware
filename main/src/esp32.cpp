@@ -74,3 +74,8 @@ static double compute_duty_cycle(float pwm_ratio) {
     // [0, 1] --> [0, (2 ^ resolution) - 1]
     return pwm_ratio * ((1 << LEDC_DUTY_RES) - 1);
 }
+
+template <>
+void ESP32::DriveController::convert_twist(std::array<Motor::Command, 2> cmd_list) {
+    // TODO
+}

@@ -26,22 +26,23 @@ namespace HAL {
         LOW = 0
     };
 
-    template <bool B, typename T = void>
-    using Trait = std::enable_if_t<B, T>;
+    template <typename MotorDriver>
+    concept MotorDriverTrait = requires(
+        MotorDriver driver,
+        Motor::Command cmd
+    ) {
+        { driver.run(cmd) } -> std::same_as<void>;
+        { driver.stop() } -> std::same_as<void>;
+    };
 
-    template <typename T>
-    using MotorDriverTrait = Trait<std::conjunction_v<
-        std::is_invocable_r<void, decltype(&T::run), T&, Motor::Command>,
-        std::is_invocable_r<void, decltype(&T::stop), T&>
-    >>;
-
-    template <typename T, size_t N>
-    using DriveStyleTrait = Trait<std::conjunction_v<
-        std::negation<std::is_constructible<T>>,
-        std::is_invocable_r<Drive::Type, decltype(&T::type)>,
-        // TODO: actually take twist message
-        std::is_invocable_r<void, decltype(&T::template convert_twist<N>), std::array<Motor::Command, N>>
-    >>;
+    template <typename DriveStyle, size_t MotorCount>
+    concept DriveStyleTrait = requires (
+        std::array<Motor::Command, MotorCount> cmd_list
+    ) {
+        { DriveStyle::type() } -> std::same_as<Drive::Type>;
+        // TODO: actually take twist message and return proper type
+        { DriveStyle::template convert_twist<MotorCount>(cmd_list) } -> std::same_as<void>;
+    };
 }
 
 #endif

@@ -6,6 +6,7 @@
 #include "error.h"
 #include "motor.h"
 #include "hal.h"
+#include "hardware.h"
 
 namespace Consumer {
     enum class MessageTag {
@@ -26,16 +27,13 @@ namespace Consumer {
     Result pop_from_queue(MessageTag& tag, MessageBody& body);
     Result push_motor_command(Motor::Command cmd);
 
+    // The default values for the templated types come from the specific hardware being used
     template <
-        typename MotorDriver, 
-        typename DriveStyle,
-        size_t N,
-        typename = HAL::MotorDriverTrait<MotorDriver>,
-        typename = HAL::DriveStyleTrait<DriveStyle, N>
+        size_t MotorCount = HW::MOTOR_COUNT,
+        HAL::MotorDriverTrait MotorDriver = HW::MotorDriver,
+        HAL::DriveStyleTrait<MotorCount> DriveStyle = HW::DriveStyle
     >
     void spin(MotorDriver driver) {
-        // DriveStyle::convert_twist(std::array<Motor::Command, 2>{});
-
         while (1) {
             MessageTag tag;
             MessageBody body;
