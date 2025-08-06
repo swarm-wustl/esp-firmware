@@ -24,7 +24,7 @@ namespace ESP32 {
         }
 
         template <size_t MotorCount>
-        static void convert_twist(std::array<Motor::Command, MotorCount> cmd_list);        
+        static void convert_twist(std::array<Motor::Command, MotorCount> cmd_list);
     };
 
 

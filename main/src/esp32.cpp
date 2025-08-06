@@ -76,6 +76,6 @@ static double compute_duty_cycle(float pwm_ratio) {
 }
 
 template <>
-void ESP32::DriveController::convert_twist(std::array<Motor::Command, 2> cmd_list) {
+void ESP32::DriveController::convert_twist<2>(std::array<Motor::Command, 2> cmd_list) {
     // TODO
 }

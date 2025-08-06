@@ -34,6 +34,10 @@ namespace Consumer {
         HAL::DriveStyleTrait<MotorCount> DriveStyle = HW::DriveStyle
     >
     void spin(MotorDriver driver) {
+        // TODO: delete
+        DriveStyle::convert_twist(std::array<Motor::Command, MotorCount>{});
+
+        // TODO: set some sort of frequency for this to be called
         while (1) {
             MessageTag tag;
             MessageBody body;

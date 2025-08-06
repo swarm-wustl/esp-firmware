@@ -41,7 +41,7 @@ namespace HAL {
     ) {
         { DriveStyle::type() } -> std::same_as<Drive::Type>;
         // TODO: actually take twist message and return proper type
-        { DriveStyle::template convert_twist<MotorCount>(cmd_list) } -> std::same_as<void>;
+        { DriveStyle::convert_twist(cmd_list) } -> std::same_as<void>;
     };
 }
 
