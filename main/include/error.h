@@ -22,4 +22,11 @@ inline void fatal(const char* fmt, ...) {
     exit(EXIT_FAILURE);
 }
 
+inline void log(const char* fmt, ...) {
+    va_list args;
+
+    printf(fmt, args);
+    printf("\n");
+}
+
 #endif

@@ -7,6 +7,7 @@
 #include "motor.h"
 #include "hal.h"
 #include "hardware.h"
+#include "freertos/FreeRTOS.h"
 
 namespace Consumer {
     enum class MessageTag {
@@ -35,7 +36,23 @@ namespace Consumer {
     >
     void spin(MotorDriver driver) {
         // TODO: delete
-        DriveStyle::convert_twist(std::array<Motor::Command, MotorCount>{});
+        while (1) {
+            static Motor::Direction dir = Motor::Direction::FORWARD;
+            static Motor::Name motor = Motor::Name::LEFT;
+
+            driver.run({
+                .name = motor,
+                .dir = dir,
+                .pwm_ratio = 0.5
+            });
+
+            motor = dir == Motor::Direction::REVERSE ? (motor == Motor::Name::LEFT ? Motor::Name::RIGHT : Motor::Name::LEFT) : motor;
+            dir = dir == Motor::Direction::FORWARD ? Motor::Direction::REVERSE : Motor::Direction::FORWARD;
+
+            log("driving motor...");
+
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
 
         // TODO: set some sort of frequency for this to be called
         while (1) {

@@ -2,8 +2,6 @@
 
 #include <utility>
 
-#include "freertos/FreeRTOS.h"
-
 #define MAX_QUEUE_LENGTH 25
 
 static QueueHandle_t xQueue = xQueueCreate(MAX_QUEUE_LENGTH, sizeof(Consumer::Message));
@@ -12,9 +10,10 @@ static QueueHandle_t xQueue = xQueueCreate(MAX_QUEUE_LENGTH, sizeof(Consumer::Me
 // we want to enforce moving here.
 
 Result Consumer::push_to_queue(MessageTag tag, MessageBody body) {
+    // TODO: is move needed?
     Message msg {
-        .tag = tag,
-        .body = body
+        .tag = std::move(tag),
+        .body = std::move(body)
     };
 
     // Copy the msg instance into the queue

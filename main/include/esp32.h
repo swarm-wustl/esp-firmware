@@ -9,9 +9,9 @@ namespace ESP32 {
     class L298NMotorDriver {
     public:
         // TODO
-        L298NMotorDriver() {}
+        L298NMotorDriver();
         
-        void run(Motor::Command cmd);
+        void run(const Motor::Command& cmd);
         void stop();
     };
 
@@ -26,11 +26,6 @@ namespace ESP32 {
         template <size_t MotorCount>
         static void convert_twist(std::array<Motor::Command, MotorCount> cmd_list);
     };
-
-
-    // // TODO
-    // template <>
-    // void DriveController::convert_twist(std::array<Motor::Command, 4> cmd_list) {}
 }
 
 #endif

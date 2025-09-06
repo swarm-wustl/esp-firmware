@@ -3,6 +3,7 @@
 
 #include <array>
 #include <type_traits>
+#include <cstdint>
 
 #include "motor.h"
 #include "drive.h"
@@ -21,10 +22,14 @@ HAL Interface
 The traits and enums defined in this namespace can be used to create drivers for any board, i.e., ESP32.
 */
 namespace HAL {
-    enum class Voltage {
+    enum class Voltage : uint32_t {
         HIGH = 1,
         LOW = 0
     };
+
+    constexpr uint32_t to_level(HAL::Voltage voltage) {
+        return static_cast<uint32_t>(voltage);
+    }
 
     template <typename MotorDriver>
     concept MotorDriverTrait = requires(
