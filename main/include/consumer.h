@@ -8,6 +8,8 @@
 #include "hal.h"
 #include "hardware.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
 
 namespace Consumer {
     enum class MessageTag {

@@ -41,7 +41,7 @@ static void setup_pwm() {
         .timer_num        = LEDC_TIMER,
         .freq_hz          = LEDC_FREQUENCY,
         .clk_cfg          = LEDC_AUTO_CLK,
-        .deconfigure      = false
+        // .deconfigure      = false
     };
     ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
 

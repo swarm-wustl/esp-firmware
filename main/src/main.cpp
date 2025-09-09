@@ -1,6 +1,13 @@
 #include "consumer.h"
 #include "hardware.h"
 
+// TODO: make templated and move to consumer.h?
+static void consumerTaskWrapper(void* pvParameters) {
+    HW::MotorDriver driver = *reinterpret_cast<HW::MotorDriver*>(pvParameters);
+    Consumer::spin(driver);
+    vTaskDelete(nullptr); // delete task when done
+}
+
 /*
 Main Function
 Describe the physical layout of the system.
@@ -12,5 +19,12 @@ extern "C" void app_main(void) {
 
     log("Hello world!");
 
-    Consumer::spin(motor_driver);
+    xTaskCreate(
+        consumerTaskWrapper,
+        "consumer_task",
+        2048,
+        (void*)&motor_driver,
+        configMAX_PRIORITIES - 1,
+        NULL
+    );
 }
