@@ -1,0 +1,15 @@
+{
+  "name": "micro-ROS Dev",
+  "image": "microros/esp-idf-microros:latest",  // replace with your image name
+  "workspaceFolder": "/workspace",      // where your code will be mounted
+  "mounts": [
+    "source=${localWorkspaceFolder},target=/workspace,type=bind"
+  ],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.cpptools"
+      ]
+    }
+  }
+}
