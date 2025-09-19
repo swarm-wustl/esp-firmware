@@ -12,7 +12,7 @@
 #include <rclc/executor.h>
 
 namespace ROS {
-    void spin();
+    void spin(void* context);
 }
 
 #endif

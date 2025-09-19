@@ -5,6 +5,10 @@
   "mounts": [
     "source=${localWorkspaceFolder},target=/workspace,type=bind"
   ],
+  "containerEnv": {
+      "LC_ALL": "C.UTF-8",
+      "LANG": "C.UTF-8"
+  },
   "customizations": {
     "vscode": {
       "extensions": [

@@ -1,11 +1,25 @@
 #include "consumer.h"
 #include "hardware.h"
+#include "queue.h"
+#include "ros.h"
 
 // TODO: make templated and move to consumer.h?
+// TODO: make struct so we can pass multiple parameters
+
+struct ConsumerTaskData {
+    HW::MotorDriver motorDriver;
+    Queue<Consumer::MessageTag, Consumer::MessageBody> queue; 
+};
+
 static void consumerTaskWrapper(void* pvParameters) {
-    HW::MotorDriver driver = *reinterpret_cast<HW::MotorDriver*>(pvParameters);
-    Consumer::spin(driver);
-    vTaskDelete(nullptr); // delete task when done
+    ConsumerTaskData data = *reinterpret_cast<ConsumerTaskData*>(pvParameters);
+
+    Consumer::spin(
+        std::move(data.motorDriver),
+        std::move(data.queue)
+    );
+
+    vTaskDelete(nullptr);
 }
 
 /*
@@ -15,16 +29,30 @@ For example, you could have multiple motor drivers, sensors, etc.
 The types used should only be taken from hardware.h's defintions.
 */
 extern "C" void app_main(void) {
-    HW::MotorDriver motor_driver;
+    // HW::MotorDriver motor_driver;
+    // Queue<Consumer::MessageTag, Consumer::MessageBody> q(25);   // TODO: delete, use inside consumer.h
+
+#if defined(CONFIG_MICRO_ROS_ESP_NETIF_WLAN) || defined(CONFIG_MICRO_ROS_ESP_NETIF_ENET)
+    ESP_ERROR_CHECK(uros_network_interface_initialize());
+#endif
 
     log("Hello world!");
 
     xTaskCreate(
+        ROS::spin,
+        "uros_task",
+        4096, // TODO: see https://github.com/micro-ROS/micro_ros_espidf_component/blob/cd1da2b3d7d73f48743a2c42ac0e915cd751bb74/examples/int32_publisher/main/main.c#L105
+        NULL,
+        configMAX_PRIORITIES - 1,
+        NULL
+    );
+
+    /*xTaskCreate(
         consumerTaskWrapper,
         "consumer_task",
         2048,
         (void*)&motor_driver,
         configMAX_PRIORITIES - 1,
         NULL
-    );
+    );*/
 }

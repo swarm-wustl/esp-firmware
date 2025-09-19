@@ -8,7 +8,6 @@
 namespace ESP32 {
     class L298NMotorDriver {
     public:
-        // TODO
         L298NMotorDriver();
         
         void run(const Motor::Command& cmd);

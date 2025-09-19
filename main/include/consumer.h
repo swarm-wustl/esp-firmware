@@ -7,6 +7,7 @@
 #include "motor.h"
 #include "hal.h"
 #include "hardware.h"
+#include "queue.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -26,17 +27,13 @@ namespace Consumer {
         MessageBody body;
     };
 
-    Result push_to_queue(MessageTag tag, MessageBody body);
-    Result pop_from_queue(MessageTag& tag, MessageBody& body);
-    Result push_motor_command(Motor::Command cmd);
-
     // The default values for the templated types come from the specific hardware being used
     template <
         size_t MotorCount = HW::MOTOR_COUNT,
         HAL::MotorDriverTrait MotorDriver = HW::MotorDriver,
         HAL::DriveStyleTrait<MotorCount> DriveStyle = HW::DriveStyle
     >
-    void spin(MotorDriver driver) {
+    void spin(MotorDriver driver, Queue<MessageTag, MessageBody> queue) {
         // TODO: delete
         while (1) {
             static Motor::Direction dir = Motor::Direction::FORWARD;
@@ -61,7 +58,7 @@ namespace Consumer {
             MessageTag tag;
             MessageBody body;
 
-            if (pop_from_queue(tag, body) != Result::SUCCESS) {
+            if (queue.popFromQueue(tag, body) != Result::SUCCESS) {
                 continue;
             }
 
