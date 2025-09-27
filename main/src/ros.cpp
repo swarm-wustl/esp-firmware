@@ -61,17 +61,17 @@ void ROS::spin(void* context) {
     RCCHECK(rclc_executor_init(&executor, &support.context, 1, &allocator));
 
     // Add subscriber to executor
-    uint8_t msgin[MSG_SIZE];
+    geometry_msgs__msg__Twist msgin;
     RCCHECK(rclc_executor_add_subscription_with_context(
         &executor, 
         &subscriber, 
-        msgin,
+        &msgin,
 		&callback, 
         NULL, // TODO: add context
         ON_NEW_DATA
     ));
 
-    // TODO: add executor spin
+    rclc_executor_spin(&executor);
 
     vTaskDelete(NULL);
 }
