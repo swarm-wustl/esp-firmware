@@ -140,6 +140,6 @@ void ESP32::L298NMotorDriver::run(const Motor::Command& cmd) {
 }
 
 template <>
-void ESP32::DriveController::convert_twist<2>(std::array<Motor::Command, 2> cmd_list) {
+void ESP32::DifferentialDriveController::convert_twist<2>(std::array<Motor::Command, 2> cmd_list) {
     // TODO
 }

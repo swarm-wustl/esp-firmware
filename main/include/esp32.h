@@ -14,9 +14,9 @@ namespace ESP32 {
         void stop();
     };
 
-    class DriveController {
+    class DifferentialDriveController {
     public:
-        DriveController() = delete;
+        DifferentialDriveController() = delete;
 
         static Drive::Type type() {
             return Drive::Type::DIFFERENTIAL;

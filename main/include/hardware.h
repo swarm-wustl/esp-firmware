@@ -11,7 +11,7 @@ This namespace should only rely on board-specific implementation types (e.g., ES
 namespace HW {
     constexpr size_t MOTOR_COUNT = 2;
 
-    using DriveStyle = ESP32::DriveController;
+    using DriveStyle = ESP32::DifferentialDriveController;
     using MotorDriver = ESP32::L298NMotorDriver;
 }
 
