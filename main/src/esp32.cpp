@@ -6,6 +6,8 @@
 #include "driver/uart.h"
 #include "driver/ledc.h"
 
+#include <algorithm>
+
 #define WHEELBASE 0.5   // dist between wheels (m) (we're gonna fake it)
 
 #define LEDC_TIMER LEDC_TIMER_0
@@ -139,7 +141,41 @@ void ESP32::L298NMotorDriver::run(const Motor::Command& cmd) {
     log("ran motor!");
 }
 
+// TODO: make # of motors (2) a constant defined in hardware.h
 template <>
-void ESP32::DifferentialDriveController::convert_twist<2>(std::array<Motor::Command, 2> cmd_list) {
-    // TODO
+std::array<Motor::Command, 2> ESP32::DifferentialDriveController::convert_twist(geometry_msgs__msg__Twist msg) {
+    // TODO: handle angular later
+
+    // Assume linear_velocity is between -1 and 1
+    double linear_velocity = msg.linear.x;
+
+    Motor::Direction dir;
+    double pwm_ratio;
+
+    if (linear_velocity < 0) {
+        dir = Motor::Direction::REVERSE;
+        pwm_ratio = linear_velocity * -1.0;
+    } else if (linear_velocity > 0) {
+        dir = Motor::Direction::FORWARD;
+        pwm_ratio = linear_velocity;
+    } else {
+        dir = Motor::Direction::STOP;
+        pwm_ratio = 0.0;
+    }
+
+    // PWM ratio must be [0, 1]
+    pwm_ratio = std::clamp(pwm_ratio, 0.0, 1.0);
+
+    return std::array<Motor::Command, 2>{
+        Motor::Command {
+            Motor::Name::LEFT,
+            dir,
+            pwm_ratio
+        },
+        Motor::Command {
+            Motor::Name::RIGHT,
+            dir,
+            pwm_ratio
+        }
+    };
 }

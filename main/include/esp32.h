@@ -1,7 +1,9 @@
 #ifndef ESP32_H
 #define ESP32_H
 
-// TODO: move this entire file to a component maybe
+// TODO: move this entire file to a component maybe (like microros is)
+
+#include <geometry_msgs/msg/twist.h>
 
 #include "hal.h"
 
@@ -23,7 +25,7 @@ namespace ESP32 {
         }
 
         template <size_t MotorCount>
-        static void convert_twist(std::array<Motor::Command, MotorCount> cmd_list);
+        static std::array<Motor::Command, MotorCount> convert_twist(geometry_msgs__msg__Twist msg);
     };
 }
 

@@ -13,8 +13,10 @@
 #include "freertos/queue.h"
 
 namespace Consumer {
+    constexpr size_t CONSUMER_QUEUE_SIZE = 25;
+
     enum class MessageTag {
-        MOTOR_COMMAND
+        MOTOR_COMMAND,
         // TODO: IMU read, send data to ROS server, etc.
     };
 
@@ -33,26 +35,7 @@ namespace Consumer {
         HAL::MotorDriverTrait MotorDriver = HW::MotorDriver,
         HAL::DriveStyleTrait<MotorCount> DriveStyle = HW::DriveStyle
     >
-    void spin(MotorDriver driver, Queue<MessageTag, MessageBody> queue) {
-        // TODO: delete
-        while (1) {
-            static Motor::Direction dir = Motor::Direction::FORWARD;
-            static Motor::Name motor = Motor::Name::LEFT;
-
-            driver.run({
-                .name = motor,
-                .dir = dir,
-                .pwm_ratio = 0.5
-            });
-
-            motor = dir == Motor::Direction::REVERSE ? (motor == Motor::Name::LEFT ? Motor::Name::RIGHT : Motor::Name::LEFT) : motor;
-            dir = dir == Motor::Direction::FORWARD ? Motor::Direction::REVERSE : Motor::Direction::FORWARD;
-
-            log("driving motor...");
-
-            vTaskDelay(pdMS_TO_TICKS(1000));
-        }
-
+    void spin(MotorDriver driver, Queue<MessageTag, MessageBody, CONSUMER_QUEUE_SIZE> queue) {
         // TODO: set some sort of frequency for this to be called
         while (1) {
             MessageTag tag;
@@ -63,13 +46,16 @@ namespace Consumer {
             }
 
             switch (tag) {
-                case MessageTag::MOTOR_COMMAND:
-                    // TODO: handle motor command message
+                case MessageTag::MOTOR_COMMAND: {
+                    Motor::Command cmd = body.motor_cmd;
+                    driver.run(cmd); 
                     break;
+                }
 
-                default:
+                default: {
                     fatal("Unhandled message type: tag=%d", tag);
                     break;
+                }
             }
         }
     }

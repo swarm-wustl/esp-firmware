@@ -2,27 +2,44 @@
 #define CUSTOM_QUEUE_H
 
 #include <cstdint>
+#include <utility>
+#include <array>
 #include "error.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 
-template <typename Tag, typename Body>
+// TODO: make queue capacity a templated type, change vector to std::array
+template <typename Tag, typename Body, size_t Capacity>
 class Queue {
+private:
+    struct Message {
+        Tag tag;
+        Body body;
+    };
+
+    std::array<Message, Capacity> messages;
+    size_t index;
+
+    QueueHandle_t queueHandle;
+
 public:
-    Queue(uint32_t maxQueueSize) : queueHandle(xQueueCreate(maxQueueSize, sizeof(Message))) {}
+    Queue() : index(0), queueHandle(xQueueCreate(Capacity, sizeof(Message))) {}
     
     Result pushToQueue(Tag tag, Body body) {
-        // TODO: is move needed?
-        Message msg {
-            .tag = std::move(tag),
-            .body = std::move(body)
-        };
+        // Do NOT use std::move! It breaks with FreeRTOS queues
+        messages[index] = {
+            .tag = tag,
+            .body = body
+        };    
 
         // Copy the msg instance into the queue
-        if (xQueueSend(queueHandle, &msg, portMAX_DELAY) != pdPASS) {
+        if (xQueueSend(queueHandle, &messages[index], portMAX_DELAY) != pdPASS) {
             // TODO: maybe return error instead?
             fatal("Unable to send to queue");
         }
+
+        // Only increment if message was successfully sent to queue
+        index = (index + 1) % Capacity;
 
         return Result::SUCCESS;
     }
@@ -41,14 +58,6 @@ public:
 
         return Result::SUCCESS;
     }
-
-private:
-    struct Message {
-        Tag tag;
-        Body body;
-    };
-
-    QueueHandle_t queueHandle;
 };
 
 #endif

@@ -8,7 +8,7 @@
 
 struct ConsumerTaskData {
     HW::MotorDriver motorDriver;
-    Queue<Consumer::MessageTag, Consumer::MessageBody> queue; 
+    Queue<Consumer::MessageTag, Consumer::MessageBody, Consumer::CONSUMER_QUEUE_SIZE> queue; 
 };
 
 static void consumerTaskWrapper(void* pvParameters) {
@@ -29,12 +29,17 @@ For example, you could have multiple motor drivers, sensors, etc.
 The types used should only be taken from hardware.h's defintions.
 */
 extern "C" void app_main(void) {
-    // HW::MotorDriver motor_driver;
-    // Queue<Consumer::MessageTag, Consumer::MessageBody> q(25);   // TODO: delete, use inside consumer.h
-
 #if defined(CONFIG_MICRO_ROS_ESP_NETIF_WLAN) || defined(CONFIG_MICRO_ROS_ESP_NETIF_ENET)
     ESP_ERROR_CHECK(uros_network_interface_initialize());
 #endif
+
+    HW::MotorDriver motor_driver;
+    Queue<Consumer::MessageTag, Consumer::MessageBody, Consumer::CONSUMER_QUEUE_SIZE> queue;
+
+    ConsumerTaskData consumerTaskData {
+        motor_driver,
+        queue
+    };
 
     log("Hello world!");
 
@@ -42,17 +47,17 @@ extern "C" void app_main(void) {
         ROS::spin,
         "uros_task",
         4096, // TODO: see https://github.com/micro-ROS/micro_ros_espidf_component/blob/cd1da2b3d7d73f48743a2c42ac0e915cd751bb74/examples/int32_publisher/main/main.c#L105
-        NULL,
+        (void*)&queue,
         configMAX_PRIORITIES - 1,
         NULL
     );
 
-    /*xTaskCreate(
+    xTaskCreate(
         consumerTaskWrapper,
         "consumer_task",
-        2048,
-        (void*)&motor_driver,
+        4096,
+        (void*)&consumerTaskData,
         configMAX_PRIORITIES - 1,
         NULL
-    );*/
+    );
 }

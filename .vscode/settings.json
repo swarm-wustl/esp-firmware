@@ -64,7 +64,16 @@
     "cinttypes": "cpp",
     "typeinfo": "cpp",
     "variant": "cpp",
-    "__verbose_abort": "cpp"
+    "__verbose_abort": "cpp",
+    "codecvt": "cpp",
+    "map": "cpp",
+    "set": "cpp",
+    "unordered_set": "cpp",
+    "regex": "cpp",
+    "fstream": "cpp",
+    "future": "cpp",
+    "iostream": "cpp",
+    "shared_mutex": "cpp"
   },
   "clangd.path": "/Users/prestonmeek/.espressif/tools/esp-clang/16.0.1-fe4f10a809/esp-clang/bin/clangd",
   "clangd.arguments": [

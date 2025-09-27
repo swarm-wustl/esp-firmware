@@ -5,6 +5,8 @@
 #include <type_traits>
 #include <cstdint>
 
+#include <geometry_msgs/msg/twist.h>
+
 #include "motor.h"
 #include "drive.h"
 
@@ -42,11 +44,10 @@ namespace HAL {
 
     template <typename DriveStyle, size_t MotorCount>
     concept DriveStyleTrait = requires (
-        std::array<Motor::Command, MotorCount> cmd_list
+        geometry_msgs__msg__Twist twist_msg
     ) {
         { DriveStyle::type() } -> std::same_as<Drive::Type>;
-        // TODO: actually take twist message and return proper type
-        { DriveStyle::convert_twist(cmd_list) } -> std::same_as<void>;
+        { DriveStyle::template convert_twist<MotorCount>(twist_msg) } -> std::same_as<std::array<Motor::Command, MotorCount>>;
     };
 }
 
