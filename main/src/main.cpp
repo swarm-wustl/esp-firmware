@@ -22,6 +22,13 @@ static void consumerTaskWrapper(void* pvParameters) {
     vTaskDelete(nullptr);
 }
 
+static void producerTaskWrapper(void* pvParameters){
+   for( ;; )
+   {
+      
+   }
+}
+
 /*
 Main Function
 Describe the physical layout of the system.
@@ -57,6 +64,14 @@ extern "C" void app_main(void) {
         "consumer_task",
         4096,
         (void*)&consumerTaskData,
+        configMAX_PRIORITIES - 1,
+        NULL
+    );
+    xTaskCreate(
+        producerTaskWrapper,
+        "producer_task",
+        4096,
+        (void*)&queue,
         configMAX_PRIORITIES - 1,
         NULL
     );
