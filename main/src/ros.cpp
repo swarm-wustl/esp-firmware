@@ -60,6 +60,15 @@ void ROS::spin(void* context) {
     rcl_node_t node;
 	RCCHECK(rclc_node_init_default(&node, "uros_node", "", &support));
 
+    // Create publisher
+    rcl_publisher_t publisher;
+    RCCHECK(rclc_publisher_init_default(
+        &publisher,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist), // TODO
+		"uros_topic"
+    ));
+
     // Create subscriber
     rcl_subscription_t subscriber;
     RCCHECK(rclc_subscription_init_default(
@@ -84,7 +93,9 @@ void ROS::spin(void* context) {
         ON_NEW_DATA
     ));
 
-    rclc_executor_spin(&executor);
+    while (1) {
+        rclc_executor_spin_some(&executor, RCL_MS_TO_NS(10)); // TODO: time constant
+    }
 
     vTaskDelete(NULL);
 }
