@@ -2,6 +2,7 @@
 #include "hardware.h"
 #include "queue.h"
 #include "ros.h"
+#include "sensors.h"
 
 // TODO: make templated and move to consumer.h?
 // TODO: make struct so we can pass multiple parameters
@@ -20,13 +21,6 @@ static void consumerTaskWrapper(void* pvParameters) {
     );
 
     vTaskDelete(nullptr);
-}
-
-static void producerTaskWrapper(void* pvParameters){
-   for( ;; )
-   {
-      
-   }
 }
 
 /*
@@ -67,12 +61,25 @@ extern "C" void app_main(void) {
         configMAX_PRIORITIES - 1,
         NULL
     );
+
+    TaskHandle_t sensorTaskHandle;
+
     xTaskCreate(
-        producerTaskWrapper,
-        "producer_task",
+        Sensors::spin,
+        "sensors_task",
         4096,
-        (void*)&queue,
+        NULL,
         configMAX_PRIORITIES - 1,
-        NULL
+        &sensorTaskHandle
+    );
+
+    Sensors::registerSensorTaskHandle(sensorTaskHandle);
+
+    xTimerCreate(
+        "uwb_timer",
+        pdMS_TO_TICKS(100), // 100 ms period. TODO: change?
+        pdTRUE,
+        (void*)UWB_ID,
+        Sensors::registerSensorTimer
     );
 }

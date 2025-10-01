@@ -13,6 +13,7 @@
 
 namespace ROS {
     void spin(void* context);
+    void sendMessage();
 }
 
 #endif
