@@ -2,7 +2,7 @@
 #include "hardware.h"
 #include "queue.h"
 #include "ros.h"
-#include "sensors.h"
+#include "sensor.h"
 
 #include "freertos/FreeRTOS.h"
 
@@ -36,17 +36,17 @@ extern "C" void app_main(void) {
     ESP_ERROR_CHECK(uros_network_interface_initialize());
 #endif
 
-    /*HW::MotorDriver motor_driver;
+    HW::MotorDriver motor_driver;
     Queue<Consumer::MessageTag, Consumer::MessageBody, Consumer::CONSUMER_QUEUE_SIZE> queue;
 
     ConsumerTaskData consumerTaskData {
         motor_driver,
         queue
-    };*/
+    };
 
     log("Hello world!");
 
-    /*xTaskCreate(
+    xTaskCreate(
         ROS::spin,
         "uros_task",
         4096, // TODO: see https://github.com/micro-ROS/micro_ros_espidf_component/blob/cd1da2b3d7d73f48743a2c42ac0e915cd751bb74/examples/int32_publisher/main/main.c#L105
@@ -62,26 +62,22 @@ extern "C" void app_main(void) {
         (void*)&consumerTaskData,
         configMAX_PRIORITIES - 1,
         NULL
-    );*/
+    );
 
+    // Create sensor task and register the task handle for the timers
+    // TODO: wrap this in a function?
     TaskHandle_t sensorTaskHandle;
     xTaskCreate(
-        Sensors::spin,
+        Sensor::spin,
         "sensors_task",
         4096,
         NULL,
         configMAX_PRIORITIES - 1,
         &sensorTaskHandle
     );
-    Sensors::registerSensorTaskHandle(sensorTaskHandle);
+    Sensor::registerSensorTaskHandle(sensorTaskHandle);
     log("Registered handle");
 
-    TimerHandle_t test = xTimerCreate(
-        "uwb_timer",
-        pdMS_TO_TICKS(1000), // 100 ms period. TODO: change?
-        pdTRUE,
-        (void*)UWB_ID,
-        Sensors::registerSensorTimer
-    );
-    xTimerStart(test, 0);
+    // TODO: make constant time
+    Sensor uwb(UWB_ID, "uwb_sensor", 1000);
 }
