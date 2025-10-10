@@ -16,7 +16,9 @@ enum class Result {
 inline void fatal(const char* fmt, ...) {
     va_list args;
 
-    fprintf(stderr, fmt, args);
+    va_start(args, fmt);     
+    vfprintf(stderr, fmt, args); 
+    va_end(args);           
     fprintf(stderr, "\n");
     
     exit(EXIT_FAILURE);
@@ -25,7 +27,10 @@ inline void fatal(const char* fmt, ...) {
 inline void log(const char* fmt, ...) {
     va_list args;
 
-    printf(fmt, args);
+    va_start(args, fmt);  
+    vprintf(fmt, args);
+    va_end(args); 
+    
     printf("\n");
 }
 
