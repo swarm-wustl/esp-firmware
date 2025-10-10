@@ -36,7 +36,7 @@ extern "C" void app_main(void) {
     ESP_ERROR_CHECK(uros_network_interface_initialize());
 #endif
 
-    HW::MotorDriver motor_driver;
+    /*HW::MotorDriver motor_driver;
     Queue<Consumer::MessageTag, Consumer::MessageBody, Consumer::CONSUMER_QUEUE_SIZE> queue;
 
     ConsumerTaskData consumerTaskData {
@@ -62,7 +62,7 @@ extern "C" void app_main(void) {
         (void*)&consumerTaskData,
         configMAX_PRIORITIES - 1,
         NULL
-    );
+    );*/
 
     // Create sensor task and register the task handle for the timers
     // TODO: wrap this in a function?
