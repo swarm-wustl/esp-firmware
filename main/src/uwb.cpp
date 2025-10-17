@@ -32,20 +32,25 @@ void uwb_init() {
     };
 
     spi_device_interface_config_t dev_config {
-        8,
-        64,
-        0,
-        0,
-        0,
-        0,
-        0,
-        APB_CLK_FREQ / 80,
-        0,
-        DW_CS,
-        0,
-        4, // TODO: queue size
-        NULL,
-        NULL
+        // Command and address bits are for specific command and address phases of SPI
+        // These exist in more complex SPI devices, such as a flash device
+        // For a simpler slave device like the DW1000, everything is handled in the TX buffer
+        // So, we can ignore these two phases
+        .command_bits = 0,
+        .address_bits = 0,
+        
+        .dummy_bits = 0,
+        .mode = 0,
+        .duty_cycle_pos = 0,
+        .cs_ena_pretrans = 0,
+        .cs_ena_posttrans = 0,
+        .clock_speed_hz = APB_CLK_FREQ / 80,
+        .input_delay_ns = 0,
+        .spics_io_num = DW_CS,
+        .flags = 0,
+        .queue_size = 4, // TODO: queue size
+        .pre_cb = NULL,
+        .post_cb = NULL
     };
 
     spi_device_handle_t dev_handle;
@@ -56,14 +61,14 @@ void uwb_init() {
     uint8_t tx_buf[5] = { 0x00, 0, 0, 0, 0 };  // header + dummy bytes
     uint8_t rx_buf[5] = { 0 };
 
-    spi_transaction_t t = {
-        .length = 8 * 5,              // bits to send
+    spi_transaction_t transaction = {
+        .length = 8 * 5,
         .rxlength = 8 * 5,
         .tx_buffer = tx_buf,
         .rx_buffer = rx_buf,
     };
 
-    log("SPI transaction: %d", spi_device_transmit(dev_handle, &t));
+    log("SPI transaction: %d", spi_device_transmit(dev_handle, &transaction));
     
     uint32_t id = 0;
     for (int i = 1; i <= 4; ++i) {
