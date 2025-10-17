@@ -3,6 +3,7 @@
 #include "queue.h"
 #include "ros.h"
 #include "sensor.h"
+#include "uwb.h"
 
 #include "freertos/FreeRTOS.h"
 
@@ -66,7 +67,7 @@ extern "C" void app_main(void) {
 
     // Create sensor task and register the task handle for the timers
     // TODO: wrap this in a function?
-    TaskHandle_t sensorTaskHandle;
+    /*TaskHandle_t sensorTaskHandle;
     xTaskCreate(
         Sensor::spin,
         "sensors_task",
@@ -79,5 +80,9 @@ extern "C" void app_main(void) {
     log("Registered handle");
 
     // TODO: make constant time
-    Sensor uwb(UWB_ID, "uwb_sensor", 1000);
+    Sensor uwb(UWB_ID, "uwb_sensor", 1000);*/
+
+    log("Testing UWB");
+
+    uwb_init();
 }

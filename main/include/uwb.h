@@ -1,8 +1,6 @@
 #ifndef UWB_H
 #define UWB_H
 
-class UWB {
-
-};
+void uwb_init();
 
 #endif
