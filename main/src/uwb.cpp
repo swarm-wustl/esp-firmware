@@ -4,6 +4,7 @@
 #include <cstring>
 
 #define DWM_REG_DEV_ID 0x00
+#define DWM_REG_TRANSMIT_FRAME_CONTROL 0x08
 #define DWM_REG_TRANSMIT_DATA_BUFFER 0x09
 
 #define SPI_SCK 18
@@ -68,9 +69,11 @@ void uwb_init() {
     log("ID received: %X", id);
 }
 
+// TODO: handle sub-register reads
 esp_err_t uwb_read_reg(uint8_t reg, uint8_t* rx, size_t len, spi_device_handle_t dev_handle) {
-    // Reg is maximum 6 bits
-    reg &= 0x3F;
+    // Lower 6 bits store actual register
+    // MSbit = 0 represents read
+    reg = 0x00 | (reg & 0x3F);
 
     spi_transaction_t transaction = {
         .length = BYTES_TO_BITS * 1,
@@ -82,18 +85,48 @@ esp_err_t uwb_read_reg(uint8_t reg, uint8_t* rx, size_t len, spi_device_handle_t
     return spi_device_transmit(dev_handle, &transaction);
 }
 
-esp_err_t uwb_transmit(uint8_t* tx, size_t len, spi_device_handle_t dev_handle) {
-    const char* payload = "hello";
+// TODO: handle sub-register writes
+esp_err_t uwb_write_reg(uint8_t reg, uint8_t* tx, size_t len, spi_device_handle_t dev_handle) {
+    // Lower 6 bits store actual register
+    // MSbit = 1 represents write
+    reg = 0x80 | (reg & 0x3F);
 
-    dwm_transmit_frame_control_t tx_fctrl;
+    uint8_t buf[1 + len];
+    buf[0] = reg;
+    memcpy(buf + 1, tx, len);
+
+    spi_transaction_t transaction = {
+        .length = BYTES_TO_BITS * (1 + len),
+        .rxlength = 0,
+        .tx_buffer = buf,
+        .rx_buffer = NULL,
+    };
+
+    return spi_device_transmit(dev_handle, &transaction);
+}
+
+esp_err_t uwb_transmit(uint8_t* tx, size_t len, spi_device_handle_t dev_handle) {
+    uint32_t raw = 0;
+    uint8_t ifsdelay = 0;
+
+    SET_FIELD<uint32_t>(raw, 0, 7, len + 2); // add 2 for CRC at end
+    SET_FIELD<uint32_t>(raw, 7, 3, 0);
+    SET_FIELD<uint32_t>(raw, 10, 3, 0);
+    SET_FIELD<uint32_t>(raw, 13, 2, 0); // 110 kbps
+    SET_FIELD<uint32_t>(raw, 15, 1, 0);
+    SET_FIELD<uint32_t>(raw, 16, 2, 0b10); // 64 MHz
+    SET_FIELD<uint32_t>(raw, 18, 2, 0b01); // 64 symbol preamble
+    SET_FIELD<uint32_t>(raw, 20, 2, 0);
+    SET_FIELD<uint32_t>(raw, 22, 10, 0);
+    SET_FIELD<uint8_t>(ifsdelay, 0, 8, 0);
+
+    dwm_transmit_frame_control_t tx_fctrl {
+        .raw = raw,
+        .ifsdelay = ifsdelay
+    };
     
-    SET_FIELD(tx_fctrl.raw, 0, 7, strlen(payload) + 2); // add 2 for CRC at end
-    SET_FIELD(tx_fctrl.raw, 7, 3, 0);
-    SET_FIELD(tx_fctrl.raw, 10, 3, 0);
-    SET_FIELD(tx_fctrl.raw, 13, 2, 0); // 110 kbps
-    SET_FIELD(tx_fctrl.raw, 15, 1, 0);
-    SET_FIELD(tx_fctrl.raw, 16, 2, 0b10); // 64 MHz
-    SET_FIELD(tx_fctrl.raw, 18, 2, 0b01); // 64 symbol preamble
-    SET_FIELD(tx_fctrl.raw, 20, 2, 0);
-    SET_FIELD(tx_fctrl.raw, 22, 10, 0);
+    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_TRANSMIT_FRAME_CONTROL, (uint8_t*)&tx_fctrl, 5, dev_handle)); // TODO: make size 5 constant
+    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_TRANSMIT_DATA_BUFFER, (uint8_t*)tx, len, dev_handle));
+
+    return ESP_OK;
 }
