@@ -1,6 +1,7 @@
 #include "uwb.h"
 
 #include "error.h"
+#include <cstring>
 
 #define DWM_REG_DEV_ID 0x00
 #define DWM_REG_TRANSMIT_DATA_BUFFER 0x09
@@ -67,7 +68,10 @@ void uwb_init() {
     log("ID received: %X", id);
 }
 
-esp_err_t uwb_read_reg(uint8_t reg, uint8_t* rx, size_t len, spi_device_handle_t dev_handle){
+esp_err_t uwb_read_reg(uint8_t reg, uint8_t* rx, size_t len, spi_device_handle_t dev_handle) {
+    // Reg is maximum 6 bits
+    reg &= 0x3F;
+
     spi_transaction_t transaction = {
         .length = BYTES_TO_BITS * 1,
         .rxlength = BYTES_TO_BITS * len,
@@ -76,4 +80,20 @@ esp_err_t uwb_read_reg(uint8_t reg, uint8_t* rx, size_t len, spi_device_handle_t
     };
 
     return spi_device_transmit(dev_handle, &transaction);
+}
+
+esp_err_t uwb_transmit(uint8_t* tx, size_t len, spi_device_handle_t dev_handle) {
+    const char* payload = "hello";
+
+    dwm_transmit_frame_control_t tx_fctrl;
+    
+    SET_FIELD(tx_fctrl.raw, 0, 7, strlen(payload) + 2); // add 2 for CRC at end
+    SET_FIELD(tx_fctrl.raw, 7, 3, 0);
+    SET_FIELD(tx_fctrl.raw, 10, 3, 0);
+    SET_FIELD(tx_fctrl.raw, 13, 2, 0); // 110 kbps
+    SET_FIELD(tx_fctrl.raw, 15, 1, 0);
+    SET_FIELD(tx_fctrl.raw, 16, 2, 0b10); // 64 MHz
+    SET_FIELD(tx_fctrl.raw, 18, 2, 0b01); // 64 symbol preamble
+    SET_FIELD(tx_fctrl.raw, 20, 2, 0);
+    SET_FIELD(tx_fctrl.raw, 22, 10, 0);
 }
