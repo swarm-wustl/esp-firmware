@@ -1,8 +1,6 @@
 #include "uwb.h"
 
 #include "error.h"
-#include "driver/spi_master.h"
-#include "hal/spi_types.h"
 
 #define DWM_REG_DEV_ID 0x00
 #define DWM_REG_TRANSMIT_DATA_BUFFER 0x09
@@ -14,6 +12,7 @@
 #define DW_CS 4
 #define PIN_RST 27
 #define PIN_IRQ 34
+#define BYTES_TO_BITS 8
 
 void uwb_init() {
     spi_bus_config_t config {
@@ -47,7 +46,7 @@ void uwb_init() {
         .clock_speed_hz = APB_CLK_FREQ / 80,
         .input_delay_ns = 0,
         .spics_io_num = DW_CS,
-        .flags = 0,
+        .flags = SPI_DEVICE_HALFDUPLEX,
         .queue_size = 4, // TODO: queue size
         .pre_cb = NULL,
         .post_cb = NULL
@@ -55,24 +54,26 @@ void uwb_init() {
 
     spi_device_handle_t dev_handle;
 
-    log("SPI init: %d", spi_bus_initialize(SPI2_HOST, &config, SPI_DMA_CH_AUTO));
+    log("SPI init: %d", spi_bus_initialize(SPI2_HOST, &config, SPI_DMA_DISABLED));
     log("SPI add device: %d", spi_bus_add_device(SPI2_HOST, &dev_config, &dev_handle));
 
-    uint8_t tx_buf[5] = { 0x00, 0, 0, 0, 0 };  // header + dummy bytes
-    uint8_t rx_buf[5] = { 0 };
-
-    spi_transaction_t transaction = {
-        .length = 8 * 5,
-        .rxlength = 8 * 5,
-        .tx_buffer = tx_buf,
-        .rx_buffer = rx_buf,
-    };
-
-    log("SPI transaction: %d", spi_device_transmit(dev_handle, &transaction));
+    uint8_t rx_buf[4];
+    log("SPI transaction: %d", uwb_read_reg(DWM_REG_DEV_ID, rx_buf, 4, dev_handle));
     
     uint32_t id = 0;
-    for (int i = 1; i <= 4; ++i) {
-        id |= rx_buf[i] << (8 * (i - 1));
+    for (int i = 0; i < 4; ++i) {
+        id |= rx_buf[i] << (8 * i);
     }
     log("ID received: %X", id);
+}
+
+esp_err_t uwb_read_reg(uint8_t reg, uint8_t* rx, size_t len, spi_device_handle_t dev_handle){
+    spi_transaction_t transaction = {
+        .length = BYTES_TO_BITS * 1,
+        .rxlength = BYTES_TO_BITS * len,
+        .tx_buffer = &reg,
+        .rx_buffer = rx,
+    };
+
+    return spi_device_transmit(dev_handle, &transaction);
 }
