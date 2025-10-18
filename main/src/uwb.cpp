@@ -6,6 +6,9 @@
 #define DWM_REG_DEV_ID 0x00
 #define DWM_REG_TRANSMIT_FRAME_CONTROL 0x08
 #define DWM_REG_TRANSMIT_DATA_BUFFER 0x09
+#define DWM_REG_SYSTEM_CONTROL 0x0D
+
+#define DWM_SYS_CTRL_TXSTRT (1 << 1)
 
 #define SPI_SCK 18
 #define SPI_MISO 19
@@ -120,13 +123,23 @@ esp_err_t uwb_transmit(uint8_t* tx, size_t len, spi_device_handle_t dev_handle) 
     SET_FIELD<uint32_t>(raw, 22, 10, 0);
     SET_FIELD<uint8_t>(ifsdelay, 0, 8, 0);
 
+    // Can't take a reference to a packed struct's field so need to assign the fields after setting them in local variables
     dwm_transmit_frame_control_t tx_fctrl {
         .raw = raw,
         .ifsdelay = ifsdelay
     };
     
+    // Write configuration
     ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_TRANSMIT_FRAME_CONTROL, (uint8_t*)&tx_fctrl, 5, dev_handle)); // TODO: make size 5 constant
+
+    // Write payload data
     ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_TRANSMIT_DATA_BUFFER, (uint8_t*)tx, len, dev_handle));
+
+    // Write TXSTRT bit
+    dwm_system_control_t sys_ctrl = DWM_SYS_CTRL_TXSTRT;
+    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_CONTROL, (uint8_t*)&sys_ctrl, sizeof(sys_ctrl), dev_handle));
+
+    // TODO: wait for reg 0x0F TXFRS bit
 
     return ESP_OK;
 }

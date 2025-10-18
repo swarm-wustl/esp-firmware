@@ -11,6 +11,8 @@ struct __attribute__((packed)) dwm_transmit_frame_control_t {
     uint8_t ifsdelay;
 };
 
+typedef uint32_t dwm_system_control_t;
+
 template <typename T>
 static inline T GET_FIELD(T data, uint8_t start_bit, uint8_t len_bits) {
     T bitmask = (1UL << len_bits) - 1;
