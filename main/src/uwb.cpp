@@ -161,6 +161,9 @@ esp_err_t uwb_transmit(uint8_t* tx, size_t len, spi_device_handle_t dev_handle) 
 }
 
 esp_err_t uwb_receive(uint8_t* rx, size_t len, spi_device_handle_t dev_handle) {
+    // TODO: right now, receiving only works with default tx settings
+    // fix this to take in settings or something?
+    
     // Write RXENAB bit
     dwm_system_control_t sys_ctrl = DWM_SYS_CTRL_RXENAB;
     ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_CONTROL, (uint8_t*)&sys_ctrl, sizeof(sys_ctrl), dev_handle));
