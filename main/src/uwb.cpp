@@ -7,8 +7,11 @@
 #define DWM_REG_TRANSMIT_FRAME_CONTROL 0x08
 #define DWM_REG_TRANSMIT_DATA_BUFFER 0x09
 #define DWM_REG_SYSTEM_CONTROL 0x0D
+#define DWM_REG_SYSTEM_EVENT_STATUS 0x0F
+#define DWM_REG_RECEIVE_DATA_BUFFER 0x11
 
 #define DWM_SYS_CTRL_TXSTRT (1 << 1)
+#define DWM_SYS_CTRL_RXENAB (1 << 8)
 
 #define SPI_SCK 18
 #define SPI_MISO 19
@@ -70,6 +73,14 @@ void uwb_init() {
         id |= rx_buf[i] << (8 * i);
     }
     log("ID received: %X", id);
+
+    char* temp = "hi";
+    ESP_ERROR_CHECK(uwb_transmit((uint8_t*)temp, 3, dev_handle));
+    log("yay! transmitted message");
+
+    /*char buf[3];
+    ESP_ERROR_CHECK(uwb_receive((uint8_t*)buf, 3, dev_handle));
+    log("received: %s", buf);*/
 }
 
 // TODO: handle sub-register reads
@@ -115,10 +126,10 @@ esp_err_t uwb_transmit(uint8_t* tx, size_t len, spi_device_handle_t dev_handle) 
     SET_FIELD<uint32_t>(raw, 0, 7, len + 2); // add 2 for CRC at end
     SET_FIELD<uint32_t>(raw, 7, 3, 0);
     SET_FIELD<uint32_t>(raw, 10, 3, 0);
-    SET_FIELD<uint32_t>(raw, 13, 2, 0); // 110 kbps
+    SET_FIELD<uint32_t>(raw, 13, 2, 2); // 6.8 Mbps
     SET_FIELD<uint32_t>(raw, 15, 1, 0);
-    SET_FIELD<uint32_t>(raw, 16, 2, 0b10); // 64 MHz
-    SET_FIELD<uint32_t>(raw, 18, 2, 0b01); // 64 symbol preamble
+    SET_FIELD<uint32_t>(raw, 16, 2, 1); // 16 MHz
+    SET_FIELD<uint32_t>(raw, 18, 2, 3); // 1024 symbols 
     SET_FIELD<uint32_t>(raw, 20, 2, 0);
     SET_FIELD<uint32_t>(raw, 22, 10, 0);
     SET_FIELD<uint8_t>(ifsdelay, 0, 8, 0);
@@ -130,7 +141,7 @@ esp_err_t uwb_transmit(uint8_t* tx, size_t len, spi_device_handle_t dev_handle) 
     };
     
     // Write configuration
-    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_TRANSMIT_FRAME_CONTROL, (uint8_t*)&tx_fctrl, 5, dev_handle)); // TODO: make size 5 constant
+    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_TRANSMIT_FRAME_CONTROL, (uint8_t*)&tx_fctrl, sizeof(tx_fctrl), dev_handle)); // TODO: make size 5 constant
 
     // Write payload data
     ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_TRANSMIT_DATA_BUFFER, (uint8_t*)tx, len, dev_handle));
@@ -139,7 +150,30 @@ esp_err_t uwb_transmit(uint8_t* tx, size_t len, spi_device_handle_t dev_handle) 
     dwm_system_control_t sys_ctrl = DWM_SYS_CTRL_TXSTRT;
     ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_CONTROL, (uint8_t*)&sys_ctrl, sizeof(sys_ctrl), dev_handle));
 
-    // TODO: wait for reg 0x0F TXFRS bit
+    // Wait for reg 0x0F TXFRS bit
+    uint8_t sys_status[5];
+    do {
+        ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status, sizeof(sys_status), dev_handle));
+        log("polled status bit");
+    } while (((sys_status[0] >> 7) & 1) == 0);
+
+    return ESP_OK;
+}
+
+esp_err_t uwb_receive(uint8_t* rx, size_t len, spi_device_handle_t dev_handle) {
+    // Write RXENAB bit
+    dwm_system_control_t sys_ctrl = DWM_SYS_CTRL_RXENAB;
+    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_CONTROL, (uint8_t*)&sys_ctrl, sizeof(sys_ctrl), dev_handle));
+
+    // Wait for reg 0x0F RXDFR bit
+    uint8_t sys_status[5];
+    do {
+        ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)sys_status, sizeof(sys_status), dev_handle));
+        printf("SYS_STATUS: %02X %02X %02X %02X %02X\n",
+        sys_status[4], sys_status[3], sys_status[2], sys_status[1], sys_status[0]);
+    } while (((sys_status[1] >> 5) & 1) == 0);
+
+    ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_RECEIVE_DATA_BUFFER, (uint8_t*)rx, len, dev_handle));
 
     return ESP_OK;
 }
