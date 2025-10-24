@@ -123,6 +123,7 @@ esp_err_t uwb_transmit(uint8_t* tx, size_t len, spi_device_handle_t dev_handle) 
     uint32_t raw = 0;
     uint8_t ifsdelay = 0;
 
+    // TODO: make constants because this is awful
     SET_FIELD<uint32_t>(raw, 0, 7, len + 2); // add 2 for CRC at end
     SET_FIELD<uint32_t>(raw, 7, 3, 0);
     SET_FIELD<uint32_t>(raw, 10, 3, 0);
@@ -163,7 +164,7 @@ esp_err_t uwb_transmit(uint8_t* tx, size_t len, spi_device_handle_t dev_handle) 
 esp_err_t uwb_receive(uint8_t* rx, size_t len, spi_device_handle_t dev_handle) {
     // TODO: right now, receiving only works with default tx settings
     // fix this to take in settings or something?
-    
+
     // Write RXENAB bit
     dwm_system_control_t sys_ctrl = DWM_SYS_CTRL_RXENAB;
     ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_CONTROL, (uint8_t*)&sys_ctrl, sizeof(sys_ctrl), dev_handle));
