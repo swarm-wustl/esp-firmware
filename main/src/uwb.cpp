@@ -30,8 +30,7 @@
 
 #define DWM_PS_TO_DEVICE_TIME (1.0 / 15.65)
 #define MS_TO_PS (1000000000ULL)
-#define DWM_MS_TO_DEVICE_TIME_SCALE 62.6566416e6f
-
+#define DWM_MS_TO_DEVICE_TIME_SCALE (63897600ULL)
 
 void uwb_init() {
     spi_bus_config_t config {
@@ -86,7 +85,7 @@ void uwb_init() {
     log("ID received: %X", id);
 
     char* temp = "hi";
-    ESP_ERROR_CHECK(uwb_delayed_transmit((uint8_t*)temp, 3, 500, dev_handle));
+    ESP_ERROR_CHECK(uwb_delayed_transmit((uint8_t*)temp, 3, 1500, dev_handle));
 
     /*char buf[3];
     ESP_ERROR_CHECK(uwb_receive((uint8_t*)buf, 3, dev_handle));
@@ -172,6 +171,14 @@ esp_err_t uwb_transmit(uint8_t* tx, size_t len, spi_device_handle_t dev_handle) 
 }
 
 esp_err_t uwb_delayed_transmit(uint8_t* tx, size_t len, uint64_t delay_ms, spi_device_handle_t dev_handle) {
+    /*setBit(_sysstatus, LEN_SYS_STATUS, TXFRB_BIT, true);
+	setBit(_sysstatus, LEN_SYS_STATUS, TXPRS_BIT, true);
+	setBit(_sysstatus, LEN_SYS_STATUS, TXPHS_BIT, true);
+	setBit(_sysstatus, LEN_SYS_STATUS, TXFRS_BIT, true);
+	writeBytes(SYS_STATUS, NO_SUB, _sysstatus, LEN_SYS_STATUS);*/
+    uint32_t write = (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7);
+    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&write, 5, dev_handle));
+
     // Read the current system time
     uint8_t sys_time[5];
     ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_TIME_COUNTER, sys_time, sizeof(sys_time), dev_handle));
@@ -190,8 +197,9 @@ esp_err_t uwb_delayed_transmit(uint8_t* tx, size_t len, uint64_t delay_ms, spi_d
     // Compute delayed time
     uint64_t delayed_time = current_time + delay_dtu;
 
-    // Mask low 9 bits
-    delayed_time &= ~0x1FFULL; // crucial!
+    // Round delayed time up for precision
+    // Additionally, mask lower 9 bits since they are ignored
+    delayed_time = (delayed_time + 0x1FF) & ~0x1FFULL;
 
     log("Current time: %llu (0x%llX)", current_time, current_time);
     log("Delay DTU: %llu (0x%llX)", delay_dtu, delay_dtu);
@@ -273,27 +281,26 @@ esp_err_t uwb_delayed_transmit(uint8_t* tx, size_t len, uint64_t delay_ms, spi_d
 
     // Read current time again to see how much time has actually passed
     uint8_t sys_time_after[5];
-    ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_TIME_COUNTER, sys_time_after, sizeof(sys_time_after), dev_handle));
+    ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_TX_TIME, sys_time_after, sizeof(sys_time_after), dev_handle));
     uint64_t current_time_after = 0;
     for (int i = 0; i < sizeof(sys_time_after); ++i)
     {
         current_time_after |= ((uint64_t)sys_time_after[i] << (8 * i));
     }
 
-    uint8_t tx_time[5];
-    ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_TX_TIME, tx_time, 5, dev_handle));
-    uint64_t actual_tx_time = 0;
-    for (int i = 0; i < sizeof(tx_time); ++i)
-    {
-        actual_tx_time |= ((uint64_t)tx_time[i] << (8 * i));
+    uint64_t elapsed_dtu;
+    if (current_time_after >= current_time) {
+        elapsed_dtu = current_time_after - current_time;
+    } else {
+        // Wraparound happened
+        elapsed_dtu = (current_time_after + (1ULL << 40)) - current_time;
     }
 
     log("Expected TX time:     %llu (0x%llX)", delayed_time, delayed_time);
-    log("Actual TX time:       %llu (0x%llX)", actual_tx_time, actual_tx_time);
-    log("Current time after:   %llu (0x%llX)", current_time_after, current_time_after);
+    log("Actual TX time:       %llu (0x%llX)", current_time_after, current_time_after);
     log("Elapsed time in loop: %llu DTU (%.3f ms)",
-        current_time_after - current_time,
-        (current_time_after - current_time) / (63.8976e9 / 1000.0));
+        elapsed_dtu,
+        elapsed_dtu / (63.8976e9 / 1000.0));
 
     return ESP_OK;
 }
