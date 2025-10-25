@@ -19,6 +19,8 @@
 #define DWM_SYS_CTRL_TXDLYS (1 << 2)
 #define DWM_SYS_CTRL_RXENAB (1 << 8)
 
+#define DWM_SYS_STATUS_TXFRS (1 << 7)
+
 #define SPI_SCK 18
 #define SPI_MISO 19
 #define SPI_MOSI 23
@@ -84,8 +86,11 @@ void uwb_init() {
     }
     log("ID received: %X", id);
 
-    char* temp = "hi";
-    ESP_ERROR_CHECK(uwb_delayed_transmit((uint8_t*)temp, 3, 1500, dev_handle));
+    while (1) {
+        char* temp = "hi";
+        ESP_ERROR_CHECK(uwb_delayed_transmit((uint8_t*)temp, 3, 763, dev_handle));
+        ESP_ERROR_CHECK(uwb_transmit((uint8_t*)temp, 3, dev_handle));
+    }
 
     /*char buf[3];
     ESP_ERROR_CHECK(uwb_receive((uint8_t*)buf, 3, dev_handle));
@@ -129,6 +134,10 @@ esp_err_t uwb_write_reg(uint8_t reg, uint8_t* tx, size_t len, spi_device_handle_
 }
 
 esp_err_t uwb_transmit(uint8_t* tx, size_t len, spi_device_handle_t dev_handle) {
+    // Clear TXFRS bit
+    uint32_t sys_status_mask = DWM_SYS_STATUS_TXFRS;
+    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status_mask, 5, dev_handle));
+    
     uint32_t raw = 0;
     uint8_t ifsdelay = 0;
 
@@ -164,20 +173,18 @@ esp_err_t uwb_transmit(uint8_t* tx, size_t len, spi_device_handle_t dev_handle) 
     uint8_t sys_status[5];
     do {
         ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status, sizeof(sys_status), dev_handle));
-        log("polled status bit");
+        // log("polled status bit");
     } while (((sys_status[0] >> 7) & 1) == 0);
+
+    log("Transmit sent!");
 
     return ESP_OK;
 }
 
 esp_err_t uwb_delayed_transmit(uint8_t* tx, size_t len, uint64_t delay_ms, spi_device_handle_t dev_handle) {
-    /*setBit(_sysstatus, LEN_SYS_STATUS, TXFRB_BIT, true);
-	setBit(_sysstatus, LEN_SYS_STATUS, TXPRS_BIT, true);
-	setBit(_sysstatus, LEN_SYS_STATUS, TXPHS_BIT, true);
-	setBit(_sysstatus, LEN_SYS_STATUS, TXFRS_BIT, true);
-	writeBytes(SYS_STATUS, NO_SUB, _sysstatus, LEN_SYS_STATUS);*/
-    uint32_t write = (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7);
-    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&write, 5, dev_handle));
+    // Clear TXFRS bit
+    uint32_t sys_status_mask = DWM_SYS_STATUS_TXFRS;
+    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status_mask, 5, dev_handle));
 
     // Read the current system time
     uint8_t sys_time[5];
@@ -265,6 +272,7 @@ esp_err_t uwb_delayed_transmit(uint8_t* tx, size_t len, uint64_t delay_ms, spi_d
     uint8_t sys_status[5];
     do {
         ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status, sizeof(sys_status), dev_handle));
+        // log("SYS_STATUS BIT: %d", (sys_status[0] >> 7) & 1);
     } while (((sys_status[0] >> 7) & 1) == 0);
 
     log("Transmit sent!");
