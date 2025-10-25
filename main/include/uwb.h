@@ -34,6 +34,7 @@ esp_err_t uwb_read_reg(uint8_t reg, uint8_t* rx, size_t len, spi_device_handle_t
 esp_err_t uwb_write_reg(uint8_t reg, uint8_t* tx, size_t len, spi_device_handle_t dev_handle);
 
 esp_err_t uwb_transmit(uint8_t* tx, size_t len, spi_device_handle_t dev_handle);
+esp_err_t uwb_delayed_transmit(uint8_t* tx, size_t len, uint64_t delay_ms, spi_device_handle_t dev_handle);
 esp_err_t uwb_receive(uint8_t* rx, size_t len, spi_device_handle_t dev_handle);
 
 #endif
