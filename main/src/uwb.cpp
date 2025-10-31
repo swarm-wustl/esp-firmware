@@ -1,6 +1,7 @@
 #include "uwb.h"
 
 #include "error.h"
+#include "freertos/task.h"
 #include <cstring>
 
 #define DWM_REG_DEV_ID                  0x00
@@ -11,6 +12,7 @@
 #define DWM_REG_SYSTEM_CONTROL          0x0D
 #define DWM_REG_SYSTEM_EVENT_STATUS     0x0F
 #define DWM_REG_RECEIVE_DATA_BUFFER     0x11
+#define DWM_REG_RX_TIME                 0x15
 #define DWM_REG_TX_TIME                 0x17
 
 #define DWM_SIZE_BYTES_DELAYED_SEND_RECEIVE 5
@@ -18,8 +20,6 @@
 #define DWM_SYS_CTRL_TXSTRT (1 << 1)
 #define DWM_SYS_CTRL_TXDLYS (1 << 2)
 #define DWM_SYS_CTRL_RXENAB (1 << 8)
-
-#define DWM_SYS_STATUS_TXFRS (1 << 7)
 
 #define SPI_SCK 18
 #define SPI_MISO 19
@@ -33,6 +33,65 @@
 #define DWM_PS_TO_DEVICE_TIME (1.0 / 15.65)
 #define MS_TO_PS (1000000000ULL)
 #define DWM_MS_TO_DEVICE_TIME_SCALE (63897600ULL)
+
+#define PING_MSG "ping"
+#define PING_MSG_LEN 4
+#define DELAY_CONST 500  // ms
+
+#define DWM_SYS_STATUS_TXFRB (1 << 4)
+#define DWM_SYS_STATUS_TXPRS (1 << 5)
+#define DWM_SYS_STATUS_TXPHS (1 << 6)
+#define DWM_SYS_STATUS_TXFRS (1 << 7)
+
+static esp_err_t get_time(uint64_t* tv, spi_device_handle_t dev_handle, uint8_t reg = DWM_REG_SYSTEM_TIME_COUNTER) {
+    // Read the current system time
+    uint8_t sys_time[5];
+    ESP_ERROR_CHECK(uwb_read_reg(reg, sys_time, sizeof(sys_time), dev_handle));
+
+    // Load the current time into a single variable
+    uint64_t current_time = 0;
+    for (int i = 0; i < sizeof(sys_time); ++i) {
+        current_time |= ((uint64_t)sys_time[i] << (8 * i));
+    }
+
+    // Store the current time in the output parameter
+    current_time &= 0x000000FFFFFFFFFFUL;
+    *tv = current_time;
+    
+    return ESP_OK;
+}
+
+static void NodeA(spi_device_handle_t dev_handle) {
+    // TODO: make this not delayed transmit
+    ESP_ERROR_CHECK(uwb_delayed_transmit((uint8_t*)PING_MSG, PING_MSG_LEN, 300, dev_handle));
+    log("Transmitted ping message");
+
+    uint64_t tx_time;
+    ESP_ERROR_CHECK(get_time(&tx_time, dev_handle, DWM_REG_TX_TIME));
+    
+    uint8_t rx[PING_MSG_LEN];
+    ESP_ERROR_CHECK(uwb_receive((uint8_t*)rx, PING_MSG_LEN, dev_handle));
+    log("Received ping message");
+    
+    uint64_t rx_time;
+    ESP_ERROR_CHECK(get_time(&rx_time, dev_handle, DWM_REG_RX_TIME));
+    log("Delta time is %llu - %llu = %llu", rx_time, tx_time, rx_time - tx_time);
+    
+    double tof = (((rx_time - tx_time) / (63.8976e9 / 1000.0)) - DELAY_CONST) / 2.0;
+    log("DISTANCE: %f feet", tof * 983571); // ms * (ft/ms)
+}
+
+static void NodeB(spi_device_handle_t dev_handle) {
+    
+    uint8_t rx[PING_MSG_LEN];
+    ESP_ERROR_CHECK(uwb_receive((uint8_t*)rx, PING_MSG_LEN, dev_handle));
+
+    char printbuf[PING_MSG_LEN + 1];
+    memcpy(printbuf, rx, PING_MSG_LEN);
+    printbuf[PING_MSG_LEN] = '\0';
+    log("Received: %s", printbuf);
+    ESP_ERROR_CHECK(uwb_delayed_transmit((uint8_t*)PING_MSG, PING_MSG_LEN, DELAY_CONST, dev_handle));
+}
 
 void uwb_init() {
     spi_bus_config_t config {
@@ -61,8 +120,8 @@ void uwb_init() {
         .dummy_bits = 0,
         .mode = 0,
         .duty_cycle_pos = 0,
-        .cs_ena_pretrans = 0,
-        .cs_ena_posttrans = 0,
+        .cs_ena_pretrans = 2,
+        .cs_ena_posttrans = 2,
         .clock_speed_hz = APB_CLK_FREQ / 80,
         .input_delay_ns = 0,
         .spics_io_num = DW_CS,
@@ -86,15 +145,11 @@ void uwb_init() {
     }
     log("ID received: %X", id);
 
-    while (1) {
-        char* temp = "hi";
-        ESP_ERROR_CHECK(uwb_delayed_transmit((uint8_t*)temp, 3, 763, dev_handle));
-        ESP_ERROR_CHECK(uwb_transmit((uint8_t*)temp, 3, dev_handle));
-    }
+    uint8_t sys_mask[5] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    uwb_write_reg(DWM_REG_SYSTEM_EVENT_STATUS, sys_mask, 5, dev_handle);
 
-    /*char buf[3];
-    ESP_ERROR_CHECK(uwb_receive((uint8_t*)buf, 3, dev_handle));
-    log("received: %s", buf);*/
+    NodeA(dev_handle);
+    // NodeB(dev_handle);
 }
 
 // TODO: handle sub-register reads
@@ -134,8 +189,8 @@ esp_err_t uwb_write_reg(uint8_t reg, uint8_t* tx, size_t len, spi_device_handle_
 }
 
 esp_err_t uwb_transmit(uint8_t* tx, size_t len, spi_device_handle_t dev_handle) {
-    // Clear TXFRS bit
-    uint32_t sys_status_mask = DWM_SYS_STATUS_TXFRS;
+    // Clear TXFRS bit (and other relevant flags)
+    uint32_t sys_status_mask = DWM_SYS_STATUS_TXFRB | DWM_SYS_STATUS_TXPRS | DWM_SYS_STATUS_TXPHS | DWM_SYS_STATUS_TXFRS;
     ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status_mask, 5, dev_handle));
     
     uint32_t raw = 0;
@@ -173,7 +228,7 @@ esp_err_t uwb_transmit(uint8_t* tx, size_t len, spi_device_handle_t dev_handle) 
     uint8_t sys_status[5];
     do {
         ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status, sizeof(sys_status), dev_handle));
-        // log("polled status bit");
+        log("polled status bit: %d", ((sys_status[0] >> 7) & 1));
     } while (((sys_status[0] >> 7) & 1) == 0);
 
     log("Transmit sent!");
@@ -182,20 +237,14 @@ esp_err_t uwb_transmit(uint8_t* tx, size_t len, spi_device_handle_t dev_handle) 
 }
 
 esp_err_t uwb_delayed_transmit(uint8_t* tx, size_t len, uint64_t delay_ms, spi_device_handle_t dev_handle) {
-    // Clear TXFRS bit
-    uint32_t sys_status_mask = DWM_SYS_STATUS_TXFRS;
+    // Clear TXFRS bit (and other relevant flags)
+    uint32_t sys_status_mask = DWM_SYS_STATUS_TXFRB | DWM_SYS_STATUS_TXPRS | DWM_SYS_STATUS_TXPHS | DWM_SYS_STATUS_TXFRS;
     ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status_mask, 5, dev_handle));
+    vTaskDelay(pdMS_TO_TICKS(5));
 
     // Read the current system time
-    uint8_t sys_time[5];
-    ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_TIME_COUNTER, sys_time, sizeof(sys_time), dev_handle));
-
-    // Load the current time into a single variable
-    uint64_t current_time = 0;
-    for (int i = 0; i < sizeof(sys_time); ++i) {
-        current_time |= ((uint64_t)sys_time[i] << (8 * i));
-    }
-    current_time &= 0x000000FFFFFFFFFFUL;
+    uint64_t current_time;
+    ESP_ERROR_CHECK(get_time(&current_time, dev_handle));
 
     // Load the delay based on the current time
     uint64_t delay_dtu = (uint64_t)(delay_ms * DWM_MS_TO_DEVICE_TIME_SCALE);
@@ -288,13 +337,8 @@ esp_err_t uwb_delayed_transmit(uint8_t* tx, size_t len, uint64_t delay_ms, spi_d
     }
 
     // Read current time again to see how much time has actually passed
-    uint8_t sys_time_after[5];
-    ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_TX_TIME, sys_time_after, sizeof(sys_time_after), dev_handle));
-    uint64_t current_time_after = 0;
-    for (int i = 0; i < sizeof(sys_time_after); ++i)
-    {
-        current_time_after |= ((uint64_t)sys_time_after[i] << (8 * i));
-    }
+    uint64_t current_time_after;
+    ESP_ERROR_CHECK(get_time(&current_time_after, dev_handle, DWM_REG_TX_TIME));
 
     uint64_t elapsed_dtu;
     if (current_time_after >= current_time) {
@@ -317,6 +361,19 @@ esp_err_t uwb_receive(uint8_t* rx, size_t len, spi_device_handle_t dev_handle) {
     // TODO: right now, receiving only works with default tx settings
     // fix this to take in settings or something?
 
+    // Clear RXDFR bit (and other relevant flags)
+    /*
+        setBit(_sysstatus, LEN_SYS_STATUS, RXDFR_BIT, true);
+        setBit(_sysstatus, LEN_SYS_STATUS, LDEDONE_BIT, true);
+        setBit(_sysstatus, LEN_SYS_STATUS, LDEERR_BIT, true);
+        setBit(_sysstatus, LEN_SYS_STATUS, RXPHE_BIT, true);
+        setBit(_sysstatus, LEN_SYS_STATUS, RXFCE_BIT, true);
+        setBit(_sysstatus, LEN_SYS_STATUS, RXFCG_BIT, true);
+        setBit(_sysstatus, LEN_SYS_STATUS, RXRFSL_BIT, true);
+    */
+    uint32_t sys_status_mask = (1 << 13) | (1 << 10) | (1 << 18) | (1 << 12) | (1 << 15) | (1 << 14) | (1 << 16);
+    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status_mask, 5, dev_handle));
+
     // Write RXENAB bit
     dwm_system_control_t sys_ctrl = DWM_SYS_CTRL_RXENAB;
     ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_CONTROL, (uint8_t*)&sys_ctrl, sizeof(sys_ctrl), dev_handle));
@@ -325,8 +382,9 @@ esp_err_t uwb_receive(uint8_t* rx, size_t len, spi_device_handle_t dev_handle) {
     uint8_t sys_status[5];
     do {
         ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)sys_status, sizeof(sys_status), dev_handle));
-        printf("SYS_STATUS: %02X %02X %02X %02X %02X\n",
-        sys_status[4], sys_status[3], sys_status[2], sys_status[1], sys_status[0]);
+        // printf("SYS_STATUS: %02X %02X %02X %02X %02X\n",
+        // sys_status[4], sys_status[3], sys_status[2], sys_status[1], sys_status[0]);
+        // printf("ERROR FLAG BITS: RXFTO %d, RXPTO: %d, RXPHE %d, RXFCE: %d",((sys_status[1] >> 5) & 1),((sys_status[1] >> 5) & 1),((sys_status[1] >> 5) & 1),((sys_status[1] >> 5) & 1));
     } while (((sys_status[1] >> 5) & 1) == 0);
 
     ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_RECEIVE_DATA_BUFFER, (uint8_t*)rx, len, dev_handle));
