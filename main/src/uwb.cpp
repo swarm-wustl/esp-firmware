@@ -15,6 +15,10 @@
 #define DWM_REG_RX_TIME                 0x15
 #define DWM_REG_TX_TIME                 0x17
 #define DWM_REG_CHANNEL_CONTROL         0x1F
+#define DWM_REG_POWER_MANAGEMENT 0x36
+#define DWM_REG_OTP_MEMORY 0x2D
+
+#define DWM_SUB_REG_OTP_CTRL 0x06
 
 #define DWM_SIZE_BYTES_DELAYED_SEND_RECEIVE 5
 
@@ -61,7 +65,7 @@ static esp_err_t get_time(uint64_t* tv, spi_device_handle_t dev_handle, uint8_t 
     
     return ESP_OK;
 }
-
+//TODO if still not working add subregister read and check LDERUNE when receiving
 static void NodeA(spi_device_handle_t dev_handle) {
     // TODO: make this not delayed transmit
     ESP_ERROR_CHECK(uwb_delayed_transmit((uint8_t*)PING_MSG, PING_MSG_LEN, 300, dev_handle));
@@ -75,11 +79,11 @@ static void NodeA(spi_device_handle_t dev_handle) {
     log("Received ping message");
 
     // Wait for LDEDONE bit
-    uint8_t sys_status[5];
+    /*uint8_t sys_status[5];
     do {
         ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status, sizeof(sys_status), dev_handle));
         log("polled ldedone bit: %X %X %X %X %X", sys_status[4], sys_status[3], sys_status[2], sys_status[1], sys_status[0]);
-    } while (((sys_status[1] >> 2) & 1) == 0);
+    } while (((sys_status[1] >> 2) & 1) == 0);*/
     
     uint64_t rx_time;
     ESP_ERROR_CHECK(get_time(&rx_time, dev_handle, DWM_REG_RX_TIME));
@@ -153,21 +157,28 @@ void uwb_init() {
     }
     log("ID received: %X", id);
 
-    // Channel control register
-    // Example: Channel 5, PRF 64MHz, preamble code 9 (commonly used)
-    /*uint32_t chan_ctrl = 0;
-    SET_FIELD<uint32_t>(chan_ctrl, 0, 4, 5);  // Channel 5 (TX)
-    SET_FIELD<uint32_t>(chan_ctrl, 4, 4, 5);  // Channel 5 (RX)
-    SET_FIELD<uint32_t>(chan_ctrl, 18, 2, 2); // PRF 64 MHz
-    SET_FIELD<uint32_t>(chan_ctrl, 22, 5, 9); // TX preamble code
-    SET_FIELD<uint32_t>(chan_ctrl, 27, 5, 9); // RX preamble code
-    uwb_write_reg(DWM_REG_CHANNEL_CONTROL, (uint8_t*)&chan_ctrl, sizeof(chan_ctrl), dev_handle);*/
+    // LDE algorithm loaded to allow rx timestamping
+
+    // Step 1
+    uint8_t buf[2] = {0x03, 0x01};
+    uwb_write_reg(DWM_REG_POWER_MANAGEMENT, (uint8_t*)buf, sizeof(buf), dev_handle);
+
+    // Step 2
+    buf[1] = 0x80;
+    buf[0] = 0x00;
+    uwb_write_subreg(DWM_REG_OTP_MEMORY, DWM_SUB_REG_OTP_CTRL, (uint8_t*)buf, sizeof(buf), dev_handle);
+    vTaskDelay(pdMS_TO_TICKS(1));
+
+    // Step 3
+    buf[1] = 0x02;
+    buf[0] = 0x00;
+    uwb_write_reg(DWM_REG_POWER_MANAGEMENT, (uint8_t*)buf, sizeof(buf), dev_handle);
 
     uint8_t sys_mask[5] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     uwb_write_reg(DWM_REG_SYSTEM_EVENT_STATUS, sys_mask, 5, dev_handle);
 
-    // NodeA(dev_handle);
-    NodeB(dev_handle);
+    NodeA(dev_handle);
+    // NodeB(dev_handle);
 }
 
 // TODO: handle sub-register reads
@@ -186,7 +197,6 @@ esp_err_t uwb_read_reg(uint8_t reg, uint8_t* rx, size_t len, spi_device_handle_t
     return spi_device_transmit(dev_handle, &transaction);
 }
 
-// TODO: handle sub-register writes
 esp_err_t uwb_write_reg(uint8_t reg, uint8_t* tx, size_t len, spi_device_handle_t dev_handle) {
     // Lower 6 bits store actual register
     // MSbit = 1 represents write
@@ -206,6 +216,55 @@ esp_err_t uwb_write_reg(uint8_t reg, uint8_t* tx, size_t len, spi_device_handle_
     return spi_device_transmit(dev_handle, &transaction);
 }
 
+// TODO: needs to take 16-bit subreg
+esp_err_t uwb_write_subreg(uint8_t reg, uint8_t subreg, uint8_t* tx, size_t len, spi_device_handle_t dev_handle) {
+    // Lower 6 bits store actual register
+    // MSbit = 1 represents write
+    // Second MSbit = 1 represent sub-index is present
+    reg = 0b11000000 | (reg & 0x3F);
+
+    // Extended address disabled (bit 7)
+    // TODO: conditionally enable this when needed
+    subreg = (subreg & 0x7F);
+
+    uint8_t buf[2 + len];
+    buf[0] = reg;
+    buf[1] = subreg;
+    memcpy(buf + 2, tx, len);
+
+    spi_transaction_t transaction = {
+        .length = BYTES_TO_BITS * (2 + len),
+        .rxlength = 0,
+        .tx_buffer = buf,
+        .rx_buffer = NULL,
+    };
+
+    return spi_device_transmit(dev_handle, &transaction);
+}
+
+// esp_err_t uwb_read_reg(uint8_t reg, uint8_t* rx, size_t len, spi_device_handle_t dev_handle) {
+//     // Lower 6 bits store actual register
+//     // MSbit = 0 represents read
+//     reg = 0x00 | (reg & 0x3F);
+
+//     subreg = (subreg & 0x7F);
+
+//     uint8_t buf[2 + len];
+//     buf[0] = reg;
+//     buf[1] = subreg;
+//     memcpy(buf + 2, tx, len);
+    
+//     spi_transaction_t transaction = {
+//         .length = BYTES_TO_BITS * 1,
+//         .rxlength = BYTES_TO_BITS * len,
+//         .tx_buffer = &reg,
+//         .rx_buffer = rx,
+//     };
+
+//     return spi_device_transmit(dev_handle, &transaction);
+// }
+
+
 esp_err_t uwb_transmit(uint8_t* tx, size_t len, spi_device_handle_t dev_handle) {
     // Clear TXFRS bit (and other relevant flags)
     uint64_t sys_status_mask = DWM_SYS_STATUS_TXFRB | DWM_SYS_STATUS_TXPRS | DWM_SYS_STATUS_TXPHS | DWM_SYS_STATUS_TXFRS;
@@ -221,8 +280,8 @@ esp_err_t uwb_transmit(uint8_t* tx, size_t len, spi_device_handle_t dev_handle) 
     SET_FIELD<uint32_t>(raw, 13, 2, 2); // 6.8 Mbps
     SET_FIELD<uint32_t>(raw, 15, 1, 0);
     SET_FIELD<uint32_t>(raw, 16, 2, 1); // 16 MHz
-    SET_FIELD<uint32_t>(raw, 18, 2, 3); // 1024 symbols 
-    SET_FIELD<uint32_t>(raw, 20, 2, 0);
+    SET_FIELD<uint32_t>(raw, 18, 2, 1); // 128 symbols (TXPSR)
+    SET_FIELD<uint32_t>(raw, 20, 2, 1); // 128 symbols (PE)
     SET_FIELD<uint32_t>(raw, 22, 10, 0);
     SET_FIELD<uint8_t>(ifsdelay, 0, 8, 0);
 
@@ -312,8 +371,8 @@ esp_err_t uwb_delayed_transmit(uint8_t* tx, size_t len, uint64_t delay_ms, spi_d
     SET_FIELD<uint32_t>(raw, 13, 2, 2); // 6.8 Mbps
     SET_FIELD<uint32_t>(raw, 15, 1, 0);
     SET_FIELD<uint32_t>(raw, 16, 2, 1); // 16 MHz
-    SET_FIELD<uint32_t>(raw, 18, 2, 3); // 1024 symbols 
-    SET_FIELD<uint32_t>(raw, 20, 2, 0);
+    SET_FIELD<uint32_t>(raw, 18, 2, 1); // 128 symbols (TXPSR)
+    SET_FIELD<uint32_t>(raw, 20, 2, 1); // 128 symbols (PE)
     SET_FIELD<uint32_t>(raw, 22, 10, 0);
     SET_FIELD<uint8_t>(ifsdelay, 0, 8, 0);
 
