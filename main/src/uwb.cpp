@@ -14,6 +14,7 @@
 #define DWM_REG_RECEIVE_DATA_BUFFER     0x11
 #define DWM_REG_RX_TIME                 0x15
 #define DWM_REG_TX_TIME                 0x17
+#define DWM_REG_CHANNEL_CONTROL         0x1F
 
 #define DWM_SIZE_BYTES_DELAYED_SEND_RECEIVE 5
 
@@ -72,13 +73,20 @@ static void NodeA(spi_device_handle_t dev_handle) {
     uint8_t rx[PING_MSG_LEN];
     ESP_ERROR_CHECK(uwb_receive((uint8_t*)rx, PING_MSG_LEN, dev_handle));
     log("Received ping message");
+
+    // Wait for LDEDONE bit
+    uint8_t sys_status[5];
+    do {
+        ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status, sizeof(sys_status), dev_handle));
+        log("polled ldedone bit: %X %X %X %X %X", sys_status[4], sys_status[3], sys_status[2], sys_status[1], sys_status[0]);
+    } while (((sys_status[1] >> 2) & 1) == 0);
     
     uint64_t rx_time;
     ESP_ERROR_CHECK(get_time(&rx_time, dev_handle, DWM_REG_RX_TIME));
     log("Delta time is %llu - %llu = %llu", rx_time, tx_time, rx_time - tx_time);
     
     double tof = (((rx_time - tx_time) / (63.8976e9 / 1000.0)) - DELAY_CONST) / 2.0;
-    log("DISTANCE: %f feet", tof * 983571); // ms * (ft/ms)
+    log("DISTANCE: %f feet", tof * 983571.056); // ms * (ft/ms)
 }
 
 static void NodeB(spi_device_handle_t dev_handle) {
@@ -145,11 +153,21 @@ void uwb_init() {
     }
     log("ID received: %X", id);
 
+    // Channel control register
+    // Example: Channel 5, PRF 64MHz, preamble code 9 (commonly used)
+    /*uint32_t chan_ctrl = 0;
+    SET_FIELD<uint32_t>(chan_ctrl, 0, 4, 5);  // Channel 5 (TX)
+    SET_FIELD<uint32_t>(chan_ctrl, 4, 4, 5);  // Channel 5 (RX)
+    SET_FIELD<uint32_t>(chan_ctrl, 18, 2, 2); // PRF 64 MHz
+    SET_FIELD<uint32_t>(chan_ctrl, 22, 5, 9); // TX preamble code
+    SET_FIELD<uint32_t>(chan_ctrl, 27, 5, 9); // RX preamble code
+    uwb_write_reg(DWM_REG_CHANNEL_CONTROL, (uint8_t*)&chan_ctrl, sizeof(chan_ctrl), dev_handle);*/
+
     uint8_t sys_mask[5] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     uwb_write_reg(DWM_REG_SYSTEM_EVENT_STATUS, sys_mask, 5, dev_handle);
 
-    NodeA(dev_handle);
-    // NodeB(dev_handle);
+    // NodeA(dev_handle);
+    NodeB(dev_handle);
 }
 
 // TODO: handle sub-register reads
@@ -190,7 +208,7 @@ esp_err_t uwb_write_reg(uint8_t reg, uint8_t* tx, size_t len, spi_device_handle_
 
 esp_err_t uwb_transmit(uint8_t* tx, size_t len, spi_device_handle_t dev_handle) {
     // Clear TXFRS bit (and other relevant flags)
-    uint32_t sys_status_mask = DWM_SYS_STATUS_TXFRB | DWM_SYS_STATUS_TXPRS | DWM_SYS_STATUS_TXPHS | DWM_SYS_STATUS_TXFRS;
+    uint64_t sys_status_mask = DWM_SYS_STATUS_TXFRB | DWM_SYS_STATUS_TXPRS | DWM_SYS_STATUS_TXPHS | DWM_SYS_STATUS_TXFRS;
     ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status_mask, 5, dev_handle));
     
     uint32_t raw = 0;
@@ -238,7 +256,7 @@ esp_err_t uwb_transmit(uint8_t* tx, size_t len, spi_device_handle_t dev_handle) 
 
 esp_err_t uwb_delayed_transmit(uint8_t* tx, size_t len, uint64_t delay_ms, spi_device_handle_t dev_handle) {
     // Clear TXFRS bit (and other relevant flags)
-    uint32_t sys_status_mask = DWM_SYS_STATUS_TXFRB | DWM_SYS_STATUS_TXPRS | DWM_SYS_STATUS_TXPHS | DWM_SYS_STATUS_TXFRS;
+    uint64_t sys_status_mask = DWM_SYS_STATUS_TXFRB | DWM_SYS_STATUS_TXPRS | DWM_SYS_STATUS_TXPHS | DWM_SYS_STATUS_TXFRS;
     ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status_mask, 5, dev_handle));
     vTaskDelay(pdMS_TO_TICKS(5));
 
@@ -371,7 +389,7 @@ esp_err_t uwb_receive(uint8_t* rx, size_t len, spi_device_handle_t dev_handle) {
         setBit(_sysstatus, LEN_SYS_STATUS, RXFCG_BIT, true);
         setBit(_sysstatus, LEN_SYS_STATUS, RXRFSL_BIT, true);
     */
-    uint32_t sys_status_mask = (1 << 13) | (1 << 10) | (1 << 18) | (1 << 12) | (1 << 15) | (1 << 14) | (1 << 16);
+    uint64_t sys_status_mask = (1 << 13) | (1 << 10) | (1 << 18) | (1 << 12) | (1 << 15) | (1 << 14) | (1 << 16);
     ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status_mask, 5, dev_handle));
 
     // Write RXENAB bit
