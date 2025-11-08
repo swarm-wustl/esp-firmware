@@ -5,21 +5,22 @@
 #include "sensor.h"
 
 #include "freertos/FreeRTOS.h"
+#include <memory>
 
 // TODO: make templated and move to consumer.h?
 // TODO: make struct so we can pass multiple parameters
 
 struct ConsumerTaskData {
     HW::MotorDriver motorDriver;
-    Queue<Consumer::MessageTag, Consumer::MessageBody, Consumer::CONSUMER_QUEUE_SIZE> queue; 
+    Queue<Consumer::MessageTag, Consumer::MessageBody, Consumer::CONSUMER_QUEUE_SIZE>& queue; 
 };
 
 static void consumerTaskWrapper(void* pvParameters) {
-    ConsumerTaskData data = *reinterpret_cast<ConsumerTaskData*>(pvParameters);
+    ConsumerTaskData* data = reinterpret_cast<ConsumerTaskData*>(pvParameters);
 
     Consumer::spin(
-        std::move(data.motorDriver),
-        std::move(data.queue)
+        std::move(data->motorDriver),
+        data->queue
     );
 
     vTaskDelete(nullptr);
@@ -36,11 +37,11 @@ extern "C" void app_main(void) {
     ESP_ERROR_CHECK(uros_network_interface_initialize());
 #endif
 
-    /*HW::MotorDriver motor_driver;
-    Queue<Consumer::MessageTag, Consumer::MessageBody, Consumer::CONSUMER_QUEUE_SIZE> queue;
+    static HW::MotorDriver motor_driver;
+    static Queue<Consumer::MessageTag, Consumer::MessageBody, Consumer::CONSUMER_QUEUE_SIZE> queue;
 
     ConsumerTaskData consumerTaskData {
-        motor_driver,
+        std::move(motor_driver),
         queue
     };
 
@@ -62,11 +63,11 @@ extern "C" void app_main(void) {
         (void*)&consumerTaskData,
         configMAX_PRIORITIES - 1,
         NULL
-    );*/
+    );
 
     // Create sensor task and register the task handle for the timers
     // TODO: wrap this in a function?
-    TaskHandle_t sensorTaskHandle;
+    /*TaskHandle_t sensorTaskHandle;
     xTaskCreate(
         Sensor::spin,
         "sensors_task",
@@ -79,5 +80,5 @@ extern "C" void app_main(void) {
     log("Registered handle");
 
     // TODO: make constant time
-    Sensor uwb(UWB_ID, "uwb_sensor", 1000);
+    Sensor uwb(UWB_ID, "uwb_sensor", 1000);*/
 }

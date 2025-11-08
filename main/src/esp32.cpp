@@ -18,15 +18,15 @@
 #define LEFT_MOTOR_CHANNEL LEDC_CHANNEL_0
 #define RIGHT_MOTOR_CHANNEL LEDC_CHANNEL_1
 
-#define ENA GPIO_NUM_19
-#define IN1 GPIO_NUM_22
-#define IN2 GPIO_NUM_3 
+#define ENA GPIO_NUM_4
+#define IN1 GPIO_NUM_16
+#define IN2 GPIO_NUM_17
 
-#define ENB GPIO_NUM_18
-#define IN3 GPIO_NUM_1
-#define IN4 GPIO_NUM_21
+#define ENB GPIO_NUM_5
+#define IN3 GPIO_NUM_18
+#define IN4 GPIO_NUM_19
 
-#define STBY GPIO_NUM_23
+#define STBY GPIO_NUM_0
 
 #define GPIO_BITMASK ( \
     (1ULL << ENA) | (1ULL << IN1) | (1ULL << IN2) | \

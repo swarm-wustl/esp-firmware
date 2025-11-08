@@ -27,7 +27,7 @@ static void callback(const void* msgin, void* context) {
 
     // Cast void pointer parameters
     const geometry_msgs__msg__Twist twist_msg = *reinterpret_cast<const geometry_msgs__msg__Twist*>(msgin);
-    Queue<Consumer::MessageTag, Consumer::MessageBody, Consumer::CONSUMER_QUEUE_SIZE> queue = *reinterpret_cast<Queue<Consumer::MessageTag, Consumer::MessageBody, Consumer::CONSUMER_QUEUE_SIZE>*>(context);
+    Queue<Consumer::MessageTag, Consumer::MessageBody, Consumer::CONSUMER_QUEUE_SIZE>& queue = *reinterpret_cast<Queue<Consumer::MessageTag, Consumer::MessageBody, Consumer::CONSUMER_QUEUE_SIZE>*>(context);
 
     std::array<Motor::Command, HW::MOTOR_COUNT> motor_commands = HW::DriveStyle::convert_twist<HW::MOTOR_COUNT>(twist_msg);
 
