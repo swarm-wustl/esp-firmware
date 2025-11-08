@@ -5,6 +5,7 @@
 #include <cstring>
 
 #define DWM_REG_DEV_ID                  0x00
+#define DWM_REG_SYS_CFG                 0x04
 #define DWM_REG_SYSTEM_TIME_COUNTER     0x06
 #define DWM_REG_TRANSMIT_FRAME_CONTROL  0x08
 #define DWM_REG_TRANSMIT_DATA_BUFFER    0x09
@@ -25,6 +26,25 @@
 #define DWM_SYS_CTRL_TXSTRT (1 << 1)
 #define DWM_SYS_CTRL_TXDLYS (1 << 2)
 #define DWM_SYS_CTRL_RXENAB (1 << 8)
+
+#define DWM_SYS_CFG_PHR_MODE_START 16
+#define DWM_SYS_CFG_PHR_MODE_LEN 2
+#define DWM_PHR_MODE_STANDARD_FRAME 0b00
+#define DWM_PHR_MODE_EXTENDED_FRAME 0b11
+
+#define DWM_SYS_CFG_DIS_STXP_START 18
+#define DWM_SYS_CFG_DIS_STXP_LEN 1
+#define DWM_SYS_CFG_DIS_STXP_DEFAULT 1 // disable smart power (active low)
+
+#define DWM_SYS_CFG_FFEN_START 0
+#define DWM_SYS_CFG_FFEN_LEN 1
+#define DWM_SYS_CFG_FFEN_DEFAULT 0
+
+#define DWM_CHAN_CTRL_TX_CHAN_START 0
+#define DWM_CHAN_CTRL_TX_CHAN_LEN 4
+#define DWM_CHAN_CTRL_RX_CHAN_START 4
+#define DWM_CHAN_CTRL_RX_CHAN_LEN 4
+#define DWM_CHAN_CTR_DEFAULT_CHANNEL 5
 
 #define SPI_SCK 18
 #define SPI_MISO 19
@@ -148,6 +168,8 @@ void uwb_init() {
     log("SPI init: %d", spi_bus_initialize(SPI2_HOST, &config, SPI_DMA_DISABLED));
     log("SPI add device: %d", spi_bus_add_device(SPI2_HOST, &dev_config, &dev_handle));
 
+    ESP_ERROR_CHECK(uwb_default_config(dev_handle));
+
     uint8_t rx_buf[4];
     log("SPI transaction: %d", uwb_read_reg(DWM_REG_DEV_ID, rx_buf, 4, dev_handle));
     
@@ -160,7 +182,7 @@ void uwb_init() {
     // LDE algorithm loaded to allow rx timestamping
 
     // Step 1
-    uint8_t buf[2] = {0x03, 0x01};
+    /*uint8_t buf[2] = {0x03, 0x01};
     uwb_write_reg(DWM_REG_POWER_MANAGEMENT, (uint8_t*)buf, sizeof(buf), dev_handle);
 
     // Step 2
@@ -175,10 +197,36 @@ void uwb_init() {
     uwb_write_reg(DWM_REG_POWER_MANAGEMENT, (uint8_t*)buf, sizeof(buf), dev_handle);
 
     uint8_t sys_mask[5] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-    uwb_write_reg(DWM_REG_SYSTEM_EVENT_STATUS, sys_mask, 5, dev_handle);
+    uwb_write_reg(DWM_REG_SYSTEM_EVENT_STATUS, sys_mask, 5, dev_handle);*/
 
-    NodeA(dev_handle);
+    // NodeA(dev_handle);
     // NodeB(dev_handle);
+
+    /*char* msg = "hello world";
+    ESP_ERROR_CHECK(uwb_transmit((uint8_t*)msg, 12, dev_handle));
+    log("yay transmit");*/
+
+    char recv[12];
+    log("try recv");
+    ESP_ERROR_CHECK(uwb_receive((uint8_t*)recv, 12, dev_handle));
+    log("yay receive: %s", recv);
+}
+
+esp_err_t uwb_default_config(spi_device_handle_t dev_handle) {
+    uint32_t sys_cfg = 0;
+
+    SET_FIELD<uint32_t>(sys_cfg, DWM_SYS_CFG_PHR_MODE_START, DWM_SYS_CFG_PHR_MODE_LEN, DWM_PHR_MODE_STANDARD_FRAME);
+    SET_FIELD<uint32_t>(sys_cfg, DWM_SYS_CFG_DIS_STXP_START, DWM_SYS_CFG_DIS_STXP_LEN, DWM_SYS_CFG_DIS_STXP_DEFAULT);
+    SET_FIELD<uint32_t>(sys_cfg, DWM_SYS_CFG_FFEN_START, DWM_SYS_CFG_FFEN_LEN, DWM_SYS_CFG_FFEN_DEFAULT);
+    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYS_CFG, (uint8_t*)&sys_cfg, sizeof(sys_cfg), dev_handle));
+
+    uint32_t chan_ctrl = 0;
+    SET_FIELD<uint32_t>(chan_ctrl, DWM_CHAN_CTRL_TX_CHAN_START, DWM_CHAN_CTRL_TX_CHAN_LEN, DWM_CHAN_CTR_DEFAULT_CHANNEL);
+    SET_FIELD<uint32_t>(chan_ctrl, DWM_CHAN_CTRL_RX_CHAN_START, DWM_CHAN_CTRL_RX_CHAN_LEN, DWM_CHAN_CTR_DEFAULT_CHANNEL);
+    // TODO: set preamble code: 16 MHz, arduino: PREAMBLE_CODE_16MHZ_4
+    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_CHANNEL_CONTROL, (uint8_t*)&chan_ctrl, sizeof(chan_ctrl), dev_handle));
+
+    return ESP_OK;
 }
 
 // TODO: handle sub-register reads
@@ -242,60 +290,23 @@ esp_err_t uwb_write_subreg(uint8_t reg, uint8_t subreg, uint8_t* tx, size_t len,
     return spi_device_transmit(dev_handle, &transaction);
 }
 
-// esp_err_t uwb_read_reg(uint8_t reg, uint8_t* rx, size_t len, spi_device_handle_t dev_handle) {
-//     // Lower 6 bits store actual register
-//     // MSbit = 0 represents read
-//     reg = 0x00 | (reg & 0x3F);
-
-//     subreg = (subreg & 0x7F);
-
-//     uint8_t buf[2 + len];
-//     buf[0] = reg;
-//     buf[1] = subreg;
-//     memcpy(buf + 2, tx, len);
-    
-//     spi_transaction_t transaction = {
-//         .length = BYTES_TO_BITS * 1,
-//         .rxlength = BYTES_TO_BITS * len,
-//         .tx_buffer = &reg,
-//         .rx_buffer = rx,
-//     };
-
-//     return spi_device_transmit(dev_handle, &transaction);
-// }
-
-
 esp_err_t uwb_transmit(uint8_t* tx, size_t len, spi_device_handle_t dev_handle) {
     // Clear TXFRS bit (and other relevant flags)
     uint64_t sys_status_mask = DWM_SYS_STATUS_TXFRB | DWM_SYS_STATUS_TXPRS | DWM_SYS_STATUS_TXPHS | DWM_SYS_STATUS_TXFRS;
     ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status_mask, 5, dev_handle));
-    
-    uint32_t raw = 0;
-    uint8_t ifsdelay = 0;
-
-    // TODO: make constants because this is awful
-    SET_FIELD<uint32_t>(raw, 0, 7, len + 2); // add 2 for CRC at end
-    SET_FIELD<uint32_t>(raw, 7, 3, 0);
-    SET_FIELD<uint32_t>(raw, 10, 3, 0);
-    SET_FIELD<uint32_t>(raw, 13, 2, 2); // 6.8 Mbps
-    SET_FIELD<uint32_t>(raw, 15, 1, 0);
-    SET_FIELD<uint32_t>(raw, 16, 2, 1); // 16 MHz
-    SET_FIELD<uint32_t>(raw, 18, 2, 1); // 128 symbols (TXPSR)
-    SET_FIELD<uint32_t>(raw, 20, 2, 1); // 128 symbols (PE)
-    SET_FIELD<uint32_t>(raw, 22, 10, 0);
-    SET_FIELD<uint8_t>(ifsdelay, 0, 8, 0);
-
-    // Can't take a reference to a packed struct's field so need to assign the fields after setting them in local variables
-    dwm_transmit_frame_control_t tx_fctrl {
-        .raw = raw,
-        .ifsdelay = ifsdelay
-    };
-    
-    // Write configuration
-    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_TRANSMIT_FRAME_CONTROL, (uint8_t*)&tx_fctrl, sizeof(tx_fctrl), dev_handle));
 
     // Write payload data
     ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_TRANSMIT_DATA_BUFFER, (uint8_t*)tx, len, dev_handle));
+
+    // Grab current transmit frame control register
+    uint32_t transmit_frame_control;
+    ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_TRANSMIT_FRAME_CONTROL, (uint8_t*)&transmit_frame_control, sizeof(transmit_frame_control), dev_handle));
+
+    // By default, frame check is enabled
+    // Therefore, add 2 for the CRC
+    // TODO: make this dynamic check
+    SET_FIELD<uint32_t>(transmit_frame_control, 0, 8, len + 2);
+    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_TRANSMIT_FRAME_CONTROL, (uint8_t*)&transmit_frame_control, sizeof(transmit_frame_control), dev_handle));
 
     // Write TXSTRT bit
     dwm_system_control_t sys_ctrl = DWM_SYS_CTRL_TXSTRT;
@@ -314,11 +325,6 @@ esp_err_t uwb_transmit(uint8_t* tx, size_t len, spi_device_handle_t dev_handle) 
 }
 
 esp_err_t uwb_delayed_transmit(uint8_t* tx, size_t len, uint64_t delay_ms, spi_device_handle_t dev_handle) {
-    // Clear TXFRS bit (and other relevant flags)
-    uint64_t sys_status_mask = DWM_SYS_STATUS_TXFRB | DWM_SYS_STATUS_TXPRS | DWM_SYS_STATUS_TXPHS | DWM_SYS_STATUS_TXFRS;
-    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status_mask, 5, dev_handle));
-    vTaskDelay(pdMS_TO_TICKS(5));
-
     // Read the current system time
     uint64_t current_time;
     ESP_ERROR_CHECK(get_time(&current_time, dev_handle));
@@ -361,32 +367,22 @@ esp_err_t uwb_delayed_transmit(uint8_t* tx, size_t len, uint64_t delay_ms, spi_d
     // TODO: leverage the regular uwb_transmit function instead of copying code
     //
 
-    uint32_t raw = 0;
-    uint8_t ifsdelay = 0;
-
-    // TODO: make constants because this is awful
-    SET_FIELD<uint32_t>(raw, 0, 7, len + 2); // add 2 for CRC at end
-    SET_FIELD<uint32_t>(raw, 7, 3, 0);
-    SET_FIELD<uint32_t>(raw, 10, 3, 0);
-    SET_FIELD<uint32_t>(raw, 13, 2, 2); // 6.8 Mbps
-    SET_FIELD<uint32_t>(raw, 15, 1, 0);
-    SET_FIELD<uint32_t>(raw, 16, 2, 1); // 16 MHz
-    SET_FIELD<uint32_t>(raw, 18, 2, 1); // 128 symbols (TXPSR)
-    SET_FIELD<uint32_t>(raw, 20, 2, 1); // 128 symbols (PE)
-    SET_FIELD<uint32_t>(raw, 22, 10, 0);
-    SET_FIELD<uint8_t>(ifsdelay, 0, 8, 0);
-
-    // Can't take a reference to a packed struct's field so need to assign the fields after setting them in local variables
-    dwm_transmit_frame_control_t tx_fctrl {
-        .raw = raw,
-        .ifsdelay = ifsdelay
-    };
-
-    // Write configuration
-    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_TRANSMIT_FRAME_CONTROL, (uint8_t*)&tx_fctrl, sizeof(tx_fctrl), dev_handle));
+    // Clear TXFRS bit (and other relevant flags)
+    uint64_t sys_status_mask = DWM_SYS_STATUS_TXFRB | DWM_SYS_STATUS_TXPRS | DWM_SYS_STATUS_TXPHS | DWM_SYS_STATUS_TXFRS;
+    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status_mask, 5, dev_handle));
 
     // Write payload data
     ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_TRANSMIT_DATA_BUFFER, (uint8_t*)tx, len, dev_handle));
+    
+    // Grab current transmit frame control register
+    uint32_t transmit_frame_control;
+    ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_TRANSMIT_FRAME_CONTROL, (uint8_t*)&transmit_frame_control, sizeof(transmit_frame_control), dev_handle));
+
+    // By default, frame check is enabled
+    // Therefore, add 2 for the CRC
+    // TODO: make this dynamic check
+    SET_FIELD<uint32_t>(transmit_frame_control, 0, 8, len + 2);
+    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_TRANSMIT_FRAME_CONTROL, (uint8_t*)&transmit_frame_control, sizeof(transmit_frame_control), dev_handle));
 
     // Write system control bits
     dwm_system_control_t sys_ctrl = (DWM_SYS_CTRL_TXDLYS | DWM_SYS_CTRL_TXSTRT);
@@ -438,30 +434,22 @@ esp_err_t uwb_receive(uint8_t* rx, size_t len, spi_device_handle_t dev_handle) {
     // TODO: right now, receiving only works with default tx settings
     // fix this to take in settings or something?
 
-    // Clear RXDFR bit (and other relevant flags)
-    /*
-        setBit(_sysstatus, LEN_SYS_STATUS, RXDFR_BIT, true);
-        setBit(_sysstatus, LEN_SYS_STATUS, LDEDONE_BIT, true);
-        setBit(_sysstatus, LEN_SYS_STATUS, LDEERR_BIT, true);
-        setBit(_sysstatus, LEN_SYS_STATUS, RXPHE_BIT, true);
-        setBit(_sysstatus, LEN_SYS_STATUS, RXFCE_BIT, true);
-        setBit(_sysstatus, LEN_SYS_STATUS, RXFCG_BIT, true);
-        setBit(_sysstatus, LEN_SYS_STATUS, RXRFSL_BIT, true);
-    */
+    // Reset system control register
+    dwm_system_control_t sys_ctrl = (1 << 6); // TRXOFF;
+    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_CONTROL, (uint8_t*)&sys_ctrl, sizeof(sys_ctrl), dev_handle));
+
+    // Clear system status bits
     uint64_t sys_status_mask = (1 << 13) | (1 << 10) | (1 << 18) | (1 << 12) | (1 << 15) | (1 << 14) | (1 << 16);
     ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status_mask, 5, dev_handle));
 
     // Write RXENAB bit
-    dwm_system_control_t sys_ctrl = DWM_SYS_CTRL_RXENAB;
+    sys_ctrl = DWM_SYS_CTRL_RXENAB;
     ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_CONTROL, (uint8_t*)&sys_ctrl, sizeof(sys_ctrl), dev_handle));
 
     // Wait for reg 0x0F RXDFR bit
     uint8_t sys_status[5];
     do {
         ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)sys_status, sizeof(sys_status), dev_handle));
-        // printf("SYS_STATUS: %02X %02X %02X %02X %02X\n",
-        // sys_status[4], sys_status[3], sys_status[2], sys_status[1], sys_status[0]);
-        // printf("ERROR FLAG BITS: RXFTO %d, RXPTO: %d, RXPHE %d, RXFCE: %d",((sys_status[1] >> 5) & 1),((sys_status[1] >> 5) & 1),((sys_status[1] >> 5) & 1),((sys_status[1] >> 5) & 1));
     } while (((sys_status[1] >> 5) & 1) == 0);
 
     ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_RECEIVE_DATA_BUFFER, (uint8_t*)rx, len, dev_handle));
