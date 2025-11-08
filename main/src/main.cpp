@@ -12,16 +12,24 @@
 
 struct ConsumerTaskData {
     HW::MotorDriver motorDriver;
-    Queue<Consumer::MessageTag, Consumer::MessageBody, Consumer::CONSUMER_QUEUE_SIZE>& queue; 
+    Consumer::QueueType queue; 
 };
 
 static void consumerTaskWrapper(void* pvParameters) {
     ConsumerTaskData* data = reinterpret_cast<ConsumerTaskData*>(pvParameters);
 
     Consumer::spin(
-        std::move(data->motorDriver),
+        data->motorDriver,
         data->queue
     );
+
+    vTaskDelete(nullptr);
+}
+
+static void rosTaskWrapper(void* pvParameters) {
+    Consumer::QueueType* queue = reinterpret_cast<Consumer::QueueType*>(pvParameters);
+
+    ROS::spin(*queue);
 
     vTaskDelete(nullptr);
 }
@@ -37,21 +45,19 @@ extern "C" void app_main(void) {
     ESP_ERROR_CHECK(uros_network_interface_initialize());
 #endif
 
-    static HW::MotorDriver motor_driver;
-    static Queue<Consumer::MessageTag, Consumer::MessageBody, Consumer::CONSUMER_QUEUE_SIZE> queue;
-
-    ConsumerTaskData consumerTaskData {
-        std::move(motor_driver),
-        queue
+    // Make the struct static so it lives as long as the program (incase mani() ever terminates)
+    static ConsumerTaskData consumerTaskData {
+        HW::MotorDriver{},
+        Consumer::QueueType{}
     };
 
     log("Hello world!");
 
     xTaskCreate(
-        ROS::spin,
+        rosTaskWrapper,
         "uros_task",
         4096, // TODO: see https://github.com/micro-ROS/micro_ros_espidf_component/blob/cd1da2b3d7d73f48743a2c42ac0e915cd751bb74/examples/int32_publisher/main/main.c#L105
-        (void*)&queue,
+        (void*)&consumerTaskData.queue,
         configMAX_PRIORITIES - 1,
         NULL
     );

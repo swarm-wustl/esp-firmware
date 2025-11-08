@@ -11,8 +11,11 @@
 #include <rclc/rclc.h>
 #include <rclc/executor.h>
 
+#include "consumer.h"
+#include "queue.h"
+
 namespace ROS {
-    void spin(void* context);
+    void spin(Consumer::QueueType& queue);
     void sendMessage();
 }
 

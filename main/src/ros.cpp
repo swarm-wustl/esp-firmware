@@ -8,7 +8,6 @@
 
 #include "error.h"
 #include "queue.h"
-#include "consumer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -27,7 +26,7 @@ static void callback(const void* msgin, void* context) {
 
     // Cast void pointer parameters
     const geometry_msgs__msg__Twist twist_msg = *reinterpret_cast<const geometry_msgs__msg__Twist*>(msgin);
-    Queue<Consumer::MessageTag, Consumer::MessageBody, Consumer::CONSUMER_QUEUE_SIZE>& queue = *reinterpret_cast<Queue<Consumer::MessageTag, Consumer::MessageBody, Consumer::CONSUMER_QUEUE_SIZE>*>(context);
+    Consumer::QueueType& queue = *reinterpret_cast<Consumer::QueueType*>(context);
 
     std::array<Motor::Command, HW::MOTOR_COUNT> motor_commands = HW::DriveStyle::convert_twist<HW::MOTOR_COUNT>(twist_msg);
 
@@ -37,7 +36,7 @@ static void callback(const void* msgin, void* context) {
     }
 }
 
-void ROS::spin(void* context) {
+void ROS::spin(Consumer::QueueType& queue) {
     // Create memory allocator
     rcl_allocator_t allocator = rcl_get_default_allocator();
 	rclc_support_t support;
@@ -80,7 +79,7 @@ void ROS::spin(void* context) {
         &subscriber, 
         &msgin,
 		&callback, 
-        context,
+        (void*)&queue,
         ON_NEW_DATA
     ));
 
