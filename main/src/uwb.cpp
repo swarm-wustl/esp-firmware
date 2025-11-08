@@ -62,7 +62,7 @@
 
 #define PING_MSG "ping"
 #define PING_MSG_LEN 4
-#define DELAY_CONST 500  // ms
+#define DELAY_CONST_MS 30  // ms
 
 #define DWM_SYS_STATUS_TXFRB (1 << 4)
 #define DWM_SYS_STATUS_TXPRS (1 << 5)
@@ -116,10 +116,15 @@ static void NodeA(spi_device_handle_t dev_handle) {
     
     uint64_t rx_time;
     ESP_ERROR_CHECK(get_time(&rx_time, dev_handle, DWM_REG_RX_TIME));
-    log("Delta time is %llu - %llu = %llu", rx_time, tx_time, rx_time - tx_time);
+
+    uint64_t delta_time_dtu = rx_time - tx_time; // DTU
+    double delta_time_us = delta_time_dtu * 1.565e-5; // microseconds
+    double tof_us = (delta_time_us - (DELAY_CONST_MS * 1000.0)) / 2.0; // tof one-way in microseconds
+    double distance_ft = tof_us * 983.57105643045;
     
-    double tof = (((rx_time - tx_time) / (63.8976e9 / 1000.0)) - DELAY_CONST) / 2.0;
-    log("DISTANCE: %f feet", tof * 983571.056); // ms * (ft/ms)
+    log("Delta time: %f us", delta_time_us);
+    log("TOF: %f us", tof_us);
+    log("DISTANCE: %f feet", distance_ft); // ms * (ft/ms)
 }
 
 static void NodeB(spi_device_handle_t dev_handle) {
@@ -131,7 +136,7 @@ static void NodeB(spi_device_handle_t dev_handle) {
     memcpy(printbuf, rx, PING_MSG_LEN);
     printbuf[PING_MSG_LEN] = '\0';
     log("Received: %s", printbuf);
-    ESP_ERROR_CHECK(uwb_delayed_transmit((uint8_t*)PING_MSG, PING_MSG_LEN, DELAY_CONST, dev_handle));
+    ESP_ERROR_CHECK(uwb_delayed_transmit((uint8_t*)PING_MSG, PING_MSG_LEN, DELAY_CONST_MS, dev_handle));
 }
 
 void uwb_init() {
@@ -157,14 +162,14 @@ void uwb_init() {
         // So, we can ignore these two phases
         .command_bits = 0,
         .address_bits = 0,
-        
+
         .dummy_bits = 0,
         .mode = 0,
         .duty_cycle_pos = 0,
-        .cs_ena_pretrans = 2,
-        .cs_ena_posttrans = 2,
+        .cs_ena_pretrans = 5,
+        .cs_ena_posttrans = 5,
         .clock_speed_hz = APB_CLK_FREQ / 80,
-        .input_delay_ns = 0,
+        .input_delay_ns = 10,
         .spics_io_num = DW_CS,
         .flags = SPI_DEVICE_HALFDUPLEX,
         .queue_size = 4, // TODO: queue size
@@ -179,6 +184,7 @@ void uwb_init() {
 
     // Hard reset the device
     uwb_hard_reset();
+    vTaskDelay(pdMS_TO_TICKS(1000));
 
     uint8_t rx_buf[4];
     log("SPI transaction: %d", uwb_read_reg(DWM_REG_DEV_ID, rx_buf, 4, dev_handle));
@@ -192,7 +198,7 @@ void uwb_init() {
     // LDE algorithm loaded to allow rx timestamping
 
     // Step 1
-    /*uint8_t buf[2] = {0x03, 0x01};
+    uint8_t buf[2] = {0x01, 0x03};
     uwb_write_reg(DWM_REG_POWER_MANAGEMENT, (uint8_t*)buf, sizeof(buf), dev_handle);
 
     // Step 2
@@ -206,20 +212,30 @@ void uwb_init() {
     buf[0] = 0x00;
     uwb_write_reg(DWM_REG_POWER_MANAGEMENT, (uint8_t*)buf, sizeof(buf), dev_handle);
 
-    uint8_t sys_mask[5] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-    uwb_write_reg(DWM_REG_SYSTEM_EVENT_STATUS, sys_mask, 5, dev_handle);*/
+    uint8_t sys_status[5];
 
-    // NodeA(dev_handle);
+    ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status, sizeof(sys_status), dev_handle));
+    log("polled sys status: %X %X %X %X %X", sys_status[4], sys_status[3], sys_status[2], sys_status[1], sys_status[0]);
+
+    uint8_t sys_mask[5] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    uwb_write_reg(DWM_REG_SYSTEM_EVENT_STATUS, sys_mask, 5, dev_handle);
+
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
+    ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status, sizeof(sys_status), dev_handle));
+    log("polled sys status: %X %X %X %X %X", sys_status[4], sys_status[3], sys_status[2], sys_status[1], sys_status[0]);
+
+    NodeA(dev_handle);
     // NodeB(dev_handle);
 
     /*char* msg = "hello world";
     ESP_ERROR_CHECK(uwb_transmit((uint8_t*)msg, 12, dev_handle));
     log("yay transmit");*/
 
-    char recv[12];
-    log("try recv");
-    ESP_ERROR_CHECK(uwb_receive((uint8_t*)recv, 12, dev_handle));
-    log("yay receive: %s", recv);
+    // char recv[12];
+    // log("try recv");
+    // ESP_ERROR_CHECK(uwb_receive((uint8_t*)recv, 12, dev_handle));
+    // log("yay receive: %s", recv);
 }
 
 // TODO: handle sub-register reads
@@ -441,6 +457,7 @@ esp_err_t uwb_receive(uint8_t* rx, size_t len, spi_device_handle_t dev_handle) {
     uint8_t sys_status[5];
     do {
         ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)sys_status, sizeof(sys_status), dev_handle));
+        vTaskDelay(pdTICKS_TO_MS(1)); // prevent task starvation
     } while (((sys_status[1] >> 5) & 1) == 0);
 
     ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_RECEIVE_DATA_BUFFER, (uint8_t*)rx, len, dev_handle));
