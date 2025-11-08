@@ -3,6 +3,7 @@
 #include "error.h"
 #include "freertos/task.h"
 #include <cstring>
+#include <driver/gpio.h>
 
 #define DWM_REG_DEV_ID                  0x00
 #define DWM_REG_SYS_CFG                 0x04
@@ -51,8 +52,8 @@
 #define SPI_MOSI 23
 
 #define DW_CS 4
-#define PIN_RST 27
-#define PIN_IRQ 34
+#define PIN_RST (gpio_num_t)27
+#define PIN_IRQ (gpio_num_t)34
 #define BYTES_TO_BITS 8
 
 #define DWM_PS_TO_DEVICE_TIME (1.0 / 15.65)
@@ -67,6 +68,14 @@
 #define DWM_SYS_STATUS_TXPRS (1 << 5)
 #define DWM_SYS_STATUS_TXPHS (1 << 6)
 #define DWM_SYS_STATUS_TXFRS (1 << 7)
+
+static void uwb_hard_reset() {
+    gpio_set_direction(PIN_RST, GPIO_MODE_OUTPUT);
+    gpio_set_level(PIN_RST, 0);
+    vTaskDelay(pdMS_TO_TICKS(10));  // hold low for >10ms
+    gpio_set_level(PIN_RST, 1);
+    vTaskDelay(pdMS_TO_TICKS(10));  // wait for startup
+}
 
 static esp_err_t get_time(uint64_t* tv, spi_device_handle_t dev_handle, uint8_t reg = DWM_REG_SYSTEM_TIME_COUNTER) {
     // Read the current system time
@@ -168,7 +177,8 @@ void uwb_init() {
     log("SPI init: %d", spi_bus_initialize(SPI2_HOST, &config, SPI_DMA_DISABLED));
     log("SPI add device: %d", spi_bus_add_device(SPI2_HOST, &dev_config, &dev_handle));
 
-    ESP_ERROR_CHECK(uwb_default_config(dev_handle));
+    // Hard reset the device
+    uwb_hard_reset();
 
     uint8_t rx_buf[4];
     log("SPI transaction: %d", uwb_read_reg(DWM_REG_DEV_ID, rx_buf, 4, dev_handle));
@@ -210,23 +220,6 @@ void uwb_init() {
     log("try recv");
     ESP_ERROR_CHECK(uwb_receive((uint8_t*)recv, 12, dev_handle));
     log("yay receive: %s", recv);
-}
-
-esp_err_t uwb_default_config(spi_device_handle_t dev_handle) {
-    uint32_t sys_cfg = 0;
-
-    SET_FIELD<uint32_t>(sys_cfg, DWM_SYS_CFG_PHR_MODE_START, DWM_SYS_CFG_PHR_MODE_LEN, DWM_PHR_MODE_STANDARD_FRAME);
-    SET_FIELD<uint32_t>(sys_cfg, DWM_SYS_CFG_DIS_STXP_START, DWM_SYS_CFG_DIS_STXP_LEN, DWM_SYS_CFG_DIS_STXP_DEFAULT);
-    SET_FIELD<uint32_t>(sys_cfg, DWM_SYS_CFG_FFEN_START, DWM_SYS_CFG_FFEN_LEN, DWM_SYS_CFG_FFEN_DEFAULT);
-    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYS_CFG, (uint8_t*)&sys_cfg, sizeof(sys_cfg), dev_handle));
-
-    uint32_t chan_ctrl = 0;
-    SET_FIELD<uint32_t>(chan_ctrl, DWM_CHAN_CTRL_TX_CHAN_START, DWM_CHAN_CTRL_TX_CHAN_LEN, DWM_CHAN_CTR_DEFAULT_CHANNEL);
-    SET_FIELD<uint32_t>(chan_ctrl, DWM_CHAN_CTRL_RX_CHAN_START, DWM_CHAN_CTRL_RX_CHAN_LEN, DWM_CHAN_CTR_DEFAULT_CHANNEL);
-    // TODO: set preamble code: 16 MHz, arduino: PREAMBLE_CODE_16MHZ_4
-    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_CHANNEL_CONTROL, (uint8_t*)&chan_ctrl, sizeof(chan_ctrl), dev_handle));
-
-    return ESP_OK;
 }
 
 // TODO: handle sub-register reads
@@ -434,16 +427,14 @@ esp_err_t uwb_receive(uint8_t* rx, size_t len, spi_device_handle_t dev_handle) {
     // TODO: right now, receiving only works with default tx settings
     // fix this to take in settings or something?
 
-    // Reset system control register
-    dwm_system_control_t sys_ctrl = (1 << 6); // TRXOFF;
-    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_CONTROL, (uint8_t*)&sys_ctrl, sizeof(sys_ctrl), dev_handle));
-
     // Clear system status bits
     uint64_t sys_status_mask = (1 << 13) | (1 << 10) | (1 << 18) | (1 << 12) | (1 << 15) | (1 << 14) | (1 << 16);
     ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status_mask, 5, dev_handle));
 
     // Write RXENAB bit
-    sys_ctrl = DWM_SYS_CTRL_RXENAB;
+    dwm_system_control_t sys_ctrl;
+    ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_CONTROL, (uint8_t*)&sys_ctrl, sizeof(sys_ctrl), dev_handle));
+    sys_ctrl |= DWM_SYS_CTRL_RXENAB;
     ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_CONTROL, (uint8_t*)&sys_ctrl, sizeof(sys_ctrl), dev_handle));
 
     // Wait for reg 0x0F RXDFR bit
