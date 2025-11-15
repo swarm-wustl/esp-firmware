@@ -60,7 +60,7 @@
 
 #define PING_MSG "ping"
 #define PING_MSG_LEN 4
-#define DELAY_CONST_MS 50  // ms
+#define DELAY_CONST_MS 1500  // ms
 
 #define DWM_SYS_STATUS_TXFRB (1 << 4)
 #define DWM_SYS_STATUS_TXPRS (1 << 5)
@@ -134,6 +134,14 @@ static void NodeA(spi_device_handle_t dev_handle) {
 
     // STEP 5: Send (Trr - Tsp) - (Tsf - Trr)
     uint64_t node_a_time = (trr - tsp) - (tsf - trr);
+    log("Trr - Tsp: %llu", trr - tsp);
+    log("Tsf - Trr: %llu", tsf - trr);
+
+    if ((int64_t)node_a_time < 0) {
+        node_a_time += 1ULL << 40; // wrap around 40-bit counter
+    }
+
+    log("Node A time: %llu", node_a_time);
     ESP_ERROR_CHECK(uwb_delayed_transmit((uint8_t*)&node_a_time, 5, tsf, dev_handle)); 
 }
 
@@ -184,6 +192,15 @@ static void NodeB(spi_device_handle_t dev_handle) {
     
     // STEP 6: Add node A time to (Trf - Tsr) - (Tsr - Trp)
     uint64_t final_time_dtu = (trf - tsr) - (tsr - trp) + node_a_time;
+
+    if ((int64_t)final_time_dtu < 0) {
+        final_time_dtu += 1ULL << 40; // wrap around 40-bit counter
+    }
+
+    log("Node A time: %llu", node_a_time);
+    log("Trf - Tsr: %llu", trf - tsr);
+    log("Tsr - Trp: %llu", tsr - trp);
+    log("Final time: %llu", final_time_dtu);
 
     // STEP 7: Compute TOF
     uint64_t tof_dtu = final_time_dtu / 4;
@@ -282,8 +299,8 @@ void uwb_init() {
     // ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status, sizeof(sys_status), dev_handle));
     // log("polled sys status: %X %X %X %X %X", sys_status[4], sys_status[3], sys_status[2], sys_status[1], sys_status[0]);
 
-    NodeA(dev_handle);
-    // NodeB(dev_handle);
+    // NodeA(dev_handle);
+    NodeB(dev_handle);
 
     /*char* msg = "hello world";
     ESP_ERROR_CHECK(uwb_transmit((uint8_t*)msg, 12, dev_handle));
