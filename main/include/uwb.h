@@ -16,17 +16,16 @@ typedef uint32_t dwm_system_control_t;
 
 template <typename T>
 static inline T GET_FIELD(T data, uint8_t start_bit, uint8_t len_bits) {
-    T bitmask = (1UL << len_bits) - 1;
+    T bitmask = (static_cast<T>(1) << len_bits) - static_cast<T>(1);
     return (data >> start_bit) & bitmask;
 }
 
 
-// NOTE: Can't take a reference to a packed struct's field
 template <typename T>
 static inline void SET_FIELD(T& data, uint8_t start_bit, uint8_t len_bits, T value) {
-    T bitmask = (1UL << len_bits) - 1;
+    T bitmask = ((static_cast<T>(1) << len_bits) - static_cast<T>(1));
     data &= ~(bitmask << start_bit);
-    data |= value << start_bit;
+    data |= (value & bitmask) << start_bit;
 }
 
 void uwb_init();

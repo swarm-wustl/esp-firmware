@@ -60,7 +60,7 @@
 
 #define PING_MSG "ping"
 #define PING_MSG_LEN 4
-#define DELAY_CONST_MS 1500  // ms
+#define DELAY_CONST_MS 30  // ms
 
 #define DWM_SYS_STATUS_TXFRB (1 << 4)
 #define DWM_SYS_STATUS_TXPRS (1 << 5)
@@ -129,8 +129,8 @@ static void NodeA(spi_device_handle_t dev_handle) {
     ESP_ERROR_CHECK(get_time(&trr, dev_handle, DWM_REG_RX_TIME));
 
     uint64_t tsf;
-    ESP_ERROR_CHECK(get_time(&tsf, dev_handle));
-    tsf += DELAY_CONST_MS * DWM_MS_TO_DEVICE_TIME_SCALE;
+    // ESP_ERROR_CHECK(get_time(&tsf, dev_handle));
+    tsf = trr + (DELAY_CONST_MS * DWM_MS_TO_DEVICE_TIME_SCALE);
 
     // STEP 5: Send (Trr - Tsp) - (Tsf - Trr)
     uint64_t node_a_time = (trr - tsp) - (tsf - trr);
@@ -142,6 +142,8 @@ static void NodeA(spi_device_handle_t dev_handle) {
     }
 
     log("Node A time: %llu", node_a_time);
+
+    log("Tsp: %llu, Trr: %llu, Tsf: %llu", tsp, trr, tsf);
     ESP_ERROR_CHECK(uwb_delayed_transmit((uint8_t*)&node_a_time, 5, tsf, dev_handle)); 
 }
 
@@ -161,13 +163,12 @@ static void NodeB(spi_device_handle_t dev_handle) {
     // STEP 2: Get Trp, Tsr
     uint64_t trp;
     ESP_ERROR_CHECK(get_time(&trp, dev_handle, DWM_REG_RX_TIME));
-    
-    uint64_t tsr;
-    ESP_ERROR_CHECK(get_time(&tsr, dev_handle));
-    tsr += DELAY_CONST_MS * DWM_MS_TO_DEVICE_TIME_SCALE;
 
-    // STEP 3: Send some empty message (all Node B calculations are done locally)
-    ESP_ERROR_CHECK(uwb_delayed_transmit((uint8_t*)empty_buf, 1, tsr, dev_handle));
+    // STEP 3: Send some empty message (all Node B calculations are done locally), get Tsr
+    ESP_ERROR_CHECK(uwb_transmit((uint8_t*)empty_buf, 1, dev_handle));
+
+    uint64_t tsr;
+    ESP_ERROR_CHECK(get_time(&tsr, dev_handle, DWM_REG_TX_TIME));
 
     // STEP 4: Receive (Trr - Tsp) - (Tsf - Trr)
     uint8_t node_a_time_buf[5];
@@ -209,6 +210,25 @@ static void NodeB(spi_device_handle_t dev_handle) {
 
     log("TOF: %f us", tof_us);
     log("DISTANCE: %f ft", distance_ft);
+}
+
+static void uwb_config(spi_device_handle_t dev_handle) {
+    // Configure Channel Control Register for Channel 5
+    uint32_t chan_ctrl = 0;
+    chan_ctrl |= (5 << 0);       // TX_CHAN = 5
+    chan_ctrl |= (5 << 4);       // RX_CHAN = 5
+    chan_ctrl |= (9 << 8);       // TX_PCODE = 9 (for ch5, 64MHz PRF) 
+    chan_ctrl |= (9 << 13);      // RX_PCODE = 9
+    chan_ctrl |= (2 << 18);      // RXPRF = 64 MHz PRF
+    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_CHANNEL_CONTROL, (uint8_t *)&chan_ctrl, 4, dev_handle));
+    
+    // Configure System Configuration Register
+    uint32_t sys_cfg = 0;
+    sys_cfg |= (DWM_PHR_MODE_STANDARD_FRAME << DWM_SYS_CFG_PHR_MODE_START);
+    sys_cfg |= (1 << DWM_SYS_CFG_DIS_STXP_START);  // Disable smart TX power
+    sys_cfg |= (0 << DWM_SYS_CFG_FFEN_START);       // Disable frame filtering
+    
+    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYS_CFG, (uint8_t *)&sys_cfg, 4, dev_handle));
 }
 
 void uwb_init() {
@@ -289,6 +309,8 @@ void uwb_init() {
     ESP_ERROR_CHECK(spi_bus_remove_device(dev_handle));
     ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST, &dev_config, &dev_handle));
 
+    uwb_config(dev_handle);
+
     uint8_t sys_status[5];
     ESP_ERROR_CHECK(uwb_read_subreg(DWM_REG_SYSTEM_EVENT_STATUS, 0x00, (uint8_t*)&sys_status, sizeof(sys_status), dev_handle));
     log("polled sys status: %X %X %X %X %X", sys_status[4], sys_status[3], sys_status[2], sys_status[1], sys_status[0]);
@@ -299,8 +321,8 @@ void uwb_init() {
     // ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status, sizeof(sys_status), dev_handle));
     // log("polled sys status: %X %X %X %X %X", sys_status[4], sys_status[3], sys_status[2], sys_status[1], sys_status[0]);
 
-    // NodeA(dev_handle);
-    NodeB(dev_handle);
+    NodeA(dev_handle);
+    // NodeB(dev_handle);
 
     /*char* msg = "hello world";
     ESP_ERROR_CHECK(uwb_transmit((uint8_t*)msg, 12, dev_handle));
@@ -425,16 +447,18 @@ esp_err_t uwb_transmit(uint8_t* tx, size_t len, spi_device_handle_t dev_handle) 
 
     // Grab current transmit frame control register
     uint32_t transmit_frame_control;
-    ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_TRANSMIT_FRAME_CONTROL, (uint8_t*)&transmit_frame_control, sizeof(transmit_frame_control), dev_handle));
+    ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_TRANSMIT_FRAME_CONTROL, (uint8_t*)&transmit_frame_control, 4, dev_handle));
+    log("TX Frame Control before: 0x%08X", transmit_frame_control);
 
-    // By default, frame check is enabled
-    // Therefore, add 2 for the CRC
-    // TODO: make this dynamic check
-    SET_FIELD<uint32_t>(transmit_frame_control, 0, 8, len + 2);
-    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_TRANSMIT_FRAME_CONTROL, (uint8_t*)&transmit_frame_control, sizeof(transmit_frame_control), dev_handle));
+    // Set frame length (payload + 2 byte CRC)
+    SET_FIELD<uint32_t>(transmit_frame_control, 0, 10, len + 2);  // Use 10 bits for frame length!
+    log("TX Frame Control after: 0x%08X (frame len=%d)", transmit_frame_control, len + 2);
+    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_TRANSMIT_FRAME_CONTROL, (uint8_t*)&transmit_frame_control, 4, dev_handle));
 
     // Write TXSTRT bit
-    dwm_system_control_t sys_ctrl = DWM_SYS_CTRL_TXSTRT;
+    dwm_system_control_t sys_ctrl;
+    ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_CONTROL, (uint8_t*)&sys_ctrl, sizeof(sys_ctrl), dev_handle));
+    sys_ctrl |= DWM_SYS_CTRL_TXSTRT;
     ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_CONTROL, (uint8_t*)&sys_ctrl, sizeof(sys_ctrl), dev_handle));
 
     // Wait for reg 0x0F TXFRS bit
@@ -442,9 +466,14 @@ esp_err_t uwb_transmit(uint8_t* tx, size_t len, spi_device_handle_t dev_handle) 
     do {
         ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status, sizeof(sys_status), dev_handle));
         log("polled status bit: %d", ((sys_status[0] >> 7) & 1));
+        vTaskDelay(pdTICKS_TO_MS(1));
     } while (((sys_status[0] >> 7) & 1) == 0);
 
     log("Transmit sent!");
+
+    // Clear TXFRS bit (and other relevant flags)
+    sys_status_mask = DWM_SYS_STATUS_TXFRB | DWM_SYS_STATUS_TXPRS | DWM_SYS_STATUS_TXPHS | DWM_SYS_STATUS_TXFRS;
+    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status_mask, 5, dev_handle));
 
     return ESP_OK;
 }
@@ -455,6 +484,10 @@ esp_err_t uwb_delayed_transmit(uint8_t* tx, size_t len, uint64_t send_time_dtu, 
     uint64_t delayed_time = send_time_dtu & ((1ULL << 40) - 1);
     delayed_time = (delayed_time + 0x1FF) & ~0x1FFULL;
     log("Delayed time: %llu (0x%llX)", delayed_time, delayed_time);
+
+    uint64_t current_time;
+    ESP_ERROR_CHECK(get_time(&current_time, dev_handle));
+    log("Current time: %llu", current_time);
 
     // Store delayed time in register
     ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_DELAYED_SEND_RECEIVE, (uint8_t*)&delayed_time, DWM_SIZE_BYTES_DELAYED_SEND_RECEIVE, dev_handle));
@@ -475,48 +508,18 @@ esp_err_t uwb_delayed_transmit(uint8_t* tx, size_t len, uint64_t send_time_dtu, 
         log("ERROR: Readback doesn't match! Register write failed or wrong register!");
     }
 
-    //
-    // TODO: leverage the regular uwb_transmit function instead of copying code
-    //
-
-    // Clear TXFRS bit (and other relevant flags)
-    uint64_t sys_status_mask = DWM_SYS_STATUS_TXFRB | DWM_SYS_STATUS_TXPRS | DWM_SYS_STATUS_TXPHS | DWM_SYS_STATUS_TXFRS;
-    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status_mask, 5, dev_handle));
-
-    // Wait for LDEDONE bit
-    uint8_t sys_status[5];
-    do {
-        ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status, sizeof(sys_status), dev_handle));
-        log("polled ldedone bit: %X %X %X %X %X", sys_status[4], sys_status[3], sys_status[2], sys_status[1], sys_status[0]);
-    } while (((sys_status[1] >> 2) & 1) == 0); 
-
-    // Write payload
-    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_TRANSMIT_DATA_BUFFER, (uint8_t*)tx, len, dev_handle));
-    
-    // Grab current transmit frame control register
-    uint32_t transmit_frame_control;
-    ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_TRANSMIT_FRAME_CONTROL, (uint8_t*)&transmit_frame_control, sizeof(transmit_frame_control), dev_handle));
-
-    // By default, frame check is enabled
-    // Therefore, add 2 for the CRC
-    // TODO: make this dynamic check
-    SET_FIELD<uint32_t>(transmit_frame_control, 0, 8, len + 2);
-    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_TRANSMIT_FRAME_CONTROL, (uint8_t*)&transmit_frame_control, sizeof(transmit_frame_control), dev_handle));
-
-    // Write system control bits
-    dwm_system_control_t sys_ctrl = (DWM_SYS_CTRL_TXDLYS | DWM_SYS_CTRL_TXSTRT);
-    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_CONTROL, (uint8_t*)&sys_ctrl, sizeof(sys_ctrl), dev_handle));
+    // Write TXDLYS bit
+    dwm_system_control_t sys_ctrl;
+    ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_CONTROL, (uint8_t*)&sys_ctrl, sizeof(sys_ctrl), dev_handle));
+    sys_ctrl |= DWM_SYS_CTRL_TXDLYS;
+    ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_CONTROL, (uint8_t*)&sys_ctrl, sizeof(sys_ctrl), dev_handle)); 
     
     log("Initiated transmit with sys_ctrl=%d, waiting...", sys_ctrl);
-    
-    // Wait for reg 0x0F TXFRS bit
-    do {
-        ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status, sizeof(sys_status), dev_handle));
-        // log("SYS_STATUS BIT: %d", (sys_status[0] >> 7) & 1);
-        vTaskDelay(pdTICKS_TO_MS(1));
-    } while (((sys_status[0] >> 7) & 1) == 0);
 
-    log("Transmit sent!");
+    ESP_ERROR_CHECK(uwb_transmit(tx, len, dev_handle));
+
+    uint8_t sys_status[5];
+    ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status, sizeof(sys_status), dev_handle));
     
     // Check HPDWARN bit (bit 10, which is bit 2 of byte 1)
     if ((sys_status[1] >> 2) & 1)
@@ -531,7 +534,6 @@ esp_err_t uwb_delayed_transmit(uint8_t* tx, size_t len, uint64_t send_time_dtu, 
     // Read current time again to see how much time has actually passed
     uint64_t current_time_after;
     ESP_ERROR_CHECK(get_time(&current_time_after, dev_handle, DWM_REG_TX_TIME));
-
     log("Expected TX time:     %llu (0x%llX)", delayed_time, delayed_time);
     log("Actual TX time:       %llu (0x%llX)", current_time_after, current_time_after);
 
@@ -557,6 +559,7 @@ esp_err_t uwb_receive(uint8_t* rx, size_t len, spi_device_handle_t dev_handle) {
     do {
         ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)sys_status, sizeof(sys_status), dev_handle));
         vTaskDelay(pdTICKS_TO_MS(1)); // prevent task starvation
+        log("sys_status: %X %X %X %X %X", sys_status[4], sys_status[3], sys_status[2], sys_status[1], sys_status[0]);
     } while (((sys_status[1] >> 5) & 1) == 0);
 
     ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_RECEIVE_DATA_BUFFER, (uint8_t*)rx, len, dev_handle));
