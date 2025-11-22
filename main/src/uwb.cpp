@@ -103,16 +103,30 @@ static esp_err_t get_time(uint64_t* tv, spi_device_handle_t dev_handle, uint8_t 
 
 //TODO if still not working add subregister read and check LDERUNE when receiving
 static void NodeA(spi_device_handle_t dev_handle) {
+    // -------------------------------------------------------
+    // 1. TRANSMIT THE POLL ("PING") MESSAGE
+    // -------------------------------------------------------
+    // Sends the initial ranging poll packet over UWB.
     ESP_ERROR_CHECK(uwb_transmit((uint8_t*)PING_MSG, PING_MSG_LEN, dev_handle));
     log("Transmitted ping message");
-
+    // -------------------------------------------------------
+    // 2. READ TRANSMIT TIMESTAMP (T_SP)
+    // -------------------------------------------------------
+    // After transmitting, read the hardware timestamp (40-bit)
+    // that records exactly when the Poll left the antenna.
     uint64_t tx_time;
     ESP_ERROR_CHECK(get_time(&tx_time, dev_handle, DWM_REG_TX_TIME));
-    
+    // -------------------------------------------------------
+    // 3. RECEIVE THE RESPONDER'S PROCESSING DELAY (t_delta)
+    // -------------------------------------------------------
+    // t_delta represents the responder's "turnaround time":
+    // the time between receiving our Poll and sending back their reply.
     uint8_t t_delta_buf[5];
     ESP_ERROR_CHECK(uwb_receive((uint8_t*)t_delta_buf, 5, dev_handle));
     log("Received t_delta message");
-    
+    // -------------------------------------------------------
+    // 4. CONVERT RESPONDER'S t_delta (5 bytes) INTO 64-BIT INT
+    // -------------------------------------------------------
     uint64_t t_delta = 0;
     for (int i = 0; i < sizeof(t_delta_buf); ++i) {
         t_delta |= ((uint64_t)t_delta_buf[i] << (8 * i));
@@ -120,28 +134,59 @@ static void NodeA(spi_device_handle_t dev_handle) {
 
     log("t_delta factor: %llu", t_delta);
     
-    // Wait for LDEDONE bit
+    // -------------------------------------------------------
+    // 5. WAIT FOR LDEDONE — CONFIRM THE RX STAMP IS VALID
+    // -------------------------------------------------------
+    // The DW1000 sets the LDE_DONE bit when the RX timestamp is ready.
     uint8_t sys_status[5];
     do {
         ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status, sizeof(sys_status), dev_handle));
         log("polled ldedone bit: %X %X %X %X %X", sys_status[4], sys_status[3], sys_status[2], sys_status[1], sys_status[0]);
+        // LDE_DONE is bit 18 → located in sys_status[1] bit 2
     } while (((sys_status[1] >> 2) & 1) == 0);
     
+    // -------------------------------------------------------
+    // 6. READ THE RECEIVE TIMESTAMP (T_RR)
+    // -------------------------------------------------------
+    // This timestamp marks the arrival time of the responder's message.
     uint64_t rx_time;
     ESP_ERROR_CHECK(get_time(&rx_time, dev_handle, DWM_REG_RX_TIME));
 
+    
+
+    // -------------------------------------------------------
+    // 7. COMPUTE ROUND-TRIP DELTA IN DEVICE TIME UNITS (DTU)
+    // -------------------------------------------------------
+    // Account for possible timestamp wraparound (40-bit counter).
     uint64_t delta_time_dtu;
     if (rx_time >= tx_time) {
         delta_time_dtu = rx_time - tx_time - t_delta;
     } else {
         // Counter wrapped around
+        
         delta_time_dtu = ((1ULL << 40) - tx_time - t_delta) + rx_time;
     }
 
+    // -------------------------------------------------------
+    // 8. CONVERT FROM DTU → MICROSECONDS
+    // -------------------------------------------------------
+    // 1 DTU = 15.65 ps → or 1.565e-5 microseconds
     double delta_time_us = delta_time_dtu * 1.565e-5; // microseconds
+    // -------------------------------------------------------
+    // 9. COMPUTE ONE-WAY TIME OF FLIGHT
+    // -------------------------------------------------------
+    // Single-sided ranging:
+    // TOF = (round_trip_time - t_delta) / 2
     double tof_us = (delta_time_us) / 2.0; // tof one-way in microseconds
+    // -------------------------------------------------------
+    // 10. CONVERT TO DISTANCE (FEET)
+    // -------------------------------------------------------
+    // 1 microsecond = 983.571056 feet in vacuum
     double distance_ft = tof_us * 983.57105643045;
-    
+
+    // -------------------------------------------------------
+    // 11. DEBUG LOG OUTPUT
+    // -------------------------------------------------------
     log("TX time: %llu DTU --- RX time: %llu DTU", tx_time, rx_time);
     log("Delta time: %f us", delta_time_us);
     log("TOF: %f us", tof_us);
@@ -149,15 +194,85 @@ static void NodeA(spi_device_handle_t dev_handle) {
 }
 
 static void NodeB(spi_device_handle_t dev_handle) {
-    
+    //Wait for transmit from node A.
     uint8_t rx[PING_MSG_LEN];
     ESP_ERROR_CHECK(uwb_receive((uint8_t*)rx, PING_MSG_LEN, dev_handle));
+
+
+    //Store receive time
+    uint64_t rx_time;
+    ESP_ERROR_CHECK(get_time(&rx_time, dev_handle, DWM_REG_RX_TIME));
+    uint64_t TRP = rx_time;
 
     char printbuf[PING_MSG_LEN + 1];
     memcpy(printbuf, rx, PING_MSG_LEN);
     printbuf[PING_MSG_LEN] = '\0';
     log("Received: %s", printbuf);
+
+    //Store transmit time, TSR
+    uint64_t tx_time;
+    ESP_ERROR_CHECK(get_time(&tx_time, dev_handle, DWM_REG_TX_TIME));
+    uint64_t TSR = tx_time;
     ESP_ERROR_CHECK(uwb_delayed_transmit((uint8_t*)PING_MSG, PING_MSG_LEN, DELAY_CONST_MS, dev_handle));
+    
+
+    //REceive TRT initiator round trip and Initiator delay;
+    uint8_t t_delta_buf[10];
+    ESP_ERROR_CHECK(uwb_receive((uint8_t*)t_delta_buf, 10, dev_handle));
+    log("Received t_delta message");
+    
+    uint64_t t_delta = 0;
+    uint64_t TRT = 0;
+    for (int i = 0; i < sizeof(t_delta_buf)/2; ++i) {
+        t_delta |= ((uint64_t)t_delta_buf[i] << (8 * i));
+    }
+      for (int i = sizeof(t_delta_buf)/2; i < sizeof(t_delta_buf); ++i) {
+        TRT |= ((uint64_t)t_delta_buf[i] << (8 * i));
+    }
+
+    log("t_delta factor: %llu", t_delta);
+    log("TRT is: %llu", TRT);
+     // Wait for LDEDONE bit confirm RX stamp is good
+    uint8_t sys_status[5];
+    do {
+        ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status, sizeof(sys_status), dev_handle));
+        log("polled ldedone bit: %X %X %X %X %X", sys_status[4], sys_status[3], sys_status[2], sys_status[1], sys_status[0]);
+    } while (((sys_status[1] >> 2) & 1) == 0);
+    
+    //Store final receive time.
+    ESP_ERROR_CHECK(get_time(&rx_time, dev_handle, DWM_REG_RX_TIME));
+    uint64_t TRF = rx_time;
+ 
+
+    //account for wrap, calculate responder round trip delay time TART and responder responce time. TRRT
+    uint64_t TRRT = (TSR - TRP) & ((1ULL << 40) - 1);
+    uint64_t TART = (TSR - TRF)  & ((1ULL << 40) - 1);
+
+    //Subtract initation and responder delay from round trip times
+    uint64_t delta_time_dtu = (((TRT - t_delta) + (TART-TRRT)))/4;
+
+
+
+    // uint64_t delta_time_dtu;TRT
+    // if (rx_time >= tx_time) {
+    //     delta_time_dtu = rx_time - tx_time - t_delta;
+    // } else {
+    //     // Counter wrapped around
+    //     delta_time_dtu = ((1ULL << 40) - tx_time - t_delta) + rx_time;
+    // }
+
+    double delta_time_us = delta_time_dtu * 1.565e-5; // microseconds
+    double tof_us = (delta_time_us) / 2.0; // tof one-way in microseconds
+    double distance_ft = tof_us * 983.57105643045;
+
+    log("TRT time %llu DTU, TART time %llu DTU, Responder TRSP: %llu DTU, Initiator TRSP %llu DTU",TRT,TART,TRRT,t_delta)
+    log("TX time: %llu DTU --- RX time: %llu DTU", tx_time, rx_time);
+    log("Delta time: %f us", delta_time_us);
+    log("TOF: %f us", tof_us);
+    log("DISTANCE: %f feet", distance_ft); // ms * (ft/ms)
+
+
+
 }
 
 void uwb_init() {
