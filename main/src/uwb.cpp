@@ -157,7 +157,7 @@ static void NodeA(spi_device_handle_t dev_handle) {
     ESP_ERROR_CHECK(get_time(&rx_time, dev_handle, DWM_REG_RX_TIME));
     uint64_t TRR = rx_time;
 
-    
+
     
 
     // -------------------------------------------------------
@@ -200,7 +200,7 @@ static void NodeA(spi_device_handle_t dev_handle) {
     uint64_t TSF = tx_time;
 
 
-    //send delta time dtu and new tx time
+    //TODO: send variables required on node b
 
     
 
