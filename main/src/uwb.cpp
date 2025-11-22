@@ -116,24 +116,28 @@ static void NodeA(spi_device_handle_t dev_handle) {
     // that records exactly when the Poll left the antenna.
     uint64_t tx_time;
     ESP_ERROR_CHECK(get_time(&tx_time, dev_handle, DWM_REG_TX_TIME));
+    uint64_t TSP = tx_time;
     // -------------------------------------------------------
     // 3. RECEIVE THE RESPONDER'S PROCESSING DELAY (t_delta)
     // -------------------------------------------------------
     // t_delta represents the responder's "turnaround time":
     // the time between receiving our Poll and sending back their reply.
-    uint8_t t_delta_buf[5];
-    ESP_ERROR_CHECK(uwb_receive((uint8_t*)t_delta_buf, 5, dev_handle));
-    log("Received t_delta message");
+    // uint8_t t_delta_buf[5];
+    // ESP_ERROR_CHECK(uwb_receive((uint8_t*)t_delta_buf, 5, dev_handle));
+    // log("Received t_delta message");
+    uint8_t rx[PING_MSG_LEN];
+    ESP_ERROR_CHECK(uwb_receive((uint8_t*)rx, PING_MSG_LEN, dev_handle));
+    log("Received ping message");
     // -------------------------------------------------------
     // 4. CONVERT RESPONDER'S t_delta (5 bytes) INTO 64-BIT INT
     // -------------------------------------------------------
-    uint64_t t_delta = 0;
-    for (int i = 0; i < sizeof(t_delta_buf); ++i) {
-        t_delta |= ((uint64_t)t_delta_buf[i] << (8 * i));
-    }
+    // uint64_t t_delta = 0;
+    // for (int i = 0; i < sizeof(t_delta_buf); ++i) {
+    //     t_delta |= ((uint64_t)t_delta_buf[i] << (8 * i));
+    // }
 
-    log("t_delta factor: %llu", t_delta);
-    
+    // log("t_delta factor: %llu", t_delta);
+  
     // -------------------------------------------------------
     // 5. WAIT FOR LDEDONE — CONFIRM THE RX STAMP IS VALID
     // -------------------------------------------------------
@@ -151,47 +155,54 @@ static void NodeA(spi_device_handle_t dev_handle) {
     // This timestamp marks the arrival time of the responder's message.
     uint64_t rx_time;
     ESP_ERROR_CHECK(get_time(&rx_time, dev_handle, DWM_REG_RX_TIME));
+    uint64_t TRR = rx_time;
 
+    
     
 
     // -------------------------------------------------------
     // 7. COMPUTE ROUND-TRIP DELTA IN DEVICE TIME UNITS (DTU)
     // -------------------------------------------------------
     // Account for possible timestamp wraparound (40-bit counter).
-    uint64_t delta_time_dtu;
-    if (rx_time >= tx_time) {
-        delta_time_dtu = rx_time - tx_time - t_delta;
-    } else {
-        // Counter wrapped around
+    // uint64_t delta_time_dtu;
+    // if (rx_time >= tx_time) {
+    //     delta_time_dtu = rx_time - tx_time - t_delta;
+    // } else {
+    //     // Counter wrapped around
         
-        delta_time_dtu = ((1ULL << 40) - tx_time - t_delta) + rx_time;
-    }
+    //     delta_time_dtu = ((1ULL << 40) - tx_time - t_delta) + rx_time;
+    // }
 
     // -------------------------------------------------------
     // 8. CONVERT FROM DTU → MICROSECONDS
     // -------------------------------------------------------
     // 1 DTU = 15.65 ps → or 1.565e-5 microseconds
-    double delta_time_us = delta_time_dtu * 1.565e-5; // microseconds
+    //double delta_time_us = delta_time_dtu * 1.565e-5; // microseconds
     // -------------------------------------------------------
     // 9. COMPUTE ONE-WAY TIME OF FLIGHT
     // -------------------------------------------------------
     // Single-sided ranging:
     // TOF = (round_trip_time - t_delta) / 2
-    double tof_us = (delta_time_us) / 2.0; // tof one-way in microseconds
+    //double tof_us = (delta_time_us) / 2.0; // tof one-way in microseconds
     // -------------------------------------------------------
     // 10. CONVERT TO DISTANCE (FEET)
     // -------------------------------------------------------
     // 1 microsecond = 983.571056 feet in vacuum
-    double distance_ft = tof_us * 983.57105643045;
+    //double distance_ft = tof_us * 983.57105643045;
 
     //transmit ping two
-
-    ESP_ERROR_CHECK(uwb_transmit((uint8_t*)PING_MSG, PING_MSG_LEN, dev_handle));
+    
+    ESP_ERROR_CHECK(uwb_delayed_transmit((uint8_t*)PING_MSG, PING_MSG_LEN, dev_handle));
     log("Transmitted ping message");
 
-    ESP_ERROR_CHEck(get_time(&tx_time, dev_handle, ))
+
+    ESP_ERROR_CHECK(get_time(&tx_time, dev_handle, DWM_REG_TX_TIME)); //
+    uint64_t TSF = tx_time;
 
 
+    //send delta time dtu and new tx time
+
+    
 
     // -------------------------------------------------------
     // 11. DEBUG LOG OUTPUT
