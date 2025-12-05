@@ -6,22 +6,31 @@
 #include "uwb.h"
 
 #include "freertos/FreeRTOS.h"
+#include <memory>
 
 // TODO: make templated and move to consumer.h?
 // TODO: make struct so we can pass multiple parameters
 
 struct ConsumerTaskData {
     HW::MotorDriver motorDriver;
-    Queue<Consumer::MessageTag, Consumer::MessageBody, Consumer::CONSUMER_QUEUE_SIZE> queue; 
+    Consumer::QueueType queue; 
 };
 
 static void consumerTaskWrapper(void* pvParameters) {
-    ConsumerTaskData data = *reinterpret_cast<ConsumerTaskData*>(pvParameters);
+    ConsumerTaskData* data = reinterpret_cast<ConsumerTaskData*>(pvParameters);
 
     Consumer::spin(
-        std::move(data.motorDriver),
-        std::move(data.queue)
+        data->motorDriver,
+        data->queue
     );
+
+    vTaskDelete(nullptr);
+}
+
+static void rosTaskWrapper(void* pvParameters) {
+    Consumer::QueueType* queue = reinterpret_cast<Consumer::QueueType*>(pvParameters);
+
+    ROS::spin(*queue);
 
     vTaskDelete(nullptr);
 }
@@ -37,21 +46,19 @@ extern "C" void app_main(void) {
     ESP_ERROR_CHECK(uros_network_interface_initialize());
 #endif
 
-    /*HW::MotorDriver motor_driver;
-    Queue<Consumer::MessageTag, Consumer::MessageBody, Consumer::CONSUMER_QUEUE_SIZE> queue;
-
-    ConsumerTaskData consumerTaskData {
-        motor_driver,
-        queue
+    // Make the struct static so it lives as long as the program (incase mani() ever terminates)
+    static ConsumerTaskData consumerTaskData {
+        HW::MotorDriver{},
+        Consumer::QueueType{}
     };
 
     log("Hello world!");
 
     xTaskCreate(
-        ROS::spin,
+        rosTaskWrapper,
         "uros_task",
         4096, // TODO: see https://github.com/micro-ROS/micro_ros_espidf_component/blob/cd1da2b3d7d73f48743a2c42ac0e915cd751bb74/examples/int32_publisher/main/main.c#L105
-        (void*)&queue,
+        (void*)&consumerTaskData.queue,
         configMAX_PRIORITIES - 1,
         NULL
     );
@@ -63,10 +70,11 @@ extern "C" void app_main(void) {
         (void*)&consumerTaskData,
         configMAX_PRIORITIES - 1,
         NULL
-    );*/
+    );
 
     // Create sensor task and register the task handle for the timers
     // TODO: wrap this in a function?
+    /*TaskHandle_t sensorTaskHandle;
     /*TaskHandle_t sensorTaskHandle;
     xTaskCreate(
         Sensor::spin,

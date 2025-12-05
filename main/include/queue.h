@@ -24,6 +24,13 @@ private:
 
 public:
     Queue() : index(0), queueHandle(xQueueCreate(Capacity, sizeof(Message))) {}
+
+    // Non-copyable
+    Queue(const Queue&) = delete;
+    Queue& operator=(const Queue&) = delete;
+
+    Queue(Queue&&) = default;
+    Queue& operator=(Queue&&) = default;
     
     Result pushToQueue(Tag tag, Body body) {
         // Do NOT use std::move! It breaks with FreeRTOS queues
