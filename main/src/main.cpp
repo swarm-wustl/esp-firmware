@@ -47,7 +47,7 @@ extern "C" void app_main(void) {
 #endif
 
     // Make the struct static so it lives as long as the program (incase mani() ever terminates)
-    static ConsumerTaskData consumerTaskData {
+    /*static ConsumerTaskData consumerTaskData {
         HW::MotorDriver{},
         Consumer::QueueType{}
     };
@@ -70,11 +70,10 @@ extern "C" void app_main(void) {
         (void*)&consumerTaskData,
         configMAX_PRIORITIES - 1,
         NULL
-    );
+    );*/
 
     // Create sensor task and register the task handle for the timers
     // TODO: wrap this in a function?
-    /*TaskHandle_t sensorTaskHandle;
     /*TaskHandle_t sensorTaskHandle;
     xTaskCreate(
         Sensor::spin,

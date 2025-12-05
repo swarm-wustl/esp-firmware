@@ -60,7 +60,7 @@
 
 #define PING_MSG "ping"
 #define PING_MSG_LEN 4
-#define DELAY_CONST_MS 50  // ms
+#define DELAY_CONST_MS 500  // ms
 
 #define DWM_SYS_STATUS_TXFRB (1 << 4)
 #define DWM_SYS_STATUS_TXPRS (1 << 5)
@@ -157,9 +157,6 @@ static void NodeA(spi_device_handle_t dev_handle) {
     ESP_ERROR_CHECK(get_time(&rx_time, dev_handle, DWM_REG_RX_TIME));
     uint64_t TRR = rx_time;
 
-
-    
-
     // -------------------------------------------------------
     // 7. COMPUTE ROUND-TRIP DELTA IN DEVICE TIME UNITS (DTU)
     // -------------------------------------------------------
@@ -172,6 +169,7 @@ static void NodeA(spi_device_handle_t dev_handle) {
         
     //     delta_time_dtu = ((1ULL << 40) - tx_time - t_delta) + rx_time;
     // }
+
 
     // -------------------------------------------------------
     // 8. CONVERT FROM DTU → MICROSECONDS
@@ -190,27 +188,30 @@ static void NodeA(spi_device_handle_t dev_handle) {
     // 1 microsecond = 983.571056 feet in vacuum
     //double distance_ft = tof_us * 983.57105643045;
 
-    //transmit ping two
-    
-    ESP_ERROR_CHECK(uwb_delayed_transmit((uint8_t*)PING_MSG, PING_MSG_LEN, dev_handle));
-    log("Transmitted ping message");
 
+    //Create final message with all transmit times.
+    // TODO: this should technically be uint8_t[15] but it's easier to work with uint64_t
+    uint64_t time_msg[3];
+    time_msg[0] = TSP;
+    time_msg[1] = TRR;
 
-    ESP_ERROR_CHECK(get_time(&tx_time, dev_handle, DWM_REG_TX_TIME)); //
-    uint64_t TSF = tx_time;
+    // transmit ping two
 
+    // Read the current system time
+    uint64_t current_time;
+    ESP_ERROR_CHECK(get_time(&current_time, dev_handle));
+    uint64_t TSF = current_time + (DELAY_CONST_MS * DWM_MS_TO_DEVICE_TIME_SCALE);
+    time_msg[2] = TSF;
 
-    //TODO: send variables required on node b
-
-    
+    ESP_ERROR_CHECK(uwb_delayed_transmit((uint8_t*)time_msg, 24, current_time, DELAY_CONST_MS, dev_handle));
+    log("Transmitted time message");
 
     // -------------------------------------------------------
     // 11. DEBUG LOG OUTPUT
     // -------------------------------------------------------
-    log("TX time: %llu DTU --- RX time: %llu DTU", tx_time, rx_time);
-    log("Delta time: %f us", delta_time_us);
-    log("TOF: %f us", tof_us);
-    log("DISTANCE: %f feet", distance_ft); // ms * (ft/ms)
+    log("TSP IS: %llu", TSP);
+    log("TRR is: %llu", TRR);
+    log("TSF is: %llu", TSF);
 }
 
 static void NodeB(spi_device_handle_t dev_handle) {
@@ -218,40 +219,50 @@ static void NodeB(spi_device_handle_t dev_handle) {
     uint8_t rx[PING_MSG_LEN];
     ESP_ERROR_CHECK(uwb_receive((uint8_t*)rx, PING_MSG_LEN, dev_handle));
 
-
     //Store receive time
     uint64_t rx_time;
     ESP_ERROR_CHECK(get_time(&rx_time, dev_handle, DWM_REG_RX_TIME));
     uint64_t TRP = rx_time;
 
+    // Print ping message
     char printbuf[PING_MSG_LEN + 1];
     memcpy(printbuf, rx, PING_MSG_LEN);
     printbuf[PING_MSG_LEN] = '\0';
     log("Received: %s", printbuf);
 
+    // Get current time
+    uint64_t current_time;
+    ESP_ERROR_CHECK(get_time(&current_time, dev_handle));
+ 
+    ESP_ERROR_CHECK(uwb_delayed_transmit((uint8_t*)PING_MSG, PING_MSG_LEN, current_time, DELAY_CONST_MS, dev_handle));
+
     //Store transmit time, TSR
+    // This should be the same as current_time_dtu + DELAY_CONST_DTU though
     uint64_t tx_time;
     ESP_ERROR_CHECK(get_time(&tx_time, dev_handle, DWM_REG_TX_TIME));
     uint64_t TSR = tx_time;
-    ESP_ERROR_CHECK(uwb_delayed_transmit((uint8_t*)PING_MSG, PING_MSG_LEN, DELAY_CONST_MS, dev_handle));
-    
 
-    //REceive TRT initiator round trip and Initiator delay;
-    uint8_t t_delta_buf[10];
-    ESP_ERROR_CHECK(uwb_receive((uint8_t*)t_delta_buf, 10, dev_handle));
+    //Receive TRR, TSP, TSF;
+    uint64_t t_delta_buf[3];
+    ESP_ERROR_CHECK(uwb_receive((uint8_t*)t_delta_buf, 24, dev_handle));
     log("Received t_delta message");
     
-    uint64_t t_delta = 0;
-    uint64_t TRT = 0;
-    for (int i = 0; i < sizeof(t_delta_buf)/2; ++i) {
-        t_delta |= ((uint64_t)t_delta_buf[i] << (8 * i));
+    uint64_t TSP = t_delta_buf[0];
+    uint64_t TRR = t_delta_buf[1];
+    uint64_t TSF = t_delta_buf[2];
+    /*for (int i = 0; i < 5; ++i) {
+        TSP |= ((uint8_t)t_delta_buf[i] << (8 * i));
     }
-      for (int i = sizeof(t_delta_buf)/2; i < sizeof(t_delta_buf); ++i) {
-        TRT |= ((uint64_t)t_delta_buf[i] << (8 * i));
+     for (int i = 8, j = 0; i < 8 + 5; ++i, ++j) {
+        TRR |= ((uint8_t)t_delta_buf[i] << (8 * j));
     }
+      for (int i = 16, j = 0; i < 16 + 5; ++i, ++j) {
+        TSF |= ((uint8_t)t_delta_buf[i] << (8 * j));
+    }*/
 
-    log("t_delta factor: %llu", t_delta);
-    log("TRT is: %llu", TRT);
+    log("TSP is: %llu", TSP);
+    log("TRR is: %llu", TRR);
+    log("TSF is: %llu", TSF);
      // Wait for LDEDONE bit confirm RX stamp is good
     uint8_t sys_status[5];
     do {
@@ -269,23 +280,12 @@ static void NodeB(spi_device_handle_t dev_handle) {
     uint64_t TART = (TSR - TRF)  & ((1ULL << 40) - 1);
 
     //Subtract initation and responder delay from round trip times
-    uint64_t delta_time_dtu = (((TRT - t_delta) + (TART-TRRT)))/4;
-
-
-
-    // uint64_t delta_time_dtu;TRT
-    // if (rx_time >= tx_time) {
-    //     delta_time_dtu = rx_time - tx_time - t_delta;
-    // } else {
-    //     // Counter wrapped around
-    //     delta_time_dtu = ((1ULL << 40) - tx_time - t_delta) + rx_time;
-    // }
+    uint64_t delta_time_dtu = ((TRR - TSP )-(TSR - TRP) +(TRF - TSR) - (TSF - TRR))/4;
 
     double delta_time_us = delta_time_dtu * 1.565e-5; // microseconds
     double tof_us = (delta_time_us) / 2.0; // tof one-way in microseconds
     double distance_ft = tof_us * 983.57105643045;
 
-    log("TRT time %llu DTU, TART time %llu DTU, Responder TRSP: %llu DTU, Initiator TRSP %llu DTU",TRT,TART,TRRT,t_delta)
     log("TX time: %llu DTU --- RX time: %llu DTU", tx_time, rx_time);
     log("Delta time: %f us", delta_time_us);
     log("TOF: %f us", tof_us);
@@ -383,8 +383,8 @@ void uwb_init() {
     // ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status, sizeof(sys_status), dev_handle));
     // log("polled sys status: %X %X %X %X %X", sys_status[4], sys_status[3], sys_status[2], sys_status[1], sys_status[0]);
 
-    NodeA(dev_handle);
-    // NodeB(dev_handle);
+    // NodeA(dev_handle);
+    NodeB(dev_handle);
 
     /*char* msg = "hello world";
     ESP_ERROR_CHECK(uwb_transmit((uint8_t*)msg, 12, dev_handle));
@@ -534,26 +534,20 @@ esp_err_t uwb_transmit(uint8_t* tx, size_t len, spi_device_handle_t dev_handle) 
 }
 
 // TODO: remove tx and len parameters?
-esp_err_t uwb_delayed_transmit(uint8_t*, size_t, uint64_t delay_ms, spi_device_handle_t dev_handle) {
-    // Read the current system time
-    uint64_t current_time;
-    ESP_ERROR_CHECK(get_time(&current_time, dev_handle));
-
-    // Load the delay based on the current time
+esp_err_t uwb_delayed_transmit(uint8_t* tx, size_t len, uint64_t current_time_dtu, uint64_t delay_ms, spi_device_handle_t dev_handle) {
+    // Load the delay in DTU
     uint64_t delay_dtu = (uint64_t)(delay_ms * DWM_MS_TO_DEVICE_TIME_SCALE);
 
     // Calculate delayed time first, then mask only the result
     // Compute delayed time
-    uint64_t delayed_time = current_time + delay_dtu;
+    uint64_t delayed_time = current_time_dtu + delay_dtu;
 
     // Round delayed time up for precision
     // Additionally, mask lower 9 bits since they are ignored
     delayed_time &= ((1ULL << 40) - 1);
 
     delayed_time = (delayed_time + 0x1FF) & ~0x1FFULL;
-
-    log("Current time: %llu (0x%llX)", current_time, current_time);
-    log("Delay DTU: %llu (0x%llX)", delay_dtu, delay_dtu);
+ 
     log("Delayed time: %llu (0x%llX)", delayed_time, delayed_time);
 
     // Store delayed time in register
@@ -584,8 +578,7 @@ esp_err_t uwb_delayed_transmit(uint8_t*, size_t, uint64_t delay_ms, spi_device_h
     ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status_mask, 5, dev_handle));
 
     // Create payload
-    constexpr size_t len = 5;
-    uint8_t tx[len];
+
 
     // Wait for LDEDONE bit
     uint8_t sys_status[5];
@@ -599,16 +592,16 @@ esp_err_t uwb_delayed_transmit(uint8_t*, size_t, uint64_t delay_ms, spi_device_h
     ESP_ERROR_CHECK(get_time(&rx_time, dev_handle, DWM_REG_RX_TIME));
 
     // Compute delta time factor to send
-    uint64_t wrap = (1ULL << 40);
-    uint64_t t_delta;
+    // uint64_t wrap = (1ULL << 40);
+    // uint64_t t_delta;
 
-    if (delayed_time >= rx_time)
-        t_delta = delayed_time - rx_time;
-    else
-        t_delta = (wrap - rx_time) + delayed_time;
-    // uint64_t t_delta = delayed_time - rx_time;
-    memcpy(tx, (uint8_t*)&t_delta, len);
-    log("Delta time factor: %llu DTU", t_delta);
+    // if (delayed_time >= rx_time)
+    //     t_delta = delayed_time - rx_time;
+    // else
+    //     t_delta = (wrap - rx_time) + delayed_time;
+    // // uint64_t t_delta = delayed_time - rx_time;
+    // memcpy(tx, (uint8_t*)&t_delta, len);
+    // log("Delta time factor: %llu DTU", t_delta);
 
     // Write payload
     ESP_ERROR_CHECK(uwb_write_reg(DWM_REG_TRANSMIT_DATA_BUFFER, (uint8_t*)tx, len, dev_handle));
@@ -638,8 +631,8 @@ esp_err_t uwb_delayed_transmit(uint8_t*, size_t, uint64_t delay_ms, spi_device_h
 
     log("Transmit sent!");
     
-    // Check HPDWARN bit (bit 10, which is bit 2 of byte 1)
-    if ((sys_status[1] >> 2) & 1)
+    // Check HPDWARN bit (bit 27, which is bit 3 of byte 4)
+    if ((sys_status[4] >> 3) & 1)
     {
         log("ERROR: HPDWARN bit set!");
     }
@@ -653,11 +646,11 @@ esp_err_t uwb_delayed_transmit(uint8_t*, size_t, uint64_t delay_ms, spi_device_h
     ESP_ERROR_CHECK(get_time(&current_time_after, dev_handle, DWM_REG_TX_TIME));
 
     uint64_t elapsed_dtu;
-    if (current_time_after >= current_time) {
-        elapsed_dtu = current_time_after - current_time;
+    if (current_time_after >= current_time_dtu) {
+        elapsed_dtu = current_time_after - current_time_dtu;
     } else {
         // Wraparound happened
-        elapsed_dtu = (current_time_after + (1ULL << 40)) - current_time;
+        elapsed_dtu = (current_time_after + (1ULL << 40)) - current_time_dtu;
     }
 
     log("Expected TX time:     %llu (0x%llX)", delayed_time, delayed_time);
@@ -687,6 +680,7 @@ esp_err_t uwb_receive(uint8_t* rx, size_t len, spi_device_handle_t dev_handle) {
     uint8_t sys_status[5];
     do {
         ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)sys_status, sizeof(sys_status), dev_handle));
+        log("Showing sys_status: %X %X %X %X %X", sys_status[4], sys_status[3], sys_status[2], sys_status[1], sys_status[0]);
         vTaskDelay(pdTICKS_TO_MS(1)); // prevent task starvation
     } while (((sys_status[1] >> 5) & 1) == 0);
 
