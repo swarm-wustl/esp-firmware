@@ -42,9 +42,9 @@ For example, you could have multiple motor drivers, sensors, etc.
 The types used should only be taken from hardware.h's defintions.
 */
 extern "C" void app_main(void) {
-#if defined(CONFIG_MICRO_ROS_ESP_NETIF_WLAN) || defined(CONFIG_MICRO_ROS_ESP_NETIF_ENET)
-    ESP_ERROR_CHECK(uros_network_interface_initialize());
-#endif
+// #if defined(CONFIG_MICRO_ROS_ESP_NETIF_WLAN) || defined(CONFIG_MICRO_ROS_ESP_NETIF_ENET)
+//     ESP_ERROR_CHECK(uros_network_interface_initialize());
+// #endif
 
     // Make the struct static so it lives as long as the program (incase mani() ever terminates)
     /*static ConsumerTaskData consumerTaskData {
