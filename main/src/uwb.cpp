@@ -623,8 +623,8 @@ esp_err_t uwb_delayed_transmit(uint8_t* tx, size_t len, uint64_t current_time_dt
 
     log("Transmit sent!");
     
-    // Check HPDWARN bit (bit 27, which is bit 3 of byte 4)
-    if ((sys_status[4] >> 3) & 1)
+    // Check HPDWARN bit (bit 27, which is bit 3 of byte 3)
+    if ((sys_status[3] >> 3) & 1)
     {
         log("ERROR: HPDWARN bit set!");
     }
