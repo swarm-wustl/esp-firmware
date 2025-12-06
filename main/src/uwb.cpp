@@ -250,15 +250,6 @@ static void NodeB(spi_device_handle_t dev_handle) {
     uint64_t TSP = t_delta_buf[0];
     uint64_t TRR = t_delta_buf[1];
     uint64_t TSF = t_delta_buf[2];
-    /*for (int i = 0; i < 5; ++i) {
-        TSP |= ((uint8_t)t_delta_buf[i] << (8 * i));
-    }
-     for (int i = 8, j = 0; i < 8 + 5; ++i, ++j) {
-        TRR |= ((uint8_t)t_delta_buf[i] << (8 * j));
-    }
-      for (int i = 16, j = 0; i < 16 + 5; ++i, ++j) {
-        TSF |= ((uint8_t)t_delta_buf[i] << (8 * j));
-    }*/
 
     log("TSP is: %llu", TSP);
     log("TRR is: %llu", TRR);
@@ -280,12 +271,13 @@ static void NodeB(spi_device_handle_t dev_handle) {
     uint64_t TART = (TSR - TRF)  & ((1ULL << 40) - 1);
 
     //Subtract initation and responder delay from round trip times
-    uint64_t delta_time_dtu = ((TRR - TSP )-(TSR - TRP) +(TRF - TSR) - (TSF - TRR))/4;
+    uint64_t delta_time_dtu = ((TRR - TSP )-(TSR - TRP) + (TRF - TSR) - (TSF - TRR))/4;
 
     double delta_time_us = delta_time_dtu * 1.565e-5; // microseconds
     double tof_us = (delta_time_us) / 2.0; // tof one-way in microseconds
     double distance_ft = tof_us * 983.57105643045;
-
+    log("TRT(Responder Round Trip Time) is %llu, and TART(Initiator Round Trip Delay time) is %llu",TRRT,TART);
+    log("Responder response time is %llu, Initiator Response time is %llu",(TSR-TRP),(TSF-TRR));
     log("TX time: %llu DTU --- RX time: %llu DTU", tx_time, rx_time);
     log("Delta time: %f us", delta_time_us);
     log("TOF: %f us", tof_us);
@@ -383,8 +375,8 @@ void uwb_init() {
     // ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status, sizeof(sys_status), dev_handle));
     // log("polled sys status: %X %X %X %X %X", sys_status[4], sys_status[3], sys_status[2], sys_status[1], sys_status[0]);
 
-    // NodeA(dev_handle);
-    NodeB(dev_handle);
+    NodeA(dev_handle);
+    // NodeB(dev_handle);
 
     /*char* msg = "hello world";
     ESP_ERROR_CHECK(uwb_transmit((uint8_t*)msg, 12, dev_handle));
