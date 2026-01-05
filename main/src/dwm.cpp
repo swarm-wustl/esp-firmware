@@ -14,14 +14,20 @@ DWM<SPI>::DWM(SPI spi, uint8_t rst_pin, uint8_t irq_pin) :
 {
     hard_reset();
 
-    std::array<std::byte, DWM_LEN_DEV_ID> rx{};
-    read_reg(DWM_REG_DEV_ID, rx);
-    
-    log("ID received: %X", std::bit_cast<uint32_t>(rx));
+    // std::array<std::byte, DWM_LEN_DEV_ID> rx{};
+    // read_reg(DWM_REG_DEV_ID, rx);
+    // log("ID received: %X", std::bit_cast<uint32_t>(rx));
 
     auto id_reg = get_reg_view<DWM_REG_DEV_ID>();
     log("Reg size: %d", id_reg.size());
-    log("Reg value: %X", id_reg.value());
+    log("Reg value: %llX", id_reg.value());
+    id_reg |= 0xFFFFFF;
+    log("Reg value (should be same): %X", static_cast<uint32_t>(id_reg.value()));
+    
+    auto sys_status_reg = get_reg_view<DWM_REG_SYSTEM_EVENT_STATUS>();
+    log("Value before: %X %X %X %X %X", sys_status_reg[4], sys_status_reg[3], sys_status_reg[2], sys_status_reg[1], sys_status_reg[0]);
+    sys_status_reg |= 0xFF;
+    log("Value after: %X %X %X %X %X", sys_status_reg[4], sys_status_reg[3], sys_status_reg[2], sys_status_reg[1], sys_status_reg[0]);
 }
 
 template <HAL::GenericSPIController SPI>

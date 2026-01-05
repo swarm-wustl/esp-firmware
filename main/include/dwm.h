@@ -3,6 +3,7 @@
 
 #include "hal.h"
 #include <bit>
+#include <cstring>
 
 // TODO: add noexcept to classes
 
@@ -13,7 +14,7 @@ template<class>
 constexpr bool dependent_false = false;
 
 static constexpr size_t DWM_REG_DEV_ID = 0x00;
-static constexpr size_t DWM_LEN_DEV_ID = 0x04;
+static constexpr size_t DWM_REG_SYSTEM_EVENT_STATUS = 0x0F;
 
 template <HAL::GenericSPIController SPI, uint8_t ID>
 class DWMRegisterView {
@@ -21,7 +22,7 @@ public:
     DWMRegisterView(SPI& spi) : 
         spi_{spi} 
     {
-        fill_data();
+        read_data();
     }
 
     // TODO: constructor that takes in data?
@@ -34,10 +35,31 @@ public:
     void operator=(DWMRegisterView&&) = delete;
 
     // DWMRegisterView& operator=(std::)
+    DWMRegisterView& operator|=(uint64_t flags) {
+        static_assert(size_ <= sizeof(uint64_t), "Register does not fit within uint64_t");
+        
+        // For the DW1000 in particular, when we write flags, we are CLEARING values.
+        // Thus, we don't OR the flags with the original value,
+        // we just write the flags directly.
+        std::array<std::byte, size_> new_data{};
+        std::memcpy(new_data.data(), &flags, size_);
+        write_data(new_data);
 
-    size_t value() const {
-        static_assert(size_ <= sizeof(size_t), "Register does not fit within size_t"); 
-        return std::bit_cast<size_t>(data_);
+        return *this;
+    }
+
+    // Runtime operation
+    std::byte operator[](size_t idx) const {
+        // TODO: some sort of oob check?
+        return data_[idx];
+    }
+
+    uint64_t value() const {
+        static_assert(size_ <= sizeof(uint64_t), "Register does not fit within uint64_t");
+        
+        uint64_t res{};
+        std::memcpy(&res, data_.data(), size_);
+        return res;
     }
 
     constexpr size_t size() const {
@@ -45,7 +67,13 @@ public:
     }
 
 private:
-    void fill_data() {
+    static constexpr size_t size_ = []() constexpr {
+        if constexpr (ID == DWM_REG_DEV_ID) return 4;
+        else if constexpr (ID == DWM_REG_SYSTEM_EVENT_STATUS) return 5;
+        else static_assert(dependent_false<void>, "Register size unspecified");
+    }();
+    
+    void read_data() {
         // Lower 6 bits store actual register
         // MSbit = 0 represents read
         uint8_t reg = 0x00 | (ID & 0x3F);
@@ -58,10 +86,30 @@ private:
         spi_.transfer_halfduplex(tx, data_);
     }
 
-    static constexpr size_t size_ = []() constexpr {
-        if constexpr (ID == DWM_REG_DEV_ID) return 4;
-        else static_assert(dependent_false<void>, "Register size unspecified");
-    }();
+    void write_data(std::array<std::byte, size_> new_data) {
+        // Lower 6 bits store actual register
+        // MSbit = 1 represents write
+        uint8_t reg = 0x80 | (ID & 0x3F);
+
+        // Create a std::array one larger than our data
+        // This is because the first byte in the transfer needs to be the register
+        std::array<std::byte, size_ + 1> tx{};
+
+        // Store the register in byte 0, then copy the rest of the data
+        auto it = tx.begin();
+        *it = std::byte{reg};
+        std::copy(new_data.begin(), new_data.end(), ++it);
+
+        // Initiate SPI transfer
+        // TODO: error handle
+        spi_.transfer_halfduplex(tx, {});
+
+        // Lastly, read data to get updated register value
+        // This is for a few reasons:
+        // 1) some registers are read-only, and writes should do nothing
+        // 2) some registers clear values by writing 1 to them (so the local array's state would be inverted)
+        read_data();
+    }
 
     SPI& spi_{};
     std::array<std::byte, size_> data_{};
