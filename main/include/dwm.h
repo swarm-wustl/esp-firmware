@@ -13,31 +13,43 @@
 template<class>
 constexpr bool dependent_false = false;
 
-static constexpr size_t DWM_REG_DEV_ID = 0x00;
-static constexpr size_t DWM_REG_SYSTEM_EVENT_STATUS = 0x0F;
+static constexpr uint8_t DWM_REG_DEV_ID = 0x00;
+static constexpr uint8_t DWM_REG_SYSTEM_EVENT_STATUS = 0x0F;
+static constexpr uint8_t DWM_REG_SYS_TIME = 0x06;
+static constexpr uint8_t DWM_REG_RX_TIME = 0x15;
+static constexpr uint8_t DWM_REG_TX_TIME = 0x17;
+
+template <uint8_t ID>
+concept IsTimestampRegister = 
+    ID == DWM_REG_SYS_TIME ||
+    ID == DWM_REG_TX_TIME || 
+    ID == DWM_REG_RX_TIME;
 
 template <HAL::GenericSPIController SPI, uint8_t ID>
 class DWMRegisterView {
+    static constexpr size_t size_ = []() constexpr {
+        if constexpr (ID == DWM_REG_DEV_ID) return 4;
+        else if constexpr (ID == DWM_REG_SYSTEM_EVENT_STATUS) return 5;
+        else if constexpr (ID == DWM_REG_SYS_TIME) return 5;
+        else static_assert(dependent_false<void>, "Register size unspecified");
+    }();
+
 public:
     DWMRegisterView(SPI& spi) : 
         spi_{spi} 
-    {
-        read_data();
-    }
+    {}
 
     // TODO: constructor that takes in data?
+
     ~DWMRegisterView() = default;
 
-    DWMRegisterView(const DWMRegisterView&);
-    DWMRegisterView& operator=(const DWMRegisterView&);
+    DWMRegisterView(const DWMRegisterView& other) = default;
+    DWMRegisterView& operator=(const DWMRegisterView&) = default;
 
     DWMRegisterView(DWMRegisterView&&) = delete;
     void operator=(DWMRegisterView&&) = delete;
 
-    // DWMRegisterView& operator=(std::)
-    DWMRegisterView& operator|=(uint64_t flags) {
-        static_assert(size_ <= sizeof(uint64_t), "Register does not fit within uint64_t");
-        
+    DWMRegisterView& operator|=(uint64_t flags) requires (size_ <= sizeof(uint64_t)) {
         // For the DW1000 in particular, when we write flags, we are CLEARING values.
         // Thus, we don't OR the flags with the original value,
         // we just write the flags directly.
@@ -48,31 +60,36 @@ public:
         return *this;
     }
 
-    // Runtime operation
+    // TODO
+    DWMRegisterView& operator+=(uint64_t) requires IsTimestampRegister<ID> {
+        return *this;
+    }
+
     std::byte operator[](size_t idx) const {
         // TODO: some sort of oob check?
         return data_[idx];
     }
 
-    uint64_t value() const {
-        static_assert(size_ <= sizeof(uint64_t), "Register does not fit within uint64_t");
-        
-        uint64_t res{};
-        std::memcpy(&res, data_.data(), size_);
-        return res;
+    auto value() requires(size_ <= sizeof(uint64_t)) {
+        read_data();
+
+        if constexpr (size_ == sizeof(uint32_t)) {
+            return std::bit_cast<uint32_t>(data_);
+        } else {
+            // std::bit_cast requires an exact size-match
+            // Therefore, std::memcpy is necessary since many DW1000 regs are 5 bytes in size
+            // (rather than uint64_t's 8 bytes)
+            uint64_t res{};
+            std::memcpy(&res, data_.data(), size_);
+            return res;
+        }
     }
 
     constexpr size_t size() const {
         return size_;
     }
 
-private:
-    static constexpr size_t size_ = []() constexpr {
-        if constexpr (ID == DWM_REG_DEV_ID) return 4;
-        else if constexpr (ID == DWM_REG_SYSTEM_EVENT_STATUS) return 5;
-        else static_assert(dependent_false<void>, "Register size unspecified");
-    }();
-    
+private: 
     void read_data() {
         // Lower 6 bits store actual register
         // MSbit = 0 represents read
