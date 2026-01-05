@@ -57,8 +57,7 @@ namespace HAL {
         std::span<std::byte> rx,
         std::span<const std::byte> tx
     ) {
-        { spi.read(rx) } -> std::same_as<int>;
-        { spi.write(tx) } -> std::same_as<int>;
+        { spi.transfer_halfduplex(tx, rx) } -> std::same_as<int>;
     };
 }
 

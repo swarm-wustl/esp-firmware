@@ -48,8 +48,7 @@ namespace ESP32 {
         SPI(SPI&&) = default;
         SPI& operator=(SPI&&) = default;
 
-        esp_err_t read(std::span<std::byte> rx);
-        esp_err_t write(std::span<const std::byte> tx);
+        esp_err_t transfer_halfduplex(std::span<const std::byte> tx, std::span<std::byte> rx);
 
     private:
         int cs_{};

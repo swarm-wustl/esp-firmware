@@ -14,6 +14,8 @@ public:
     void operator=(DWM&&) = delete;
 
 private:
+    void read_reg(uint8_t reg, std::span<std::byte> rx);
+
     SPI spi_{};
 };
 

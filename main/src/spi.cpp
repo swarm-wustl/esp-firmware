@@ -7,6 +7,10 @@ namespace ESP32 {
     constexpr int SPI_MISO = 19;
     constexpr int SPI_MOSI = 23;
 
+    constexpr size_t BYTES_TO_BITS(size_t bytes) {
+        return bytes * 8;
+    }
+
     SPI::SPI(int cs) : cs_{cs} {
         spi_bus_config_t config {
             SPI_MOSI,
@@ -39,7 +43,7 @@ namespace ESP32 {
             .clock_speed_hz = APB_CLK_FREQ / 80, // 1 MHz
             .input_delay_ns = 50,
             .spics_io_num = cs_,
-            .flags = 0,
+            .flags = SPI_DEVICE_HALFDUPLEX,
             .queue_size = 4, // TODO: queue size
             .pre_cb = NULL,
             .post_cb = NULL
@@ -56,11 +60,20 @@ namespace ESP32 {
         log("SPI deinit: %d", spi_bus_remove_device(dev_handle_));
     }
 
-    esp_err_t SPI::read(std::span<std::byte> rx) {
-        return ESP_OK;
-    }
+    esp_err_t SPI::transfer_halfduplex(std::span<const std::byte> tx, std::span<std::byte> rx) {
+        spi_transaction_t transaction = {
+            .length = BYTES_TO_BITS(tx.size_bytes()),
+            .rxlength = BYTES_TO_BITS(rx.size_bytes()),
+            .tx_buffer = tx.data(),
+            .rx_buffer = rx.data()
+        };
 
-    esp_err_t SPI::write(std::span<const std::byte> tx) {
+        esp_err_t res = spi_device_transmit(dev_handle_, &transaction);
+
+        if (unlikely(res != ESP_OK)) {
+            return res;
+        }
+
         return ESP_OK;
     }
 }

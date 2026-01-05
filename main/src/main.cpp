@@ -44,6 +44,8 @@ The types used should only be taken from hardware.h's defintions.
 extern "C" void app_main(void) {
     log("Testing UWB");
 
-    HW::SPI spi{4}; // TODO: put pin in a config somewhere
+    HW::SPI spi{4}; // TODO: put CS pin in a config somewhere
     DWM dwm_sensor{std::move(spi)};
+
+    while (true) {}
 }
