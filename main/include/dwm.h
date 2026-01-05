@@ -18,6 +18,7 @@ static constexpr uint8_t DWM_REG_SYSTEM_EVENT_STATUS = 0x0F;
 static constexpr uint8_t DWM_REG_SYS_TIME = 0x06;
 static constexpr uint8_t DWM_REG_RX_TIME = 0x15;
 static constexpr uint8_t DWM_REG_TX_TIME = 0x17;
+static constexpr uint8_t DWM_REG_TX_FCTRL = 0x08;
 
 template <uint8_t ID>
 concept IsTimestampRegister = 
@@ -37,7 +38,9 @@ class DWMRegisterView {
 public:
     DWMRegisterView(SPI& spi) : 
         spi_{spi} 
-    {}
+    {
+        read_data();
+    }
 
     // TODO: constructor that takes in data?
 
@@ -49,13 +52,39 @@ public:
     DWMRegisterView(DWMRegisterView&&) = delete;
     void operator=(DWMRegisterView&&) = delete;
 
-    DWMRegisterView& operator|=(uint64_t flags) requires (size_ <= sizeof(uint64_t)) {
+    /*
+    * XOR: used to clear values by writing flags.
+    * This is for registers that have status bits/bytes that are cleared by writing 1 to them.
+    */
+    DWMRegisterView& operator^=(uint64_t flags) requires (size_ <= sizeof(uint64_t)) {
         // For the DW1000 in particular, when we write flags, we are CLEARING values.
         // Thus, we don't OR the flags with the original value,
         // we just write the flags directly.
-        std::array<std::byte, size_> new_data{};
-        std::memcpy(new_data.data(), &flags, size_);
-        write_data(new_data);
+        write_data(flags);
+
+        return *this;
+    }
+
+    /*
+    * OR: used to OR values to a register.
+    * This is primarily for configuring registers.
+    */
+    DWMRegisterView& operator|=(uint64_t flags) requires (size_ <= sizeof(uint64_t)) {
+        // Copy the current data and OR the flags onto it
+        uint64_t new_value = flatten_data(data_) | flags;
+        write_data(new_value);
+        
+        return *this;
+    }
+
+    /*
+    * AND: used to AND values to a register.
+    * This is primarily for configuring registers.
+    */
+    DWMRegisterView& operator&=(uint64_t flags) requires (size_ <= sizeof(uint64_t)) {
+        // Copy the current data and AND the flags onto it
+        uint64_t new_value = flatten_data(data_) & flags;
+        write_data(new_value);
 
         return *this;
     }
@@ -72,17 +101,7 @@ public:
 
     auto value() requires(size_ <= sizeof(uint64_t)) {
         read_data();
-
-        if constexpr (size_ == sizeof(uint32_t)) {
-            return std::bit_cast<uint32_t>(data_);
-        } else {
-            // std::bit_cast requires an exact size-match
-            // Therefore, std::memcpy is necessary since many DW1000 regs are 5 bytes in size
-            // (rather than uint64_t's 8 bytes)
-            uint64_t res{};
-            std::memcpy(&res, data_.data(), size_);
-            return res;
-        }
+        return flatten_data(data_);
     }
 
     constexpr size_t size() const {
@@ -101,6 +120,10 @@ private:
         // Initiate SPI transfer
         // TODO: error handle
         spi_.transfer_halfduplex(tx, data_);
+    }
+
+    void write_data(std::integral auto new_value) {
+        write_data(pack_data(new_value));
     }
 
     void write_data(std::array<std::byte, size_> new_data) {
@@ -125,7 +148,34 @@ private:
         // This is for a few reasons:
         // 1) some registers are read-only, and writes should do nothing
         // 2) some registers clear values by writing 1 to them (so the local array's state would be inverted)
+        // 3) we want the most updated register state after writing!
         read_data();
+    }
+
+    static auto flatten_data(std::array<std::byte, size_> data) requires (size_ <= sizeof(uint64_t)) {
+        if constexpr (size_ == sizeof(uint16_t)) {
+            return std::bit_cast<uint16_t>(data);
+        } else if constexpr (size_ == sizeof(uint32_t)) {
+            return std::bit_cast<uint32_t>(data);
+        } else {
+            // std::bit_cast requires an exact size-match
+            // Therefore, std::memcpy is necessary since many DW1000 regs are 5 bytes in size
+            // (rather than uint64_t's 8 bytes)
+            uint64_t res{};
+            std::memcpy(&res, data.data(), size_);
+            return res;
+        }
+    }
+
+    static std::array<std::byte, size_> pack_data(std::integral auto val) {
+        // std::bit_cast optimization
+        if constexpr (sizeof(val) == size_) {
+            return std::bit_cast<std::array<std::byte, size_>>(val);
+        } else {
+            std::array<std::byte, size_> new_data{};
+            std::memcpy(new_data.data(), &val, size_);
+            return new_data;
+        }
     }
 
     SPI& spi_{};

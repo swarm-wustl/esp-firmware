@@ -26,7 +26,7 @@ DWM<SPI>::DWM(SPI spi, uint8_t rst_pin, uint8_t irq_pin) :
     
     auto sys_status_reg = get_reg_view<DWM_REG_SYSTEM_EVENT_STATUS>();
     log("Value before: %llX", sys_status_reg.value());
-    sys_status_reg |= 0xFF;
+    sys_status_reg ^= 0xFF;
     log("Value after: %llX", sys_status_reg.value());
 
     auto sys_time_reg = get_reg_view<DWM_REG_SYS_TIME>();
