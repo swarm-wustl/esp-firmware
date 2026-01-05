@@ -38,10 +38,10 @@ namespace ESP32 {
             .dummy_bits = 0,
             .mode = 0,
             .duty_cycle_pos = 0,
-            .cs_ena_pretrans = 5,
-            .cs_ena_posttrans = 5,
-            .clock_speed_hz = APB_CLK_FREQ / 80, // 1 MHz
-            .input_delay_ns = 50,
+            .cs_ena_pretrans = 0,
+            .cs_ena_posttrans = 0,
+            .clock_speed_hz = SPI_MASTER_FREQ_20M,
+            .input_delay_ns = 0,
             .spics_io_num = cs_,
             .flags = SPI_DEVICE_HALFDUPLEX,
             .queue_size = 4, // TODO: queue size

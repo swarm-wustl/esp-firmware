@@ -68,3 +68,10 @@ else
   echo "Flashing failed!"
   exit 1
 fi
+
+for arg in "$@"; do
+    if [[ "$arg" == "-m" ]]; then
+        idf.py monitor
+        exit 0
+    fi
+done
