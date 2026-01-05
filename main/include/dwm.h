@@ -4,6 +4,7 @@
 #include "hal.h"
 #include <bit>
 #include <cstring>
+#include <string>
 
 // TODO: add noexcept to classes
 
@@ -32,6 +33,7 @@ class DWMRegisterView {
         if constexpr (ID == DWM_REG_DEV_ID) return 4;
         else if constexpr (ID == DWM_REG_SYSTEM_EVENT_STATUS) return 5;
         else if constexpr (ID == DWM_REG_SYS_TIME) return 5;
+        else if constexpr (ID == DWM_REG_TX_FCTRL) return 5;
         else static_assert(dependent_false<void>, "Register size unspecified");
     }();
 
@@ -94,9 +96,38 @@ public:
         return *this;
     }
 
-    std::byte operator[](size_t idx) const {
+    /* 
+    * Get the specified byte from data 
+    */
+    std::byte operator[](size_t byte_index) const {
         // TODO: some sort of oob check?
-        return data_[idx];
+        return data_[byte_index];
+    }
+
+    // TODO: once supported, switch to multi-dimension operator[]
+    // Supposed to be in C++23 but I guess ESP-IDF is a bit behind on features
+    /*
+    * Get the specified bit from data, given a byte and bit offset
+    */
+    uint8_t bit(size_t byte_index, size_t bit_offset) const {
+        return static_cast<uint8_t>((data_[byte_index] >> bit_offset)) & 1;
+    }
+
+    /*
+    * Get the specified bit from data, given a bit number
+    */
+    uint8_t bit(size_t bit_number) const {
+        return bit(bit_number / 8, bit_number % 8);
+    }
+
+    /*
+    * Get the specified data from a bit range
+    * Inspired by Verilog syntax, e.g., x[15:12]
+    */
+    uint64_t bit_range(uint8_t hi, uint8_t lo) const requires (size_ <= sizeof(uint64_t)) {
+        uint64_t raw_data = flatten_data(data_) >> lo;
+        uint64_t mask = (1ULL << ((hi - lo) + 1)) - 1;
+        return raw_data & mask;
     }
 
     auto value() requires(size_ <= sizeof(uint64_t)) {
@@ -197,13 +228,15 @@ private:
     using Register = DWMRegisterView<SPI, ID>;
 
     template <uint8_t ID>
-    constexpr Register<ID> get_reg_view() {
-        return Register<ID>{spi_};
+    Register<ID> get_reg_view() const {
+        return Register<ID>{const_cast<SPI&>(spi_)};
     }
 
     void read_reg(uint8_t reg, std::span<std::byte> rx);
 
     void hard_reset();
+
+    std::string_view tx_bit_rate() const;
 
     SPI spi_;
     uint8_t rst_pin_{};

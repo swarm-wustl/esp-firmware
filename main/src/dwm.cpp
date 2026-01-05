@@ -29,9 +29,13 @@ DWM<SPI>::DWM(SPI spi, uint8_t rst_pin, uint8_t irq_pin) :
     sys_status_reg ^= 0xFF;
     log("Value after: %llX", sys_status_reg.value());
 
+    auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
+    log("Current transmit bit rate: %X %X", ((tx_fctrl.bit(14) << 1) | tx_fctrl.bit(13)), tx_fctrl.bit_range(14, 13));
+    logf("Bit rate (but nice!):", tx_bit_rate());
+
     auto sys_time_reg = get_reg_view<DWM_REG_SYS_TIME>();
     while (true) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(pdMS_TO_TICKS(5000));
         log("SYS TIME: %llX", sys_time_reg.value());
     }
 }
@@ -61,6 +65,24 @@ void DWM<SPI>::hard_reset() {
     vTaskDelay(pdMS_TO_TICKS(10));  // hold low for >10ms
     gpio_set_level(rst, 1);
     vTaskDelay(pdMS_TO_TICKS(10));  // wait for startup
+}
+
+template <HAL::GenericSPIController SPI>
+std::string_view DWM<SPI>::tx_bit_rate() const {
+    using namespace std::string_view_literals;   // Allows for ""sv suffix
+
+    auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
+    uint8_t raw_bit_rate = tx_fctrl.bit_range(14, 13); // TODO: constants? 
+    
+    switch (raw_bit_rate) {
+        case 0b00: return "110 kbps"sv;
+        case 0b01: return "850 kbps"sv;
+        case 0b10: return "6.8 Mbps"sv;
+        case 0b11: assert("ERROR: reserved register value"); break;
+        default: assert("Unexpected behavior: 2-bit value was not matched"); break;
+    }
+
+    return {};
 }
 
 // Allows for templated definition in .cpp file
