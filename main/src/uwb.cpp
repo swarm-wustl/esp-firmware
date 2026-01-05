@@ -67,6 +67,13 @@
 #define DWM_SYS_STATUS_TXPHS (1 << 6)
 #define DWM_SYS_STATUS_TXFRS (1 << 7)
 
+static void SendPoll() {}
+static void ReceivePoll() {}
+static void SendResponse() {}
+static void ReceiveResponse() {}
+static void SendFinal() {}
+static void ReceiveFinal() {}
+
 static void uwb_hard_reset() {
     gpio_set_direction(PIN_RST, GPIO_MODE_OUTPUT);
     gpio_set_level(PIN_RST, 0);
@@ -375,8 +382,8 @@ void uwb_init() {
     // ESP_ERROR_CHECK(uwb_read_reg(DWM_REG_SYSTEM_EVENT_STATUS, (uint8_t*)&sys_status, sizeof(sys_status), dev_handle));
     // log("polled sys status: %X %X %X %X %X", sys_status[4], sys_status[3], sys_status[2], sys_status[1], sys_status[0]);
 
-    NodeA(dev_handle);
-    // NodeB(dev_handle);
+    // NodeA(dev_handle);
+    NodeB(dev_handle);
 
     /*char* msg = "hello world";
     ESP_ERROR_CHECK(uwb_transmit((uint8_t*)msg, 12, dev_handle));

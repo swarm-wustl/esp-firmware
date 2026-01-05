@@ -4,6 +4,7 @@
 #include <array>
 #include <type_traits>
 #include <cstdint>
+#include <span>
 
 #include <geometry_msgs/msg/twist.h>
 
@@ -48,6 +49,16 @@ namespace HAL {
     ) {
         { DriveStyle::type() } -> std::same_as<Drive::Type>;
         { DriveStyle::template convert_twist<MotorCount>(twist_msg) } -> std::same_as<std::array<Motor::Command, MotorCount>>;
+    };
+
+    template <typename SPI>
+    concept GenericSPIController = requires (
+        SPI spi,
+        std::span<std::byte> rx,
+        std::span<const std::byte> tx
+    ) {
+        { spi.read(rx) } -> std::same_as<int>;
+        { spi.write(tx) } -> std::same_as<int>;
     };
 }
 
