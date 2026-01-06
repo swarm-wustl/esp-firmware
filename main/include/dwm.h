@@ -55,10 +55,10 @@ public:
     void operator=(DWMRegisterView&&) = delete;
 
     /*
-    * XOR: used to clear values by writing flags.
+    * Clear register values by writing flags.
     * This is for registers that have status bits/bytes that are cleared by writing 1 to them.
     */
-    DWMRegisterView& operator^=(uint64_t flags) requires (size_ <= sizeof(uint64_t)) {
+    DWMRegisterView& clear_flags(uint64_t flags) requires (size_ <= sizeof(uint64_t)) {
         // For the DW1000 in particular, when we write flags, we are CLEARING values.
         // Thus, we don't OR the flags with the original value,
         // we just write the flags directly.
@@ -108,7 +108,7 @@ public:
     /* 
     * Get the specified byte from data 
     */
-    std::byte operator[](size_t byte_index) const {
+    std::byte byte(size_t byte_index) const {
         // TODO: some sort of oob check?
         return data_[byte_index];
     }
