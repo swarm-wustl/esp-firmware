@@ -228,6 +228,9 @@ private:
 
 template <HAL::GenericSPIController SPI>
 class DWM {
+static_assert(std::endian::native == std::endian::little, 
+              "DWM1000 requires little-endian architecture");
+
 public:
     DWM(SPI spi, uint8_t rst_pin, uint8_t irq_pin);
     ~DWM() = default;
