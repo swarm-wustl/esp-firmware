@@ -31,7 +31,7 @@ DWM<SPI>::DWM(SPI spi, uint8_t rst_pin, uint8_t irq_pin) :
 
     auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
     log("Current transmit bit rate: %X %X", ((tx_fctrl.bit(14) << 1) | tx_fctrl.bit(13)), tx_fctrl.bit_range(14, 13));
-    logf("Bit rate (but nice!):", tx_bit_rate());
+    logf("Bit rate, PRF (but nice!):", tx_bit_rate(), tx_prf(), tx_preamble_length());
 
     auto sys_time_reg = get_reg_view<DWM_REG_SYS_TIME>();
     while (true) {
@@ -80,6 +80,45 @@ std::string_view DWM<SPI>::tx_bit_rate() const {
         case 0b10: return "6.8 Mbps"sv;
         case 0b11: assert("ERROR: reserved register value"); break;
         default: assert("Unexpected behavior: 2-bit value was not matched"); break;
+    }
+
+    return {};
+}
+
+template <HAL::GenericSPIController SPI>
+std::string_view DWM<SPI>::tx_prf() const {
+    using namespace std::string_view_literals;   // Allows for ""sv suffix
+
+    auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
+    uint8_t raw_prf = tx_fctrl.bit_range(17, 16); // TODO: constants? 
+    
+    switch (raw_prf) {
+        case 0b00: return "4 MHz"sv;
+        case 0b01: return "16 MHz"sv;
+        case 0b10: return "64 MHz"sv;
+        case 0b11: assert("ERROR: reserved register value"); break;
+        default: assert("Unexpected behavior: 2-bit value was not matched"); break;
+    }
+
+    return {};
+}
+
+template <HAL::GenericSPIController SPI>
+uint16_t DWM<SPI>::tx_preamble_length() const {
+    auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
+    uint8_t raw_psr = tx_fctrl.bit_range(19, 18); // TODO: constants? 
+    uint8_t raw_pe = tx_fctrl.bit_range(21, 20);  // TODO: constants?
+    
+    switch ((raw_psr << 2) | raw_pe) {
+        case 0b01'00: return 64;
+        case 0b01'01: return 128;
+        case 0b01'10: return 256;
+        case 0b01'11: return 512;
+        case 0b10'00: return 1024;
+        case 0b10'01: return 1536;
+        case 0b10'10: return 2048;
+        case 0b11'00: return 4096;
+        default: assert("Unexpected behavior: 4-bit value was not matched"); break;
     }
 
     return {};

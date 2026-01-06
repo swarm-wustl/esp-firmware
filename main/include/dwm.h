@@ -237,6 +237,11 @@ private:
     void hard_reset();
 
     std::string_view tx_bit_rate() const;
+    /*
+    * Pulse Repetition Frequency
+    */
+    std::string_view tx_prf() const;
+    uint16_t tx_preamble_length() const;
 
     SPI spi_;
     uint8_t rst_pin_{};
