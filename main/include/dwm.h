@@ -91,6 +91,15 @@ public:
         return *this;
     }
 
+    /*
+    * Equals: used to assign a value to a register.
+    */
+    DWMRegisterView& operator=(std::integral auto new_value) requires (size_ <= sizeof(uint64_t)) {
+        write_data(new_value);
+
+        return *this;
+    }
+
     // TODO
     DWMRegisterView& operator+=(uint64_t) requires IsTimestampRegister<ID> {
         return *this;
@@ -130,6 +139,8 @@ public:
         return raw_data & mask;
     }
 
+    // TODO: write_bit_range
+
     auto value() requires(size_ <= sizeof(uint64_t)) {
         read_data();
         return flatten_data(data_);
@@ -153,6 +164,8 @@ private:
         spi_.transfer_halfduplex(tx, data_);
     }
 
+    // TODO: consider removing this and other cases of std::integral auto
+    // It might just be adding complexity for no reason (ig bit_cast optimization..?)
     void write_data(std::integral auto new_value) {
         write_data(pack_data(new_value));
     }
