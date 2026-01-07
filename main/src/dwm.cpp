@@ -32,11 +32,30 @@ DWM<SPI>::DWM(SPI spi, uint8_t rst_pin, uint8_t irq_pin) :
     auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
     log("Current transmit bit rate: %X %X", ((tx_fctrl.bit(14) << 1) | tx_fctrl.bit(13)), tx_fctrl.bit_range(14, 13));
     logf("Bit rate, PRF (but nice!):", tx_bit_rate(), tx_prf(), tx_preamble_length());
+    set_tx_bit_rate(BitRate::KBPS_100);
+    logf("New bit rate:", tx_bit_rate());
+    hard_reset();
+    logf("Reset bit rate:", tx_bit_rate());
+
+    /* *** */
 
     auto sys_time_reg = get_reg_view<DWM_REG_SYS_TIME>();
+
+    // Use the DW1000's own timestamp for precise intervals
+    auto start = sys_time_reg.value();
+    auto target_duration = std::chrono::milliseconds{300};
+
     while (true) {
-        vTaskDelay(pdMS_TO_TICKS(5000));
-        log("SYS TIME: %llX", sys_time_reg.value());
+        auto current = sys_time_reg.value();
+        auto elapsed = current - start;
+        
+        if (elapsed >= target_duration) {
+            auto us = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
+            logf("DELTA SYS TIME:", us, "microseconds");
+            start = current;  // Reset for next interval
+        }
+        
+        vTaskDelay(1);  // Small delay to not busy-wait
     }
 }
 
@@ -83,6 +102,21 @@ std::string_view DWM<SPI>::tx_bit_rate() const {
     }
 
     return {};
+}
+
+template <HAL::GenericSPIController SPI>
+void DWM<SPI>::set_tx_bit_rate(BitRate br) {
+    uint8_t reg_value{};
+
+    switch (br) {
+        case BitRate::KBPS_100: reg_value = 0b00; break;
+        case BitRate::KBPS_850: reg_value = 0b01; break;
+        case BitRate::MBPS_68: reg_value = 0b10; break;
+        default: assert("Unexpected behavior: unknown bitrate"); break;
+    }
+
+    auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
+    tx_fctrl.write_bit_range(14, 13, reg_value);
 }
 
 template <HAL::GenericSPIController SPI>

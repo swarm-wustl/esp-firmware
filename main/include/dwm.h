@@ -5,6 +5,7 @@
 #include <bit>
 #include <cstring>
 #include <string>
+#include <chrono>
 
 // TODO: add noexcept to classes
 
@@ -20,6 +21,26 @@ static constexpr uint8_t DWM_REG_SYS_TIME = 0x06;
 static constexpr uint8_t DWM_REG_RX_TIME = 0x15;
 static constexpr uint8_t DWM_REG_TX_TIME = 0x17;
 static constexpr uint8_t DWM_REG_TX_FCTRL = 0x08;
+
+class DWMTimestamp {
+    // Keeps bits [39:9], clears bits [63:40] and [8:0]
+    static constexpr uint64_t DW1000_40BIT_MASK = 0xFF'FF'FF'FF'FFULL;
+    static constexpr uint64_t DW1000_LOW_9BITS_MASK = 0x1FFULL;
+    static constexpr uint64_t DW1000_TIMESTAMP_MASK = DW1000_40BIT_MASK & ~DW1000_LOW_9BITS_MASK;
+
+public:
+    using Duration = std::chrono::duration<uint64_t, std::ratio<1, 63'897'600'000>>; // each bit = ~15.65 ps
+
+    DWMTimestamp() = default;
+    DWMTimestamp(uint64_t raw_time) : raw_time_{raw_time & DW1000_TIMESTAMP_MASK} {}
+
+    Duration operator-(const DWMTimestamp& other) const {
+        return Duration{(raw_time_ - other.raw_time_) & DW1000_TIMESTAMP_MASK};
+    }
+
+private:
+    uint64_t raw_time_{};
+};
 
 template <uint8_t ID>
 concept IsTimestampRegister = 
@@ -135,15 +156,35 @@ public:
     */
     uint64_t bit_range(uint8_t hi, uint8_t lo) const requires (size_ <= sizeof(uint64_t)) {
         uint64_t raw_data = flatten_data(data_) >> lo;
-        uint64_t mask = (1ULL << ((hi - lo) + 1)) - 1;
+        uint64_t mask = (1ULL << (1 + hi - lo)) - 1;
         return raw_data & mask;
+    }
+
+    DWMRegisterView& write_bit_range(uint8_t hi, uint8_t lo, uint64_t value) requires (size_ <= sizeof(uint64_t)) {
+        // First, clear the bits in the given bit range
+        uint64_t raw_data = flatten_data(data_);
+        uint64_t mask = (1ULL << (1 + hi - lo)) - 1; 
+        raw_data &= ~(mask << lo);
+
+        // Then, write the new data in
+        raw_data |= (value & mask) << lo;
+        write_data(raw_data);
+    
+        return *this;
     }
 
     // TODO: write_bit_range
 
     auto value() requires(size_ <= sizeof(uint64_t)) {
         read_data();
-        return flatten_data(data_);
+
+        auto res = flatten_data(data_);
+
+        if constexpr (IsTimestampRegister<ID>) {
+            return DWMTimestamp{res};
+        } else {
+            return res;
+        }
     }
 
     constexpr size_t size() const {
@@ -239,6 +280,12 @@ public:
     DWM(DWM&&) = delete;
     void operator=(DWM&&) = delete;
 
+    enum class BitRate {
+        KBPS_100,
+        KBPS_850,
+        MBPS_68
+    };
+
 private:
     template <uint8_t ID>
     using Register = DWMRegisterView<SPI, ID>;
@@ -253,6 +300,8 @@ private:
     void hard_reset();
 
     std::string_view tx_bit_rate() const;
+    void set_tx_bit_rate(BitRate br);
+
     /*
     * Pulse Repetition Frequency
     */
