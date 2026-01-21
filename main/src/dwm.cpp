@@ -30,13 +30,17 @@ DWM<SPI>::DWM(SPI spi, uint8_t rst_pin, uint8_t irq_pin) :
     log("Value after: %llX", sys_status_reg.value());
 
     auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
+
     log("Current transmit bit rate: %X %X", ((tx_fctrl.bit(14) << 1) | tx_fctrl.bit(13)), tx_fctrl.bit_range(14, 13));
-    logf("Bit rate, PRF (but nice!):", tx_bit_rate(), tx_prf(), tx_preamble_length());
+    logf("Bit rate, PRF, preamble length (but nice!):", tx_bit_rate(), tx_prf(), tx_preamble_length());
+
     set_tx_bit_rate(BitRate::KBPS_100);
     set_tx_prf(PRF::MHZ_4);
-    logf("New bit rate and PRF:", tx_bit_rate(), "--", tx_prf());
+    set_tx_preamble_length(PreambleLength::LEN_2048);
+
+    logf("New bit rate, PRF, preamble length:", tx_bit_rate(), "--", tx_prf(), "--", tx_preamble_length());
     hard_reset();
-    logf("Reset bit rate and PRF:", tx_bit_rate(), "--", tx_prf());
+    logf("Reset bit rate, PRF, preamble length:", tx_bit_rate(), "--", tx_prf(), "--", tx_preamble_length());
 
     /* *** */
 
@@ -118,22 +122,23 @@ void DWM<SPI>::set_tx_prf(PRF prf) {
 template <HAL::GenericSPIController SPI>
 uint16_t DWM<SPI>::tx_preamble_length() const {
     auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
+
     uint8_t raw_psr = tx_fctrl.bit_range(19, 18); // TODO: constants? 
     uint8_t raw_pe = tx_fctrl.bit_range(21, 20);  // TODO: constants?
-    
-    switch ((raw_psr << 2) | raw_pe) {
-        case 0b01'00: return 64;
-        case 0b01'01: return 128;
-        case 0b01'10: return 256;
-        case 0b01'11: return 512;
-        case 0b10'00: return 1024;
-        case 0b10'01: return 1536;
-        case 0b10'10: return 2048;
-        case 0b11'00: return 4096;
-        default: assert("Unexpected behavior: 4-bit value was not matched"); break;
-    }
+    uint8_t psr_pe_combined = (raw_psr << 2) | raw_pe;
 
-    return {};
+    return PreambleLengthToUInt(static_cast<PreambleLength>(psr_pe_combined));
+}
+
+template <HAL::GenericSPIController SPI>
+void DWM<SPI>::set_tx_preamble_length(PreambleLength pl) {
+    uint8_t psr_pe_combined = static_cast<uint8_t>(pl);
+    uint8_t raw_psr = (psr_pe_combined >> 2) & 0b11;
+    uint8_t raw_pe = psr_pe_combined & 0b11;
+    
+    auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
+    tx_fctrl.write_bit_range(19, 18, raw_psr);
+    tx_fctrl.write_bit_range(21, 20, raw_pe);
 }
 
 // Allows for templated definition in .cpp file

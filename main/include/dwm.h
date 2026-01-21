@@ -10,6 +10,9 @@
 // TODO: add noexcept to classes
 
 // Allows for static_assert<false, ..> - like behavior
+// Without this weird hack, the static_assert is evaluated every time
+// instead of conditionally based on the branching
+// (always returns an error even when it shouldn't).
 // Should be properly fixed in C++26, but this is a workaround
 // https://en.cppreference.com/w/cpp/language/static_assert.html
 template<class>
@@ -291,7 +294,7 @@ public:
             case BitRate::KBPS_100: return "110 kbps"sv;
             case BitRate::KBPS_850: return "850 kbps"sv;
             case BitRate::MBPS_68: return "6.8 Mbps"sv;
-            default: assert("Unexpected behavior: Unknown bit rate value"); break;
+            default: __builtin_unreachable();
         }
 
         return "UNKNOWN BITRATE"sv;
@@ -310,10 +313,37 @@ public:
             case PRF::MHZ_4: return "4 MHz"sv;
             case PRF::MHZ_16: return "16 MHz"sv;
             case PRF::MHZ_64: return "64 MHz"sv;
-            default: assert("Unexpected behavior: Unknown PRF value"); break; 
+            default: __builtin_unreachable();
         }
 
         return "UNKNOWN PRF"sv;
+    }
+
+    enum class PreambleLength : uint8_t {
+        LEN_64 = 0b01'00,
+        LEN_128 = 0b01'01,
+        LEN_256 = 0b01'10,
+        LEN_512 = 0b01'11,
+        LEN_1024 = 0b10'00,
+        LEN_1536 = 0b10'01,
+        LEN_2048 = 0b10'10,
+        LEN_4096 = 0b11'00
+    };
+
+    static constexpr uint16_t PreambleLengthToUInt(PreambleLength pl) noexcept {
+        switch (pl) {
+            case PreambleLength::LEN_64: return 64;
+            case PreambleLength::LEN_128: return 128;
+            case PreambleLength::LEN_256: return 256;
+            case PreambleLength::LEN_512: return 512;
+            case PreambleLength::LEN_1024: return 1024;
+            case PreambleLength::LEN_1536: return 1536;
+            case PreambleLength::LEN_2048: return 2048;
+            case PreambleLength::LEN_4096: return 4096;
+            default: __builtin_unreachable();
+        }
+
+        return 0;
     }
 
 private:
@@ -340,6 +370,7 @@ private:
     void set_tx_prf(PRF prf);
 
     uint16_t tx_preamble_length() const;
+    void set_tx_preamble_length(PreambleLength pl);
 
     SPI spi_;
     uint8_t rst_pin_{};
