@@ -355,9 +355,6 @@ private:
         return Register<ID>{const_cast<SPI&>(spi_)};
     }
 
-    // TODO: delete this? since regview is used instead
-    void read_reg(uint8_t reg, std::span<std::byte> rx);
-
     void hard_reset();
 
     std::string_view tx_bit_rate() const;

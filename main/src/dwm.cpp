@@ -64,20 +64,6 @@ DWM<SPI>::DWM(SPI spi, uint8_t rst_pin, uint8_t irq_pin) :
     }
 }
 
-template <HAL::GenericSPIController SPI>
-void DWM<SPI>::read_reg(uint8_t reg, std::span<std::byte> rx) {
-    // Lower 6 bits store actual register
-    // MSbit = 0 represents read
-    reg = 0x00 | (reg & 0x3F);
-
-    // Store in single-value array to be compatible with SPI controller API
-    std::array<const std::byte, 1> tx{std::byte{reg}};
-
-    // Initiate SPI transfer
-    // TODO: error handle
-    spi_.transfer_halfduplex(tx, rx);
-}
-
 // TODO: this should use some sort of HAL::GenericGPIOController
 // should not directly interact with ESP32 HAL!
 template <HAL::GenericSPIController SPI>
