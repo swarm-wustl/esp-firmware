@@ -173,8 +173,6 @@ public:
         return *this;
     }
 
-    // TODO: write_bit_range
-
     auto value() requires(size_ <= sizeof(uint64_t)) {
         read_data();
 
@@ -299,6 +297,25 @@ public:
         return "UNKNOWN BITRATE"sv;
     }
 
+    enum class PRF : uint8_t {
+        MHZ_4 = 0b00,
+        MHZ_16 = 0b01,
+        MHZ_64 = 0b10
+    };
+
+    static constexpr std::string_view PRFToString(PRF prf) noexcept {
+        using namespace std::string_view_literals;
+
+        switch (prf) {
+            case PRF::MHZ_4: return "4 MHz"sv;
+            case PRF::MHZ_16: return "16 MHz"sv;
+            case PRF::MHZ_64: return "64 MHz"sv;
+            default: assert("Unexpected behavior: Unknown PRF value"); break; 
+        }
+
+        return "UNKNOWN PRF"sv;
+    }
+
 private:
     template <uint8_t ID>
     using Register = DWMRegisterView<SPI, ID>;
@@ -320,6 +337,8 @@ private:
     * Pulse Repetition Frequency
     */
     std::string_view tx_prf() const;
+    void set_tx_prf(PRF prf);
+
     uint16_t tx_preamble_length() const;
 
     SPI spi_;

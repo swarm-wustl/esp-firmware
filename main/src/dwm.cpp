@@ -33,9 +33,10 @@ DWM<SPI>::DWM(SPI spi, uint8_t rst_pin, uint8_t irq_pin) :
     log("Current transmit bit rate: %X %X", ((tx_fctrl.bit(14) << 1) | tx_fctrl.bit(13)), tx_fctrl.bit_range(14, 13));
     logf("Bit rate, PRF (but nice!):", tx_bit_rate(), tx_prf(), tx_preamble_length());
     set_tx_bit_rate(BitRate::KBPS_100);
-    logf("New bit rate:", tx_bit_rate());
+    set_tx_prf(PRF::MHZ_4);
+    logf("New bit rate and PRF:", tx_bit_rate(), "--", tx_prf());
     hard_reset();
-    logf("Reset bit rate:", tx_bit_rate());
+    logf("Reset bit rate and PRF:", tx_bit_rate(), "--", tx_prf());
 
     /* *** */
 
@@ -102,20 +103,16 @@ void DWM<SPI>::set_tx_bit_rate(BitRate br) {
 
 template <HAL::GenericSPIController SPI>
 std::string_view DWM<SPI>::tx_prf() const {
-    using namespace std::string_view_literals;   // Allows for ""sv suffix
-
     auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
     uint8_t raw_prf = tx_fctrl.bit_range(17, 16); // TODO: constants? 
     
-    switch (raw_prf) {
-        case 0b00: return "4 MHz"sv;
-        case 0b01: return "16 MHz"sv;
-        case 0b10: return "64 MHz"sv;
-        case 0b11: assert("ERROR: reserved register value"); break;
-        default: assert("Unexpected behavior: 2-bit value was not matched"); break;
-    }
+    return PRFToString(static_cast<PRF>(raw_prf));
+}
 
-    return {};
+template <HAL::GenericSPIController SPI>
+void DWM<SPI>::set_tx_prf(PRF prf) {
+    auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
+    tx_fctrl.write_bit_range(17, 16, static_cast<uint64_t>(prf));
 }
 
 template <HAL::GenericSPIController SPI>
