@@ -88,35 +88,16 @@ void DWM<SPI>::hard_reset() {
 
 template <HAL::GenericSPIController SPI>
 std::string_view DWM<SPI>::tx_bit_rate() const {
-    using namespace std::string_view_literals;   // Allows for ""sv suffix
-
     auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
     uint8_t raw_bit_rate = tx_fctrl.bit_range(14, 13); // TODO: constants? 
-    
-    switch (raw_bit_rate) {
-        case 0b00: return "110 kbps"sv;
-        case 0b01: return "850 kbps"sv;
-        case 0b10: return "6.8 Mbps"sv;
-        case 0b11: assert("ERROR: reserved register value"); break;
-        default: assert("Unexpected behavior: 2-bit value was not matched"); break;
-    }
 
-    return {};
+    return BitRateToString(static_cast<BitRate>(raw_bit_rate)); 
 }
 
 template <HAL::GenericSPIController SPI>
 void DWM<SPI>::set_tx_bit_rate(BitRate br) {
-    uint8_t reg_value{};
-
-    switch (br) {
-        case BitRate::KBPS_100: reg_value = 0b00; break;
-        case BitRate::KBPS_850: reg_value = 0b01; break;
-        case BitRate::MBPS_68: reg_value = 0b10; break;
-        default: assert("Unexpected behavior: unknown bitrate"); break;
-    }
-
     auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
-    tx_fctrl.write_bit_range(14, 13, reg_value);
+    tx_fctrl.write_bit_range(14, 13, static_cast<uint64_t>(br));
 }
 
 template <HAL::GenericSPIController SPI>

@@ -280,11 +280,24 @@ public:
     DWM(DWM&&) = delete;
     void operator=(DWM&&) = delete;
 
-    enum class BitRate {
-        KBPS_100,
-        KBPS_850,
-        MBPS_68
+    enum class BitRate : uint8_t {
+        KBPS_100 = 0b00,
+        KBPS_850 = 0b01,
+        MBPS_68 = 0b10
     };
+
+    static constexpr std::string_view BitRateToString(BitRate br) noexcept {
+        using namespace std::string_view_literals;   // Allows for ""sv suffix
+
+        switch (br) {
+            case BitRate::KBPS_100: return "110 kbps"sv;
+            case BitRate::KBPS_850: return "850 kbps"sv;
+            case BitRate::MBPS_68: return "6.8 Mbps"sv;
+            default: assert("Unexpected behavior: Unknown bit rate value"); break;
+        }
+
+        return "UNKNOWN BITRATE"sv;
+    }
 
 private:
     template <uint8_t ID>
@@ -295,6 +308,7 @@ private:
         return Register<ID>{const_cast<SPI&>(spi_)};
     }
 
+    // TODO: delete this? since regview is used instead
     void read_reg(uint8_t reg, std::span<std::byte> rx);
 
     void hard_reset();
