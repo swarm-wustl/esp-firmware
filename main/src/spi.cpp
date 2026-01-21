@@ -7,7 +7,7 @@ namespace ESP32 {
     constexpr int SPI_MISO = 19;
     constexpr int SPI_MOSI = 23;
 
-    constexpr size_t BYTES_TO_BITS(size_t bytes) {
+    inline constexpr size_t BYTES_TO_BITS(size_t bytes) {
         return bytes * 8;
     }
 
