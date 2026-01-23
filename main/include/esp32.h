@@ -11,6 +11,12 @@ namespace ESP32 {
     class L298NMotorDriver {
     public:
         L298NMotorDriver();
+
+        L298NMotorDriver(const L298NMotorDriver&) = delete;
+        L298NMotorDriver& operator=(const L298NMotorDriver&) = delete;
+
+        L298NMotorDriver(L298NMotorDriver&&) = default;
+        L298NMotorDriver& operator=(L298NMotorDriver&&) = default;
         
         void run(const Motor::Command& cmd);
         void stop();

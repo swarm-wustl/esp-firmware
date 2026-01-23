@@ -11,6 +11,10 @@ This namespace should only rely on board-specific implementation types (e.g., ES
 namespace HW {
     constexpr size_t MOTOR_COUNT = 2;
 
+    // TODO: create a HAL::ESP32 that handles microcontroller-specific interactions
+    // Then, anything like a MotorDriver, UWB sensor, etc. uses that HAL.
+    // Adds another layer of abstraction and makes it much easier to implement a motor driver and swap out the hardware
+    // Additionally, keeps it easy to create a new driver
     using DriveStyle = ESP32::DifferentialDriveController;
     using MotorDriver = ESP32::L298NMotorDriver;
 }
