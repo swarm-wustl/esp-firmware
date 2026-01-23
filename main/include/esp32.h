@@ -1,13 +1,15 @@
 #ifndef ESP32_H
 #define ESP32_H
 
-// TODO: move this entire file to a component maybe (like microros is)
-
 #include <geometry_msgs/msg/twist.h>
+#include <driver/spi_common.h>
+#include <driver/spi_master.h>
 
 #include "hal.h"
+#include "driver/gpio.h"
 
 namespace ESP32 {
+    // TODO: move this outside of ESP32
     class L298NMotorDriver {
     public:
         L298NMotorDriver();
@@ -22,6 +24,7 @@ namespace ESP32 {
         void stop();
     };
 
+    // TODO: move this outside of ESP32
     class DifferentialDriveController {
     public:
         DifferentialDriveController() = delete;
@@ -32,6 +35,24 @@ namespace ESP32 {
 
         template <size_t MotorCount>
         static std::array<Motor::Command, MotorCount> convert_twist(geometry_msgs__msg__Twist msg);
+    };
+
+    class SPI {
+    public:
+        SPI(int cs);
+        ~SPI();
+
+        SPI(const SPI&) = delete;
+        void operator=(const SPI&) = delete;
+
+        SPI(SPI&&) = default;
+        SPI& operator=(SPI&&) = default;
+
+        esp_err_t transfer_halfduplex(std::span<const std::byte> tx, std::span<std::byte> rx);
+
+    private:
+        int cs_{};
+        spi_device_handle_t dev_handle_{};
     };
 }
 
