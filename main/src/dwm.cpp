@@ -4,8 +4,58 @@
 #include "hardware.h"
 #include "error.h"
 #include "freertos/task.h"
-
+#include <cstdlib>
 #include <vector>
+
+
+DWMDevice::DWMDevice(){
+    randomShortAddress();
+}
+
+float DWMDevice::getRange(){ return float(_range)/100.0f; }
+uint16_t DWMDevice:: getReplyTime() {return _replyDelayTimeUS;}
+void DWMDevice::randomShortAddress() {
+	_shortAddress[0] = rand() % 256;
+	_shortAddress[1] = rand() % 256;
+}
+
+
+void DWMDevice::setReplyTime(uint16_t replyDelayTimeUs) { _replyDelayTimeUS = replyDelayTimeUs; }
+
+
+
+uint64_t DWMTimestamp::getTimestamp() const {
+        return raw_time_;
+};
+
+/**
+ * Get timestamp as byte array
+ * @param data var where data should be written
+ */
+void DWMTimestamp::getTimestamp(uint8_t data[]) const {
+	memset(data, 0, LENGTH_TIMESTAMP);
+	for(uint8_t i = 0; i < LENGTH_TIMESTAMP; i++) {
+		data[i] = (uint8_t)((raw_time_ >> (i*8)) & 0xFF);
+	}
+}
+
+
+void DWMTimestamp::setTimeStamp(uint64_t time){
+    raw_time_ = time;
+}
+
+/**
+ * Set timestamp
+ * @param data timestamp as byte array
+ */
+void DWMTimestamp::setTimeStamp(uint8_t data[]) {
+	raw_time_ = 0;
+	for(uint8_t i = 0; i < LENGTH_TIMESTAMP; i++) {
+		raw_time_ |= ((int64_t)data[i] << (i*8));
+	}
+}
+
+
 
 template <HAL::GenericSPIController SPI>
 DWM<SPI>::DWM(SPI spi, uint8_t rst_pin, uint8_t irq_pin) : 

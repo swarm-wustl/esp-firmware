@@ -25,12 +25,66 @@ static constexpr uint8_t DWM_REG_RX_TIME = 0x15;
 static constexpr uint8_t DWM_REG_TX_TIME = 0x17;
 static constexpr uint8_t DWM_REG_TX_FCTRL = 0x08;
 
+
+
+class DWMDevice{
+    public:
+	//Constructor and destructor
+	DWMDevice();
+	~DWMDevice();
+	
+	//setters:
+	void setReplyTime(uint16_t replyDelayTimeUs);
+	void setRange(float range);
+	
+	//getters
+	uint16_t getReplyTime() { return _replyDelayTimeUS; }
+	float getRange();
+	
+	//functions which contains the date: (easier to put as public)
+	// timestamps to remember
+	DWMTimestamp timePollSent;
+	DWMTimestamp timePollReceived;
+	DWMTimestamp timePollAckSent;
+	DWMTimestamp timePollAckReceived;
+	DWMTimestamp timeRangeSent;
+	DWMTimestamp timeRangeReceived;
+	
+
+private:
+	//device ID
+	uint8_t         _ownAddress[8];
+	uint8_t         _shortAddress[2];
+	int32_t      _activity;
+	uint16_t     _replyDelayTimeUS;
+	int8_t       _index; // not used
+	
+	int16_t _range;
+	int16_t _RXPower;
+	int16_t _FPPower;
+	int16_t _quality;
+	
+	void randomShortAddress();
+	
+};
+
+
+
+
+
 class DWMTimestamp {
     // Keeps bits [39:9], clears bits [63:40] and [8:0]
     static constexpr uint64_t DW1000_40BIT_MASK = 0xFF'FF'FF'FF'FFULL;
     static constexpr uint64_t DW1000_LOW_9BITS_MASK = 0x1FFULL;
     static constexpr uint64_t DW1000_TIMESTAMP_MASK = DW1000_40BIT_MASK & ~DW1000_LOW_9BITS_MASK;
+    
 
+    //Byte length for timestamp
+    static constexpr uint8_t LENGTH_TIMESTAMP      = 5;
+    
+    // timer/counter overflow (40 bits) -> 4overflow approx. every 17.2 seconds
+	static constexpr uint64_t TIME_OVERFLOW = 0x10000000000; //1099511627776LL
+	static constexpr uint64_t TIME_MAX      = 0xffffffffff;
 public:
     using Duration = std::chrono::duration<uint64_t, std::ratio<1, 63'897'600'000>>; // each bit = ~15.65 ps
 
@@ -41,8 +95,20 @@ public:
         return Duration{(raw_time_ - other.raw_time_) & DW1000_TIMESTAMP_MASK};
     }
 
+
+    //Getter
+    uint64_t getTimestamp() const;
+	void    getTimestamp(uint8_t data[]) const;
+
+    //Setters
+    void setTimeStamp(uint64_t time);
+    void setTimeStamp(uint8_t data[]);
+    //utils
+    
 private:
     uint64_t raw_time_{};
+    // _timestamp = 0;
+
 };
 
 template <uint8_t ID>
