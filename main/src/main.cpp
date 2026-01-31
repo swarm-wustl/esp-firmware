@@ -3,6 +3,7 @@
 #include "queue.h"
 #include "ros.h"
 #include "sensor.h"
+#include "i2c.cpp"
 
 #include "freertos/FreeRTOS.h"
 #include <memory>
@@ -87,4 +88,18 @@ extern "C" void app_main(void) {
 
     // TODO: make constant time
     Sensor uwb(UWB_ID, "uwb_sensor", 1000);*/
+
+    uint8_t data[2];
+    ESP_ERROR_CHECK(i2c_master_init());
+    ESP_LOGI(TAG, "I2C initialized successfully");
+
+    // /* Read the MPU9250 WHO_AM_I register, on power up the register should have the value 0x71 */
+    // ESP_ERROR_CHECK(mpu9250_register_read(MPU9250_WHO_AM_I_REG_ADDR, data, 1));
+    // ESP_LOGI(TAG, "WHO_AM_I = %X", data[0]);
+
+    /* Demonstrate writing by reseting the MPU9250 */
+    ESP_ERROR_CHECK(imu_register_write_byte(IMU_SENSOR_ADDR, 3));
+
+    ESP_ERROR_CHECK(i2c_driver_delete(I2C_MASTER_NUM));
+    ESP_LOGI(TAG, "I2C unitialized successfully");
 }
