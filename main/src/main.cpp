@@ -102,4 +102,8 @@ extern "C" void app_main(void) {
 
     ESP_ERROR_CHECK(i2c_driver_delete(I2C_MASTER_NUM));
     ESP_LOGI(TAG, "I2C unitialized successfully");
+
+    xTaskCreate(
+        
+    );
 }

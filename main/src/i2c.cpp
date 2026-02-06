@@ -42,7 +42,7 @@ static const char *TAG = "i2c-simple-example";
 #define I2C_MASTER_TIMEOUT_MS       1000
 #define FLAGS_ALLOCATED             0
 
-#define IMU_SENSOR_ADDR                 0x58       /*!< Slave address of the BNO055 */
+#define IMU_SENSOR_ADDR                 0x28       /*!< Slave address of the BNO055 */
 
 
 // /**
