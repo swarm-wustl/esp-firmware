@@ -9,7 +9,7 @@ The types declared here represent the physical hardware of the system.
 This namespace should only rely on board-specific implementation types (e.g., ESP32).
 */
 namespace HW {
-    constexpr size_t MOTOR_COUNT = 2;
+    constexpr size_t MOTOR_COUNT = 4;
 
     // TODO: create a HAL::ESP32 that handles microcontroller-specific interactions
     // Then, anything like a MotorDriver, UWB sensor, etc. uses that HAL.
