@@ -42,35 +42,35 @@ For example, you could have multiple motor drivers, sensors, etc.
 The types used should only be taken from hardware.h's defintions.
 */
 extern "C" void app_main(void) {
-#if defined(CONFIG_MICRO_ROS_ESP_NETIF_WLAN) || defined(CONFIG_MICRO_ROS_ESP_NETIF_ENET)
-    ESP_ERROR_CHECK(uros_network_interface_initialize());
-#endif
+// #if defined(CONFIG_MICRO_ROS_ESP_NETIF_WLAN) || defined(CONFIG_MICRO_ROS_ESP_NETIF_ENET)
+//     ESP_ERROR_CHECK(uros_network_interface_initialize());
+// #endif
 
-    // Make the struct static so it lives as long as the program (incase mani() ever terminates)
-    static ConsumerTaskData consumerTaskData {
-        HW::MotorDriver{},
-        Consumer::QueueType{}
-    };
+//     // Make the struct static so it lives as long as the program (incase mani() ever terminates)
+//     static ConsumerTaskData consumerTaskData {
+//         HW::MotorDriver{},
+//         Consumer::QueueType{}
+//     };
 
-    log("Hello world!");
+//     log("Hello world!");
 
-    xTaskCreate(
-        rosTaskWrapper,
-        "uros_task",
-        4096, // TODO: see https://github.com/micro-ROS/micro_ros_espidf_component/blob/cd1da2b3d7d73f48743a2c42ac0e915cd751bb74/examples/int32_publisher/main/main.c#L105
-        (void*)&consumerTaskData.queue,
-        configMAX_PRIORITIES - 1,
-        NULL
-    );
+//     xTaskCreate(
+//         rosTaskWrapper,
+//         "uros_task",
+//         4096, // TODO: see https://github.com/micro-ROS/micro_ros_espidf_component/blob/cd1da2b3d7d73f48743a2c42ac0e915cd751bb74/examples/int32_publisher/main/main.c#L105
+//         (void*)&consumerTaskData.queue,
+//         configMAX_PRIORITIES - 1,
+//         NULL
+//     );
 
-    xTaskCreate(
-        consumerTaskWrapper,
-        "consumer_task",
-        4096,
-        (void*)&consumerTaskData,
-        configMAX_PRIORITIES - 1,
-        NULL
-    );
+//     xTaskCreate(
+//         consumerTaskWrapper,
+//         "consumer_task",
+//         4096,
+//         (void*)&consumerTaskData,
+//         configMAX_PRIORITIES - 1,
+//         NULL
+//     );
 
     // Create sensor task and register the task handle for the timers
     // TODO: wrap this in a function?
@@ -89,6 +89,7 @@ extern "C" void app_main(void) {
     // TODO: make constant time
     Sensor uwb(UWB_ID, "uwb_sensor", 1000);*/
 
+    log("Testing I2C");
     uint8_t data[2];
     ESP_ERROR_CHECK(i2c_master_init());
     ESP_LOGI(TAG, "I2C initialized successfully");
@@ -98,12 +99,8 @@ extern "C" void app_main(void) {
     // ESP_LOGI(TAG, "WHO_AM_I = %X", data[0]);
 
     /* Demonstrate writing by reseting the MPU9250 */
-    ESP_ERROR_CHECK(imu_register_write_byte(IMU_SENSOR_ADDR, 3));
+    ESP_ERROR_CHECK(imu_register_write_byte(IMU_PWR_MGMT_1, 1 << IMU_PWR_MGMT_1_RESET_BIT));
 
     ESP_ERROR_CHECK(i2c_driver_delete(I2C_MASTER_NUM));
     ESP_LOGI(TAG, "I2C unitialized successfully");
-
-    xTaskCreate(
-        
-    );
 }

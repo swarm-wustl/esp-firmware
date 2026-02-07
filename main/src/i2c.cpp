@@ -42,7 +42,9 @@ static const char *TAG = "i2c-simple-example";
 #define I2C_MASTER_TIMEOUT_MS       1000
 #define FLAGS_ALLOCATED             0
 
-#define IMU_SENSOR_ADDR                 0x28       /*!< Slave address of the BNO055 */
+#define IMU_SENSOR_ADDR             0x68       /*!< Slave address of the MPU6050 */
+#define IMU_PWR_MGMT_1              0x6B
+#define IMU_PWR_MGMT_1_RESET_BIT    7
 
 
 // /**
@@ -88,13 +90,14 @@ static esp_err_t i2c_master_init(void)
     int i2c_master_port = I2C_MASTER_NUM;
 
     // Initialize the configuration struct
-    i2c_config_t conf;
+    i2c_config_t conf = {};
     conf.mode = I2C_MODE_MASTER;
     conf.sda_io_num = I2C_MASTER_SDA_IO;
     conf.scl_io_num = I2C_MASTER_SCL_IO;
     conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
     conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
     conf.master.clk_speed = I2C_MASTER_FREQ_HZ;
+    conf.clk_flags = I2C_SCLK_SRC_FLAG_FOR_NOMAL;
 
     // Apply the configuration
     esp_err_t err = i2c_param_config(i2c_master_port, &conf);
