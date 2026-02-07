@@ -94,12 +94,12 @@ extern "C" void app_main(void) {
     ESP_ERROR_CHECK(i2c_master_init());
     ESP_LOGI(TAG, "I2C initialized successfully");
 
-    /* Read the MPU9250 WHO_AM_I register, on power up the register should have the value 0x71 */
+    /* Read the MPU6050 WHO_AM_I register, on power up the register should have the value 0x71 */
     ESP_ERROR_CHECK(mpu9250_register_read(IMU_WHO_AM_I_ADDR , data, 1));
     ESP_LOGI(TAG, "WHO_AM_I = %X", data[0]);
     ESP_LOGI(TAG, "I2C read successfully");
 
-    /* Demonstrate writing by reseting the MPU9250 */
+    /* Demonstrate writing by reseting the MPU6050 */
     ESP_ERROR_CHECK(imu_register_write_byte(IMU_PWR_MGMT_1, 1 << IMU_PWR_MGMT_1_RESET_BIT));
     ESP_LOGI(TAG, "I2C written successfully");
 
