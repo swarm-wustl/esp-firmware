@@ -1,17 +1,18 @@
 #include "esp32.h"
 
-#include "hardware.h"
 #include "error.h"
+#include "hardware.h"
 
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "driver/uart.h"
 
 #include <algorithm>
+#include <cmath>
 
 // ~10 cm as of 2026-01-24
 #define WHEELBASE 0.10 // dist between wheels (m)
-#define ANGULAR_MULTIPLIER 2.0
+#define ANGULAR_MULTIPLIER 3.0
 
 #define LEDC_TIMER LEDC_TIMER_0
 #define LEDC_MODE LEDC_LOW_SPEED_MODE
@@ -51,63 +52,39 @@
 #define FLOAT_TOLERANCE 0.01
 
 static void setup_pwm() {
-  ledc_timer_config_t ledc_timer = {
-      .speed_mode = LEDC_MODE,
-      .duty_resolution = LEDC_DUTY_RES,
-      .timer_num = LEDC_TIMER,
-      .freq_hz = LEDC_FREQUENCY,
-      .clk_cfg = LEDC_AUTO_CLK,
-      .deconfigure      = false // Preston originally had this commented out -- not sure why
-  };
+  // LEDC timer is used for LED dimming via PWM
+  // but works well for motor control
+  ledc_timer_config_t ledc_timer = {.speed_mode = LEDC_MODE,
+                                    .duty_resolution = LEDC_DUTY_RES,
+                                    .timer_num = LEDC_TIMER,
+                                    .freq_hz = LEDC_FREQUENCY,
+                                    .clk_cfg = LEDC_AUTO_CLK,
+                                    .deconfigure = false};
   ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
 
-  ledc_channel_config_t ledc_channel_left_motor = {
-      .gpio_num = ENA,                   // Assign GPIO pin
-      .speed_mode = LEDC_LOW_SPEED_MODE, // LEDC low-speed mode
-      .channel = LEFT_MOTOR_CHANNEL,     // Set motor channel
-      .intr_type = LEDC_INTR_DISABLE,    // Disable interrupts
-      .timer_sel = LEDC_TIMER_0,         // Use timer 0
-      .duty = 0,                         // Initial duty cycle (0%)
-      .hpoint = 0,                       // Default hpoint value
-      .flags = {.output_invert = 0}      // No output inversion
+  // Motor to pin mapping
+  struct MotorConfig {
+    gpio_num_t pin;
+    ledc_channel_t channel;
   };
-  ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel_left_motor));
 
-  ledc_channel_config_t ledc_channel_right_motor = {
-      .gpio_num = ENB,                   // Assign GPIO pin
-      .speed_mode = LEDC_LOW_SPEED_MODE, // LEDC low-speed mode
-      .channel = RIGHT_MOTOR_CHANNEL,    // Set motor channel
-      .intr_type = LEDC_INTR_DISABLE,    // Disable interrupts
-      .timer_sel = LEDC_TIMER_0,         // Use timer 0
-      .duty = 0,                         // Initial duty cycle (0%)
-      .hpoint = 0,                       // Default hpoint value
-      .flags = {.output_invert = 0}      // No output inversion
-  };
-  ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel_right_motor));
+  MotorConfig motors[] = {{ENA, LEFT_MOTOR_CHANNEL},
+                          {ENB, RIGHT_MOTOR_CHANNEL},
+                          {ENC, LOWER_LEFT_MOTOR_CHANNEL},
+                          {END, LOWER_RIGHT_MOTOR_CHANNEL}};
 
-  ledc_channel_config_t ledc_channel_lower_left_motor = {
-      .gpio_num = ENC,                     // Assign GPIO pin
-      .speed_mode = LEDC_LOW_SPEED_MODE,   // LEDC low-speed mode
-      .channel = LOWER_LEFT_MOTOR_CHANNEL, // Set motor channel
-      .intr_type = LEDC_INTR_DISABLE,      // Disable interrupts
-      .timer_sel = LEDC_TIMER_0,           // Use timer 0
-      .duty = 0,                           // Initial duty cycle (0%)
-      .hpoint = 0,                         // Default hpoint value
-      .flags = {.output_invert = 0}        // No output inversion
-  };
-  ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel_lower_left_motor));
-
-  ledc_channel_config_t ledc_channel_lower_right_motor = {
-      .gpio_num = END,                      // Assign GPIO pin
-      .speed_mode = LEDC_LOW_SPEED_MODE,    // LEDC low-speed mode
-      .channel = LOWER_RIGHT_MOTOR_CHANNEL, // Set motor channel
-      .intr_type = LEDC_INTR_DISABLE,       // Disable interrupts
-      .timer_sel = LEDC_TIMER_0,            // Use timer 0
-      .duty = 0,                            // Initial duty cycle (0%)
-      .hpoint = 0,                          // Default hpoint value
-      .flags = {.output_invert = 0}         // No output inversion
-  };
-  ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel_lower_right_motor));
+  // Configure motors
+  for (const auto &motor : motors) {
+    ledc_channel_config_t channel_config = {.gpio_num = motor.pin,
+                                            .speed_mode = LEDC_LOW_SPEED_MODE,
+                                            .channel = motor.channel,
+                                            .intr_type = LEDC_INTR_DISABLE,
+                                            .timer_sel = LEDC_TIMER_0,
+                                            .duty = 0,
+                                            .hpoint = 0,
+                                            .flags = {.output_invert = 0}};
+    ESP_ERROR_CHECK(ledc_channel_config(&channel_config));
+  }
 }
 
 static uint32_t compute_duty_cycle(float pwm_ratio) {
@@ -167,14 +144,14 @@ void ESP32::L298NMotorDriver::run(const Motor::Command &cmd) {
     pin_a = IN5;
     pin_b = IN6;
     pwm_channel = LOWER_LEFT_MOTOR_CHANNEL;
-	log("ran motor lower left");
+    log("ran motor lower left");
     break;
 
   case Motor::Name::LOWER_RIGHT:
     pin_a = IN7;
     pin_b = IN8;
     pwm_channel = LOWER_RIGHT_MOTOR_CHANNEL;
-	log("ran motor lower right");
+    log("ran motor lower right");
     break;
 
   default:
@@ -195,67 +172,51 @@ void ESP32::L298NMotorDriver::run(const Motor::Command &cmd) {
 }
 
 template <>
-std::array<Motor::Command, HW::MOTOR_COUNT> ESP32::DifferentialDriveController::convert_twist(
+std::array<Motor::Command, HW::MOTOR_COUNT>
+ESP32::DifferentialDriveController::convert_twist(
     geometry_msgs__msg__Twist msg) {
-  // TODO: this should set target RPMs for each motor and use PID with encoder
-  // feedback to ensure that that's being met Linear and angular velocity are
-  // given in m/s and rad/s from ROS2 The units here are all kind of fake
-  double linear_velocity = msg.linear.x;
-  double angular_velocity = msg.angular.z; // yaw
 
-  Motor::Direction dir_R;
-  Motor::Direction dir_L;
+  auto [target_L, target_R] =
+      calculate_drive_targets(msg.linear.x, msg.angular.z);
 
-  // v_R = v + \frac{L\omega}{2}
-  // v_L = v - \frac{L\omega}{2}
-  double pwm_ratio_R =
-      linear_velocity + ANGULAR_MULTIPLIER * angular_velocity * WHEELBASE / 2;
-  double pwm_ratio_L =
-      linear_velocity - ANGULAR_MULTIPLIER * angular_velocity * WHEELBASE / 2;
-
-  if (pwm_ratio_R > 0) {
-    dir_R = Motor::Direction::FORWARD;
-  } else if (pwm_ratio_R < 0) {
-    dir_R = Motor::Direction::REVERSE;
-  } else {
-    dir_R = Motor::Direction::STOP;
-  }
-
-  if (pwm_ratio_L > 0) {
-    dir_L = Motor::Direction::FORWARD;
-  } else if (pwm_ratio_L < 0) {
-    dir_L = Motor::Direction::REVERSE;
-  } else {
-    dir_L = Motor::Direction::STOP;
-  }
-
-  // PWM ratio must be [0, 1]
-  pwm_ratio_R = std::clamp(std::abs(pwm_ratio_R), 0.0, 1.0);
-  pwm_ratio_L = std::clamp(std::abs(pwm_ratio_L), 0.0, 1.0);
-
-  /// Lower motors
-  double front_turn_velocity = msg.linear.y;
-
-  Motor::Direction dir_R_lower;
-  Motor::Direction dir_L_lower;
-  double pwm_ratio_L_lower = 0.5;
-  double pwm_ratio_R_lower = 0.5;
-
-  if (front_turn_velocity > 0) {
-	dir_R_lower = Motor::Direction::FORWARD;
-	dir_L_lower = Motor::Direction::FORWARD;
-  } else if (front_turn_velocity < 0) {
-	dir_R_lower = Motor::Direction::REVERSE;
-	dir_L_lower = Motor::Direction::REVERSE;
-  } else {
-	dir_R_lower = Motor::Direction::STOP;
-	dir_L_lower = Motor::Direction::STOP;
-  }
+  // Overload linear y (strafing) to rotate the front face
+  double target_lower =
+      (msg.linear.y == 0.0) ? 0.0 : std::copysign(0.5, msg.linear.y);
 
   return std::array<Motor::Command, HW::MOTOR_COUNT>{
-      Motor::Command{Motor::Name::LEFT, dir_L, pwm_ratio_L},
-      Motor::Command{Motor::Name::RIGHT, dir_R, pwm_ratio_R},
-      Motor::Command{Motor::Name::LOWER_LEFT, dir_L_lower, pwm_ratio_L_lower},
-      Motor::Command{Motor::Name::LOWER_RIGHT, dir_R_lower, pwm_ratio_R_lower},
+      create_command(Motor::Name::LEFT, target_L),
+      create_command(Motor::Name::RIGHT, target_R),
+      create_command(Motor::Name::LOWER_LEFT, target_lower),
+      create_command(Motor::Name::LOWER_RIGHT, target_lower),
   };
+}
+
+std::pair<double, double>
+ESP32::DifferentialDriveController::calculate_drive_targets(double linear_x,
+                                                            double angular_z) {
+  // v_R = v + (L * w) / 2
+  // v_L = v - (L * w) / 2
+  double angular_component = (ANGULAR_MULTIPLIER * angular_z * WHEELBASE) / 2.0;
+
+  return {
+      linear_x - angular_component, // Left
+      linear_x + angular_component  // Right
+  };
+}
+
+Motor::Command
+ESP32::DifferentialDriveController::create_command(Motor::Name name,
+                                                   double value) {
+  Motor::Direction dir = Motor::Direction::STOP;
+
+  if (value > 0) {
+    dir = Motor::Direction::FORWARD;
+  } else if (value < 0) {
+    dir = Motor::Direction::REVERSE;
+  }
+
+  // TODO: PID controller
+  double pwm = std::clamp(std::abs(value), 0.0, 1.0);
+
+  return Motor::Command{name, dir, pwm};
 }

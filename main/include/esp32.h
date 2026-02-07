@@ -8,31 +8,35 @@
 #include "hal.h"
 
 namespace ESP32 {
-    class L298NMotorDriver {
-    public:
-        L298NMotorDriver();
+class L298NMotorDriver {
+public:
+  L298NMotorDriver();
 
-        L298NMotorDriver(const L298NMotorDriver&) = delete;
-        L298NMotorDriver& operator=(const L298NMotorDriver&) = delete;
+  L298NMotorDriver(const L298NMotorDriver &) = delete;
+  L298NMotorDriver &operator=(const L298NMotorDriver &) = delete;
 
-        L298NMotorDriver(L298NMotorDriver&&) = default;
-        L298NMotorDriver& operator=(L298NMotorDriver&&) = default;
-        
-        void run(const Motor::Command& cmd);
-        void stop();
-    };
+  L298NMotorDriver(L298NMotorDriver &&) = default;
+  L298NMotorDriver &operator=(L298NMotorDriver &&) = default;
 
-    class DifferentialDriveController {
-    public:
-        DifferentialDriveController() = delete;
+  void run(const Motor::Command &cmd);
+  void stop();
+};
 
-        static Drive::Type type() {
-            return Drive::Type::DIFFERENTIAL;
-        }
+class DifferentialDriveController {
+public:
+  DifferentialDriveController() = delete;
 
-        template <size_t MotorCount>
-        static std::array<Motor::Command, MotorCount> convert_twist(geometry_msgs__msg__Twist msg);
-    };
-}
+  static Drive::Type type() { return Drive::Type::DIFFERENTIAL; }
+
+  template <size_t MotorCount>
+
+  static std::array<Motor::Command, MotorCount>
+  convert_twist(geometry_msgs__msg__Twist msg);
+
+  static std::pair<double, double> calculate_drive_targets(double linear_x,
+                                                           double angular_z);
+  static Motor::Command create_command(Motor::Name name, double value);
+};
+} // namespace ESP32
 
 #endif
