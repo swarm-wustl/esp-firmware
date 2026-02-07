@@ -11,29 +11,29 @@
 // TODO: make templated and move to consumer.h?
 // TODO: make struct so we can pass multiple parameters
 
-struct ConsumerTaskData {
-    HW::MotorDriver motorDriver;
-    Consumer::QueueType queue; 
-};
+// struct ConsumerTaskData {
+//     HW::MotorDriver motorDriver;
+//     Consumer::QueueType queue; 
+// };
 
-static void consumerTaskWrapper(void* pvParameters) {
-    ConsumerTaskData* data = reinterpret_cast<ConsumerTaskData*>(pvParameters);
+// static void consumerTaskWrapper(void* pvParameters) {
+//     ConsumerTaskData* data = reinterpret_cast<ConsumerTaskData*>(pvParameters);
 
-    Consumer::spin(
-        data->motorDriver,
-        data->queue
-    );
+//     Consumer::spin(
+//         data->motorDriver,
+//         data->queue
+//     );
 
-    vTaskDelete(nullptr);
-}
+//     vTaskDelete(nullptr);
+// }
 
-static void rosTaskWrapper(void* pvParameters) {
-    Consumer::QueueType* queue = reinterpret_cast<Consumer::QueueType*>(pvParameters);
+// static void rosTaskWrapper(void* pvParameters) {
+//     Consumer::QueueType* queue = reinterpret_cast<Consumer::QueueType*>(pvParameters);
 
-    ROS::spin(*queue);
+//     ROS::spin(*queue);
 
-    vTaskDelete(nullptr);
-}
+//     vTaskDelete(nullptr);
+// }
 
 /*
 Main Function
@@ -94,12 +94,14 @@ extern "C" void app_main(void) {
     ESP_ERROR_CHECK(i2c_master_init());
     ESP_LOGI(TAG, "I2C initialized successfully");
 
-    // /* Read the MPU9250 WHO_AM_I register, on power up the register should have the value 0x71 */
-    // ESP_ERROR_CHECK(mpu9250_register_read(MPU9250_WHO_AM_I_REG_ADDR, data, 1));
-    // ESP_LOGI(TAG, "WHO_AM_I = %X", data[0]);
+    /* Read the MPU9250 WHO_AM_I register, on power up the register should have the value 0x71 */
+    ESP_ERROR_CHECK(mpu9250_register_read(IMU_WHO_AM_I_ADDR , data, 1));
+    ESP_LOGI(TAG, "WHO_AM_I = %X", data[0]);
+    ESP_LOGI(TAG, "I2C read successfully");
 
     /* Demonstrate writing by reseting the MPU9250 */
     ESP_ERROR_CHECK(imu_register_write_byte(IMU_PWR_MGMT_1, 1 << IMU_PWR_MGMT_1_RESET_BIT));
+    ESP_LOGI(TAG, "I2C written successfully");
 
     ESP_ERROR_CHECK(i2c_driver_delete(I2C_MASTER_NUM));
     ESP_LOGI(TAG, "I2C unitialized successfully");

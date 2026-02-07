@@ -43,17 +43,18 @@ static const char *TAG = "i2c-simple-example";
 #define FLAGS_ALLOCATED             0
 
 #define IMU_SENSOR_ADDR             0x68       /*!< Slave address of the MPU6050 */
+#define IMU_WHO_AM_I_ADDR           0x75
 #define IMU_PWR_MGMT_1              0x6B
 #define IMU_PWR_MGMT_1_RESET_BIT    7
 
 
-// /**
-//  * @brief Read a sequence of bytes from a MPU9250 sensor registers
-//  */
-// static esp_err_t mpu9250_register_read(uint8_t reg_addr, uint8_t *data, size_t len)
-// {
-//     return i2c_master_write_read_device(I2C_MASTER_NUM, MPU9250_SENSOR_ADDR, &reg_addr, 1, data, len, I2C_MASTER_TIMEOUT_MS / portTICK_RATE_MS);
-// }
+/**
+ * @brief Read a sequence of bytes from a MPU6050 sensor registers
+ */
+static esp_err_t mpu9250_register_read(uint8_t reg_addr, uint8_t *data, size_t len)
+{
+    return i2c_master_write_read_device(I2C_MASTER_NUM, IMU_SENSOR_ADDR, &reg_addr, 1, data, len, pdMS_TO_TICKS(I2C_MASTER_TIMEOUT_MS));
+}
 
 
 static esp_err_t imu_register_write_byte(uint8_t reg_addr, uint8_t data)
