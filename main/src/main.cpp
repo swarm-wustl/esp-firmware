@@ -7,6 +7,8 @@
 
 #include "freertos/FreeRTOS.h"
 #include <memory>
+#include <chrono>
+#include <thread>
 
 // TODO: make templated and move to consumer.h?
 // TODO: make struct so we can pass multiple parameters
@@ -95,9 +97,24 @@ extern "C" void app_main(void) {
     ESP_LOGI(TAG, "I2C initialized successfully");
 
     /* Read the MPU6050 WHO_AM_I register, on power up the register should have the value 0x71 */
-    ESP_ERROR_CHECK(mpu9250_register_read(IMU_WHO_AM_I_ADDR , data, 1));
+    ESP_ERROR_CHECK(mpu6050_register_read(IMU_WHO_AM_I_ADDR , data, 1));
     ESP_LOGI(TAG, "WHO_AM_I = %X", data[0]);
     ESP_LOGI(TAG, "I2C read successfully");
+
+    int16_t gyroX;
+    int16_t gyroY;
+    int16_t gyroZ;
+
+    while (1){
+        ESP_ERROR_CHECK(imu_read_gyroscope_data(&gyroX, &gyroY, &gyroZ));
+
+        ESP_LOGI(TAG, "GYROX = %d", gyroX);
+        ESP_LOGI(TAG, "GYROY = %d", gyroY);
+        ESP_LOGI(TAG, "GYROZ = %d", gyroZ);
+        ESP_LOGI(TAG, "Gyroscope read successfully");
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+   
 
     /* Demonstrate writing by reseting the MPU6050 */
     ESP_ERROR_CHECK(imu_register_write_byte(IMU_PWR_MGMT_1, 1 << IMU_PWR_MGMT_1_RESET_BIT));

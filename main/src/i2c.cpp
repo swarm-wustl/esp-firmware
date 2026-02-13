@@ -1,32 +1,6 @@
-// #include "driver/i2c.h"
 
-// #define I2C_MASTER_SCL_IO    14  // Default I2C clock
-// #define I2C_MASTER_SDA_IO    4// Default I2C data
-// #define TEST_I2C_PORT        0   // I2C port number (0 or 1)
-
-// i2c_master_bus_config_t i2c_mst_config = {
-//     .clk_source = I2C_CLK_SRC_DEFAULT,
-//     .i2c_port = TEST_I2C_PORT,
-//     .scl_io_num = I2C_MASTER_SCL_IO,
-//     .sda_io_num = I2C_MASTER_SDA_IO,
-//     .glitch_ignore_cnt = 7,
-//     .flags.enable_internal_pullup = true,
-// };
-
-// i2c_master_bus_handle_t bus_handle;
-// ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_mst_config, &bus_handle));
-
-// i2c_device_config_t dev_cfg = {
-//     .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-//     .device_address = 0x58,
-//     .scl_speed_hz = 100000,
-// };
-
-// i2c_master_dev_handle_t dev_handle;
-// ESP_ERROR_CHECK(i2c_master_bus_add_device(bus_handle, &dev_cfg, &dev_handle));
-// ESP_ERROR_CHECK(i2c_master_transmit(dev_handle, data_wr, DATA_LENGTH, -1));
-
-// this code uses version 4.4 of the i2c driver:https://docs.espressif.com/projects/esp-idf/en/v4.4/esp32/api-reference/peripherals/i2c.html
+// this code uses version 4.4 of the i2c driver:
+// https://docs.espressif.com/projects/esp-idf/en/v4.4/esp32/api-reference/peripherals/i2c.html
 // The IMU datasheet and register map/info is listed below:
 // https://invensense.tdk.com/wp-content/uploads/2015/02/MPU-6000-Datasheet1.pdf
 // https://invensense.tdk.com/wp-content/uploads/2015/02/MPU-6000-Register-Map1.pdf
@@ -51,11 +25,27 @@ static const char *TAG = "i2c-simple-example";
 #define IMU_PWR_MGMT_1              0x6B
 #define IMU_PWR_MGMT_1_RESET_BIT    7
 
+//Gyroscope measurement bits - they are organized in a big-endian byte order
+#define GYRO_XOUT_H                 0x43
+#define GYRO_XOUT_L                 0x44
+#define GYRO_YOUT_H                 0x45
+#define GYRO_YOUT_L                 0x46
+#define GYRO_ZOUT_H                 0x47
+#define GYRO_ZOUT_L                 0x48
+
+//Accelerometer measurement bits - they are organized in a big-endian byte order
+#define ACCEL_XOUT_H                 0x3B
+#define ACCEL_XOUT_L                 0x3C
+#define ACCEL_YOUT_H                 0x3D
+#define ACCEL_YOUT_L                 0x3E
+#define ACCEL_ZOUT_H                 0x3F
+#define ACCEL_ZOUT_L                 0x40
+
 
 /**
  * @brief Read a sequence of bytes from a MPU6050 sensor registers
  */
-static esp_err_t mpu9250_register_read(uint8_t reg_addr, uint8_t *data, size_t len)
+static esp_err_t mpu6050_register_read(uint8_t reg_addr, uint8_t *data, size_t len)
 {
     return i2c_master_write_read_device(I2C_MASTER_NUM, IMU_SENSOR_ADDR, &reg_addr, 1, data, len, pdMS_TO_TICKS(I2C_MASTER_TIMEOUT_MS));
 }
@@ -69,6 +59,30 @@ static esp_err_t imu_register_write_byte(uint8_t reg_addr, uint8_t data)
     ret = i2c_master_write_to_device(I2C_MASTER_NUM, IMU_SENSOR_ADDR, write_buf, sizeof(write_buf), I2C_MASTER_TIMEOUT_MS);
 
     return ret;
+}
+
+static esp_err_t imu_read_gyroscope_data(int16_t *gx, int16_t *gy, int16_t *gz){
+    uint8_t raw[6];
+    esp_err_t ret = mpu6050_register_read(GYRO_XOUT_H, raw, 6);
+    if (ret != ESP_OK) return ret;
+
+    *gx = (int16_t)((raw[0] << 8) | raw[1]);
+    *gy = (int16_t)((raw[2] << 8) | raw[3]);
+    *gz = (int16_t)((raw[4] << 8) | raw[5]);
+
+    return ESP_OK;
+}
+
+static esp_err_t imu_read_accelerometer_data(int16_t *gx, int16_t *gy, int16_t *gz){
+    uint8_t raw[6];
+    esp_err_t ret = mpu6050_register_read(ACCEL_XOUT_H, raw, 6);
+    if (ret != ESP_OK) return ret;
+
+    *gx = (int16_t)((raw[0] << 8) | raw[1]);
+    *gy = (int16_t)((raw[2] << 8) | raw[3]);
+    *gz = (int16_t)((raw[4] << 8) | raw[5]);
+
+    return ESP_OK;
 }
 
 /**
