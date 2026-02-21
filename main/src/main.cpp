@@ -10,6 +10,9 @@
 #include <chrono>
 #include <thread>
 
+#define LSBSENS_GYRO 131 //LSB sensitivity for the gyroscope
+#define LSBSENS_ACCEL 16384 //LSB sensitivity for the accelerometer
+
 // TODO: make templated and move to consumer.h?
 // TODO: make struct so we can pass multiple parameters
 
@@ -94,7 +97,16 @@ extern "C" void app_main(void) {
     log("Testing I2C");
     uint8_t data[2];
     ESP_ERROR_CHECK(i2c_master_init());
+
+    
     ESP_LOGI(TAG, "I2C initialized successfully");
+
+    //turn off sleep mode
+    ESP_ERROR_CHECK(imu_register_write_byte(IMU_PWR_MGMT_1, 0x00));
+    ESP_LOGI(TAG, "MPU6050 awakened");
+
+    // give sensor time to stabilize
+    vTaskDelay(pdMS_TO_TICKS(100));
 
     /* Read the MPU6050 WHO_AM_I register, on power up the register should have the value 0x71 */
     ESP_ERROR_CHECK(mpu6050_register_read(IMU_WHO_AM_I_ADDR , data, 1));
@@ -105,14 +117,29 @@ extern "C" void app_main(void) {
     int16_t gyroY;
     int16_t gyroZ;
 
+
+    int16_t accelX;
+    int16_t accelY;
+    int16_t accelZ;
+
     while (1){
         ESP_ERROR_CHECK(imu_read_gyroscope_data(&gyroX, &gyroY, &gyroZ));
 
-        ESP_LOGI(TAG, "GYROX = %d", gyroX);
-        ESP_LOGI(TAG, "GYROY = %d", gyroY);
-        ESP_LOGI(TAG, "GYROZ = %d", gyroZ);
+        // read in angles per second
+        ESP_LOGI(TAG, "GYROX = %.4f", ((float)gyroX)/LSBSENS_GYRO);
+        ESP_LOGI(TAG, "GYROY = %.4f", ((float)gyroY)/LSBSENS_GYRO);
+        ESP_LOGI(TAG, "GYROZ = %.4f", ((float)gyroZ)/LSBSENS_GYRO);
         ESP_LOGI(TAG, "Gyroscope read successfully");
-        std::this_thread::sleep_for(std::chrono::seconds(1));
+
+        ESP_ERROR_CHECK(imu_read_accelerometer_data(&accelX, &accelY, &accelZ));
+
+        //read in g (9.81 m/s^2)
+        ESP_LOGI(TAG, "ACCELX = %.4f", ((float)accelX)/LSBSENS_ACCEL);
+        ESP_LOGI(TAG, "ACCELY = %.4f", ((float)accelY)/LSBSENS_ACCEL);
+        ESP_LOGI(TAG, "ACCELZ = %.4f", ((float)accelZ)/LSBSENS_ACCEL);
+        ESP_LOGI(TAG, "Accelerometer read successfully");
+        
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
    
 
