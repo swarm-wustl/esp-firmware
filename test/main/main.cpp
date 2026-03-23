@@ -6,4 +6,5 @@ TEST_CASE("sanity check", "[basic]") {
 
 extern "C" void app_main(void) {
     unity_run_all_tests();
+    unity_run_tests_by_tag("[dwm]", false);
 }

@@ -5,10 +5,6 @@
 #include <cstdio>
 #include <iostream>
 
-enum class Result {
-    SUCCESS
-};
-
 /*
 - Prints a printf-formatted message to stderr
 - Appends a newline character

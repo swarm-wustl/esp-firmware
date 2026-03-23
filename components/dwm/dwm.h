@@ -1,7 +1,7 @@
 #ifndef DWM_H
 #define DWM_H
 
-#include "hal.h"
+#include "swarm_hal.h"
 #include <bit>
 #include <cstring>
 #include <string>
@@ -268,13 +268,13 @@ private:
     std::array<std::byte, size_> data_{};
 };
 
-template <HAL::GenericSPIController SPI>
+template <HAL::GenericSPIController SPI, HAL::GenericGPIOController GPIO>
 class DWM {
 static_assert(std::endian::native == std::endian::little, 
               "DWM1000 requires little-endian architecture");
 
 public:
-    DWM(SPI spi, uint8_t rst_pin, uint8_t irq_pin);
+    DWM(SPI spi, GPIO gpio, uint8_t rst_pin, uint8_t irq_pin);
     ~DWM() = default;
     DWM(const DWM&) = delete;
     void operator=(const DWM&) = delete;
@@ -370,6 +370,7 @@ private:
     void set_tx_preamble_length(PreambleLength pl);
 
     SPI spi_;
+    GPIO gpio_;
     uint8_t rst_pin_{};
     uint8_t irq_pin_{};
 };
