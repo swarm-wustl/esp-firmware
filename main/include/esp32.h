@@ -5,7 +5,10 @@
 #include <driver/spi_common.h>
 #include <driver/spi_master.h>
 
-#include "hal.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+#include "swarm_hal.h"
 #include "driver/gpio.h"
 
 namespace ESP32 {
@@ -53,6 +56,22 @@ namespace ESP32 {
     private:
         int cs_{};
         spi_device_handle_t dev_handle_{};
+    };
+
+    class GPIO {
+    public:
+        GPIO() = default;
+        ~GPIO() = default;
+
+        GPIO(const GPIO&) = delete;
+        void operator=(const GPIO&) = delete;
+
+        GPIO(GPIO&&) = default;
+        GPIO& operator=(GPIO&&) = default;
+
+        void set_direction(gpio_num_t pin, gpio_mode_t mode) { gpio_set_direction(pin, mode); }
+        void set_level(gpio_num_t pin, HAL::Voltage level) { gpio_set_level(pin, HAL::to_level(level)); }
+        void delay_ms(int ms) { vTaskDelay(pdMS_TO_TICKS(ms)); }
     };
 }
 

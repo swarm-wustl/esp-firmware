@@ -45,7 +45,8 @@ extern "C" void app_main(void) {
     log("Testing UWB");
 
     HW::SPI spi{GPIO_NUM_4}; // TODO: put pins in a config somewhere
-    DWM dwm_sensor{std::move(spi), GPIO_NUM_27, GPIO_NUM_34};
+    HW::GPIO gpio{};
+    DWM dwm_sensor{std::move(spi), std::move(gpio), GPIO_NUM_27, GPIO_NUM_34};
 
     while (true) {
         vTaskDelay(1);

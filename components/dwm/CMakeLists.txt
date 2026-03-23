@@ -1,3 +1,3 @@
-idf_component_register(SRCS "dwm.cpp"
+idf_component_register(SRCS ""
                        INCLUDE_DIRS "."
                        REQUIRES swarm_hal)
