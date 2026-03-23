@@ -274,7 +274,7 @@ static_assert(std::endian::native == std::endian::little,
               "DWM1000 requires little-endian architecture");
 
 public:
-    DWM(SPI spi, GPIO gpio, uint8_t rst_pin, uint8_t irq_pin) :
+    DWM(SPI&& spi, GPIO gpio, uint8_t rst_pin, uint8_t irq_pin) :
         spi_{std::move(spi)},
     gpio_{std::move(gpio)},
     rst_pin_{rst_pin}, irq_pin_{irq_pin}
