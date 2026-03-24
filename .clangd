@@ -1,8 +1,10 @@
 CompileFlags:
   Remove: [-f*, -m*]
+  CompilationDatabase: build
 
 ---
 If:
   PathMatch: ".*/test/.*"
 CompileFlags:
   CompilationDatabase: test/build
+

@@ -17,12 +17,14 @@
 // https://en.cppreference.com/w/cpp/language/static_assert.html
 template <auto V> constexpr bool dependent_false = false;
 
-static constexpr uint8_t DWM_REG_DEV_ID = 0x00;
-static constexpr uint8_t DWM_REG_SYSTEM_EVENT_STATUS = 0x0F;
-static constexpr uint8_t DWM_REG_SYS_TIME = 0x06;
-static constexpr uint8_t DWM_REG_RX_TIME = 0x15;
-static constexpr uint8_t DWM_REG_TX_TIME = 0x17;
-static constexpr uint8_t DWM_REG_TX_FCTRL = 0x08;
+enum class DWMRegisterID : uint8_t {
+  DEV_ID = 0x00,
+  TX_FCTRL = 0x08,
+  SYS_TIME = 0x06,
+  SYSTEM_EVENT_STATUS = 0x0F,
+  RX_TIME = 0x15,
+  TX_TIME = 0x17,
+};
 
 class DWMTimestamp {
   // Keeps bits [39:9], clears bits [63:40] and [8:0]
@@ -47,19 +49,21 @@ private:
   uint64_t raw_time_{};
 };
 
-template <uint8_t ID>
+template <DWMRegisterID ID>
 concept IsTimestampRegister =
-    ID == DWM_REG_SYS_TIME || ID == DWM_REG_TX_TIME || ID == DWM_REG_RX_TIME;
+    ID == DWMRegisterID::SYS_TIME || ID == DWMRegisterID::TX_TIME ||
+    ID == DWMRegisterID::RX_TIME;
 
-template <HAL::GenericSPIController SPI, uint8_t ID> class DWMRegisterView {
+template <HAL::GenericSPIController SPI, DWMRegisterID ID>
+class DWMRegisterView {
   static constexpr size_t size_ = []() constexpr {
-    if constexpr (ID == DWM_REG_DEV_ID)
+    if constexpr (ID == DWMRegisterID::DEV_ID)
       return 4;
-    else if constexpr (ID == DWM_REG_SYSTEM_EVENT_STATUS)
+    else if constexpr (ID == DWMRegisterID::SYSTEM_EVENT_STATUS)
       return 5;
-    else if constexpr (ID == DWM_REG_SYS_TIME)
+    else if constexpr (ID == DWMRegisterID::SYS_TIME)
       return 5;
-    else if constexpr (ID == DWM_REG_TX_FCTRL)
+    else if constexpr (ID == DWMRegisterID::TX_FCTRL)
       return 5;
     else
       static_assert(dependent_false<ID>, "Register size unspecified");
@@ -211,7 +215,7 @@ private:
   void read_data() {
     // Lower 6 bits store actual register
     // MSbit = 0 represents read
-    uint8_t reg = 0x00 | (ID & 0x3F);
+    uint8_t reg = 0x00 | (static_cast<uint8_t>(ID) & 0x3F);
 
     // Store in single-value array to be compatible with SPI controller API
     std::array<const std::byte, 1> tx{std::byte{reg}};
@@ -231,7 +235,7 @@ private:
   void write_data(std::array<std::byte, size_> new_data) {
     // Lower 6 bits store actual register
     // MSbit = 1 represents write
-    uint8_t reg = 0x80 | (ID & 0x3F);
+    uint8_t reg = 0x80 | (static_cast<uint8_t>(ID) & 0x3F);
 
     // Create a std::array one larger than our data
     // This is because the first byte in the transfer needs to be the register
@@ -297,11 +301,6 @@ public:
       : spi_{std::move(spi)}, gpio_{std::move(gpio)}, rst_pin_{rst_pin},
         irq_pin_{irq_pin} {
     hard_reset();
-    //
-    // // std::array<std::byte, DWM_LEN_DEV_ID> rx{};
-    // // read_reg(DWM_REG_DEV_ID, rx);
-    // // log("ID received: %X", std::bit_cast<uint32_t>(rx));
-    //
     // auto id_reg = get_reg_view<DWM_REG_DEV_ID>();
     // // log("Reg size: %u", id_reg.size());
     // // log("Reg value: %X", id_reg.value());
@@ -438,12 +437,29 @@ public:
     return 0;
   }
 
-  auto get_device_id() const { return get_reg_view<DWM_REG_DEV_ID>().value(); }
+  auto get_device_id() const {
+    return get_reg_view<DWMRegisterID::DEV_ID>().value();
+  }
+
+  /*
+   * Pulse Repetition Frequency
+   */
+  PRF tx_prf() const {
+    auto tx_fctrl = get_reg_view<DWMRegisterID::TX_FCTRL>();
+    uint8_t raw_prf = tx_fctrl.bit_range(17, 16); // TODO: constants?
+
+    return static_cast<PRF>(raw_prf);
+  }
+
+  void set_tx_prf(PRF prf) {
+    auto tx_fctrl = get_reg_view<DWMRegisterID::TX_FCTRL>();
+    tx_fctrl.write_bit_range(17, 16, static_cast<uint64_t>(prf));
+  }
 
 private:
-  template <uint8_t ID> using Register = DWMRegisterView<SPI, ID>;
+  template <DWMRegisterID ID> using Register = DWMRegisterView<SPI, ID>;
 
-  template <uint8_t ID> Register<ID> get_reg_view() const {
+  template <DWMRegisterID ID> Register<ID> get_reg_view() const {
     return Register<ID>{const_cast<SPI &>(spi_)};
   }
 
@@ -458,34 +474,19 @@ private:
   }
 
   std::string_view tx_bit_rate() const {
-    auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
+    auto tx_fctrl = get_reg_view<DWMRegisterID::TX_FCTRL>();
     uint8_t raw_bit_rate = tx_fctrl.bit_range(14, 13); // TODO: constants?
 
     return BitRateToString(static_cast<BitRate>(raw_bit_rate));
   }
 
   void set_tx_bit_rate(BitRate br) {
-    auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
+    auto tx_fctrl = get_reg_view<DWMRegisterID::TX_FCTRL>();
     tx_fctrl.write_bit_range(14, 13, static_cast<uint64_t>(br));
   }
 
-  /*
-   * Pulse Repetition Frequency
-   */
-  std::string_view tx_prf() const {
-    auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
-    uint8_t raw_prf = tx_fctrl.bit_range(17, 16); // TODO: constants?
-
-    return PRFToString(static_cast<PRF>(raw_prf));
-  }
-
-  void set_tx_prf(PRF prf) {
-    auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
-    tx_fctrl.write_bit_range(17, 16, static_cast<uint64_t>(prf));
-  }
-
   uint16_t tx_preamble_length() const {
-    auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
+    auto tx_fctrl = get_reg_view<DWMRegisterID::TX_FCTRL>();
 
     uint8_t raw_psr = tx_fctrl.bit_range(19, 18); // TODO: constants?
     uint8_t raw_pe = tx_fctrl.bit_range(21, 20);  // TODO: constants?
@@ -499,7 +500,7 @@ private:
     uint8_t raw_psr = (psr_pe_combined >> 2) & 0b11;
     uint8_t raw_pe = psr_pe_combined & 0b11;
 
-    auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
+    auto tx_fctrl = get_reg_view<DWMRegisterID::TX_FCTRL>();
     tx_fctrl.write_bit_range(19, 18, raw_psr);
     tx_fctrl.write_bit_range(21, 20, raw_pe);
   }

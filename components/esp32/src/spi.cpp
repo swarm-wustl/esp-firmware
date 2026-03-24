@@ -55,15 +55,16 @@ SPI::SPI(int cs) : cs_{cs}, owns_spi_line{true} {
   // TODO: dynamically choose host/port?
   log("SPI init: %d", spi_bus_initialize(SPI2_HOST, &config, SPI_DMA_DISABLED));
 
-  spi_device_handle_t raw_handle;
   log("SPI add device: %d",
-      spi_bus_add_device(SPI2_HOST, &dev_config, &raw_handle));
-  dev_handle_ = SPIHandle{raw_handle};
+      spi_bus_add_device(SPI2_HOST, &dev_config, &dev_handle_));
 }
 
 SPI::~SPI() {
   // TODO: throw?
-  dev_handle_.reset();
+  if (dev_handle_) {
+    log("SPI remove device: %d", spi_bus_remove_device(dev_handle_));
+    dev_handle_ = nullptr;
+  }
 
   if (owns_spi_line) {
     log("SPI deinit: %d", spi_bus_free(SPI2_HOST));
@@ -73,7 +74,7 @@ SPI::~SPI() {
 SPI::SPI(SPI &&other)
     : cs_{std::exchange(other.cs_, -1)},
       owns_spi_line{std::exchange(other.owns_spi_line, false)},
-      dev_handle_{std::move(other.dev_handle_)} {}
+      dev_handle_{std::exchange(other.dev_handle_, nullptr)} {}
 
 SPI &SPI::operator=(SPI &&other) {
   if (this != &other) {
@@ -91,7 +92,7 @@ esp_err_t SPI::transfer_halfduplex(std::span<const std::byte> tx,
                                    .tx_buffer = tx.data(),
                                    .rx_buffer = rx.data()};
 
-  esp_err_t res = spi_device_transmit(dev_handle_.get(), &transaction);
+  esp_err_t res = spi_device_transmit(dev_handle_, &transaction);
 
   if (unlikely(res != ESP_OK)) {
     return res;

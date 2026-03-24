@@ -57,18 +57,9 @@ public:
                                 std::span<std::byte> rx);
 
 private:
-  struct SPIHandleDeleter {
-    void operator()(spi_device_handle_t ptr) const {
-      log("SPI remove device: %d", spi_bus_remove_device(ptr));
-    }
-  };
-
-  using SPIHandle = std::unique_ptr<std::remove_pointer_t<spi_device_handle_t>,
-                                    SPIHandleDeleter>;
-
   int cs_{};
   bool owns_spi_line{};
-  SPIHandle dev_handle_{};
+  spi_device_handle_t dev_handle_{};
 
   void swap(SPI &other);
 };
