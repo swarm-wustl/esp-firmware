@@ -80,5 +80,6 @@
     "--background-index",
     "--query-driver=/Users/prestonmeek/.espressif/tools/xtensa-esp-elf/esp-13.2.0_20230928/xtensa-esp-elf/bin/xtensa-esp32-elf-gcc",
     "--compile-commands-dir=/Users/prestonmeek/Desktop/PROJECTS/swarm/build"
-  ]
+  ],
+  "idf.pythonInstallPath": "/Library/Frameworks/Python.framework/Versions/2.7/bin/python"
 }

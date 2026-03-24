@@ -5,7 +5,7 @@
 
 #include "error.h"
 #include "motor.h"
-#include "hal.h"
+#include "swarm_hal.h"
 #include "hardware.h"
 #include "queue.h"
 #include "freertos/FreeRTOS.h"
