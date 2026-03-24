@@ -6,9 +6,9 @@
 
 #include <geometry_msgs/msg/twist.h>
 
-#include "error.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "log.h"
 #include "queue.h"
 
 static const uint32_t MSG_SIZE = 512;

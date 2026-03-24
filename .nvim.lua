@@ -6,7 +6,7 @@ vim.lsp.config("clangd", {
 })
 
 vim.api.nvim_create_user_command("MergeCompileCommands", function()
-	vim.fn.system("jq -s add **/compile_commands.json > compile_commands.json")
+	vim.fn.system("bash -c 'jq -s add **/compile_commands.json > compile_commands.json'")
 	vim.lsp.stop_client(vim.lsp.get_clients({ name = "clangd" }))
 	vim.notify("compile_commands.json merged, clangd restarted", vim.log.levels.INFO)
 end, {})

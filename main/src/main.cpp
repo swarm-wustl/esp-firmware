@@ -1,9 +1,9 @@
 #include "consumer.h"
+#include "dwm.h"
 #include "hardware.h"
 #include "queue.h"
 #include "ros.h"
 #include "sensor.h"
-#include "dwm.h"
 
 #include "freertos/FreeRTOS.h"
 #include <memory>
@@ -40,15 +40,15 @@ For example, you could have multiple motor drivers, sensors, etc.
 The types used should only be taken from hardware.h's defintions.
 */
 extern "C" void app_main(void) {
-    log("Testing UWB");
+  log("Testing UWB");
 
-    HW::SPI spi{GPIO_NUM_4}; // TODO: put pins in a config somewhere
-    HW::GPIO gpio{};
-    DWM dwm_sensor{std::move(spi), std::move(gpio), GPIO_NUM_27, GPIO_NUM_34};
+  HW::SPI spi{GPIO_NUM_4}; // TODO: put pins in a config somewhere
+  HW::GPIO gpio{};
+  DWM dwm_sensor{std::move(spi), std::move(gpio), GPIO_NUM_27, GPIO_NUM_34};
 
-    while (true) {
-        vTaskDelay(1);
-    }
+  while (true) {
+    vTaskDelay(1);
+  }
 #if defined(CONFIG_MICRO_ROS_ESP_NETIF_WLAN) ||                                \
     defined(CONFIG_MICRO_ROS_ESP_NETIF_ENET)
   ESP_ERROR_CHECK(uros_network_interface_initialize());

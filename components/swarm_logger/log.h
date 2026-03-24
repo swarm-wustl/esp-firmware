@@ -1,0 +1,41 @@
+#ifndef LOG_H
+#define LOG_H
+
+#include <cstdarg>
+#include <cstdio>
+#include <iostream>
+
+/*
+- Prints a printf-formatted message to stderr
+- Appends a newline character
+- Exits the program
+*/
+inline void fatal(const char *fmt, ...) {
+  va_list args;
+
+  va_start(args, fmt);
+  vfprintf(stderr, fmt, args);
+  va_end(args);
+  fprintf(stderr, "\n");
+
+  exit(EXIT_FAILURE);
+}
+
+inline void log(const char *fmt, ...) {
+  va_list args;
+
+  va_start(args, fmt);
+  vprintf(fmt, args);
+  va_end(args);
+
+  printf("\n");
+}
+
+// Fancy log
+// Unfortunately, ESP-IDF doesn't supported std::println
+inline void logf(const auto &...args) {
+  ((std::cout << args << ' '), ...);
+  std::cout << std::endl;
+}
+
+#endif

@@ -1,5 +1,5 @@
 #include "sensor.h"
-#include "error.h"
+#include "log.h"
 
 TaskHandle_t Sensor::sensorTaskHandle = nullptr;
 

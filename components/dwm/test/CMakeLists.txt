@@ -1,3 +1,3 @@
 idf_component_register(SRC_DIRS "."
                        INCLUDE_DIRS "."
-                       REQUIRES unity dwm)
+                       REQUIRES unity dwm esp32)
