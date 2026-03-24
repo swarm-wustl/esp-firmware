@@ -66,7 +66,7 @@ template <HAL::GenericSPIController SPI, uint8_t ID> class DWMRegisterView {
   }();
 
 public:
-  DWMRegisterView(SPI &spi) : spi_{spi} { read_data(); }
+  explicit DWMRegisterView(SPI &spi) : spi_{spi} { read_data(); }
 
   // TODO: constructor that takes in data?
 
