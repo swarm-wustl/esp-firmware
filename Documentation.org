@@ -1,0 +1,81 @@
+* Sebastian's Flashing Instructions
+This works on NixOS despite the fact that ESPIDF and MicroROS really /do not want to work on NixOS/, so hopefully it should work on just about any Unix-like system.
+
+First, connect the ESP32 to your computer using a male USB-C to male USB-C that /is capable of data transfer/ (i.e., not just power). Check which USB port the ESP32 connected to:
+
+#+begin_src sh
+ls /dev/ttyUSB*
+#+end_src
+
+This is like ~/dev/tty/USB0~. Note this value and replace future instances of the port with the port you found from this step. Next, ensure your user is in the ~dialout~ group. This enables you to read/write to USB ports. If you are not or are otherwise getting permission errors when accessing the USB port, manually change the permissions of the port to allow all users to access it.
+
+#+begin_src sh
+sudo chmod 666 /dev/ttyUSB0
+#+end_src
+
+Further, ensure that you are connected to the correct WiFi network (e.g., ~wurc5~ or ~wurc2.4~) and note the IP of your computer using ~ip addr~. It is likely of the form ~192.168.1.XX~.
+
+You will need Docker/Podman installed. The commands are written for Podman because it is superior, but simply replace ~podman~ with ~docker~ if you are using Docker instead. Follow each of the upcoming subsections in a different terminal window.
+
+It should go without saying that you also need ROS2 Humble and teleop twist keyboard installed. The provided ~flake.nix~ includes these dependencies.
+
+** ESP IDF Container
+Create a Docker/Podman container with ESP IDF. This will be used for building and flashing the firmware.
+
+#+begin_src sh
+podman run -it --rm \
+  -v $PWD:/project \
+  -w /project \
+  --device /dev/ttyUSB0:/dev/ttyUSB0 \
+  espressif/idf:release-v5.2
+#+end_src
+
+Within the container, you must configure the ESP32 to connect to the WiFi and your computer (the agent). Run ~idf.py menuconfig~ and go to "micro-ROS Settings". Set the "micro-ROS Agent IP" to be the IP of your computer that you noted earlier (e.g., ~192.168.1.XX~). Next, go to "WiFi Configuration" and change the WiFi SSID to the name of the 2.4GHz network your laptop is connected to (e.g., ~wurc2.4~) and update the password (e.g., ~robotics@washu~). Press ~s~ to save and ~q~ to quit the menu.
+
+Now build and flash the script to the ESP32:
+#+begin_src sh
+idf.py build
+idf.py flash
+#+end_src
+
+If these finish successfully, you can run
+#+begin_src sh
+idf.py monitor
+#+end_src
+
+You should see the ESP32 connect to your computer.
+
+N.B. For future runs, these can be combined into a single command: ~idf.py build flash run~.
+
+** MicroROS Daemon
+For your computer to communicate with the ESP32, you must be running the MicroROS daemon.
+
+#+begin_src sh
+podman run -it --rm --net=host microros/micro-ros-agent:humble udp4 --port 8888 -v6
+#+end_src
+
+You should see that a session is established. If it is not, check that port 8888 is enabled in your firewall for UDP. You can temporarily enable the port with
+
+#+begin_src sh
+sudo iptables -I INPUT -p udp --dport 8888 -j ACCEPT
+# then re-run the daemon container
+#+end_src
+
+** Sending Commands
+Check that the ESP32 is communicating with ROS.
+
+#+begin_src sh
+ros2 node list
+# /uros_node
+
+ros2 topic list
+# /parameter_events
+# /rosout
+# /uros_topic
+#+end_src
+
+Note the presence of ~/uros_node~ and ~/uros_topic~ above. Now, you can publish velocities to ~/uros_topic~:
+
+#+begin_src sh
+ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r /cmd_vel:=/uros_topic
+#+end_src
