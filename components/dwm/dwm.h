@@ -232,7 +232,7 @@ private:
     write_data(pack_data(new_value));
   }
 
-  void write_data(std::array<std::byte, size_> new_data) {
+  void write_data(std::span<std::byte, size_> new_data) {
     // Lower 6 bits store actual register
     // MSbit = 1 represents write
     uint8_t reg = 0x80 | (static_cast<uint8_t>(ID) & 0x3F);
