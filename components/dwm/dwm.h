@@ -259,7 +259,7 @@ private:
     read_data();
   }
 
-  static auto flatten_data(std::array<std::byte, size_> data)
+  static auto flatten_data(std::span<std::byte, size_> data)
     requires(size_ <= sizeof(uint64_t))
   {
     if constexpr (size_ == sizeof(uint16_t)) {
