@@ -18,6 +18,10 @@ namespace HW {
     using DriveStyle = ESP32::DifferentialDriveController;
     using MotorDriver = ESP32::L298NMotorDriver;
     using SPI = ESP32::SPI;
+<<<<<<< HEAD
+=======
+    using GPIO = ESP32::GPIO;
+>>>>>>> a06bd25a0f5fd6563009a8876ab4eb6c26a2c1a6
 }
 
 #endif
