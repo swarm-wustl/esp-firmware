@@ -11,6 +11,8 @@
 #include "motor.h"
 #include "drive.h"
 
+#include "hal/gpio_types.h"
+
 /*
 The design philosophy implemented here is as follows:
 - Define abstract types: Motor, etc.
@@ -59,6 +61,21 @@ namespace HAL {
     ) {
         { spi.transfer_halfduplex(tx, rx) } -> std::same_as<int>;
     };
+<<<<<<< HEAD:main/include/hal.h
+=======
+
+    template <typename GPIO>
+    concept GenericGPIOController = requires (
+        GPIO gpio,
+        gpio_num_t pin, gpio_mode_t mode,
+        Voltage voltage,
+        int ms
+    ) {
+        { gpio.set_direction(pin, mode) } -> std::same_as<void>;
+        { gpio.set_level(pin, voltage) } -> std::same_as<void>;
+        { gpio.delay_ms(ms) } -> std::same_as<void>;
+    };
+>>>>>>> a06bd25a0f5fd6563009a8876ab4eb6c26a2c1a6:components/swarm_hal/swarm_hal.h
 }
 
 #endif
