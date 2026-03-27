@@ -16,14 +16,38 @@
 // Should be properly fixed in C++26, but this is a workaround
 // https://en.cppreference.com/w/cpp/language/static_assert.html
 template<class>
+
+#define IDLE_MODE 0x00
+#define RX_MODE 0x01
+#define TX_MODE 0x02
+
+
 constexpr bool dependent_false = false;
 
 static constexpr uint8_t DWM_REG_DEV_ID = 0x00;
+static constexpr uint8_t DWM_LEN_DEV_ID = 4;
+
+// extended unique identifier register
+static constexpr uint8_t DWM_EUI = 0x01;
+static constexpr uint8_t DWM_LEN_EUI = 8;
+
 static constexpr uint8_t DWM_REG_SYSTEM_EVENT_STATUS = 0x0F;
+static constexpr uint8_t DWM_REG_SYSTEM_CTRL = 0x0D;
 static constexpr uint8_t DWM_REG_SYS_TIME = 0x06;
+static constexpr uint8_t DWM_REG_SYS_CONF = 0x04;
+//Receive Registers
 static constexpr uint8_t DWM_REG_RX_TIME = 0x15;
+static constexpr uint8_t DWM_REG_RX_BUFFER = 0x11;
+//Transmission Registers
 static constexpr uint8_t DWM_REG_TX_TIME = 0x17;
 static constexpr uint8_t DWM_REG_TX_FCTRL = 0x08;
+
+
+
+//Flags:
+//TODO figure a value for clearing receive and transmission in sys_event status using clear flags.
+// static constexpr uint64_t DWM_REG_CLEAR_FLAGS;
+
 
 
 
@@ -242,6 +266,12 @@ public:
         return *this;
     }
 
+    void clear(){
+        write_data(0);
+    }
+    
+
+
     auto value() requires(size_ <= sizeof(uint64_t)) {
         read_data();
 
@@ -271,6 +301,8 @@ private:
         // TODO: error handle
         spi_.transfer_halfduplex(tx, data_);
     }
+
+ 
 
     // TODO: consider removing this and other cases of std::integral auto
     // It might just be adding complexity for no reason (ig bit_cast optimization..?)
@@ -412,6 +444,62 @@ public:
         return 0;
     }
 
+
+
+
+    /* ##### Print device id, address, etc. ###################################### */
+	/** 
+	Generates a String representation of the device identifier of the chip. That usually 
+	are the letters "DECA" plus the	version and revision numbers of the chip.
+
+	@param[out] msgBuffer The String buffer to be filled with printable device information.
+		Provide 128 bytes, this should be sufficient.
+	*/
+	static void getPrintableDeviceIdentifier(char msgBuffer[]);
+	
+	/** 
+	Generates a String representation of the extended unique identifier (EUI) of the chip.
+
+	@param[out] msgBuffer The String buffer to be filled with printable device information.
+		Provide 128 bytes, this should be sufficient.
+	*/
+	static void getPrintableExtendedUniqueIdentifier(char msgBuffer[]);
+	
+
+	static void         getTransmitTimestamp(DWMTimestamp& time);
+	static void         getReceiveTimestamp(DWMTimestamp& time);
+	static void         getSystemTimestamp(DWMTimestamp& time);
+	static void         getTransmitTimestamp(byte data[]);
+	static void         getReceiveTimestamp(byte data[]);
+	static void         getSystemTimestamp(byte data[]);
+
+    static auto getRXData();
+    /*Set and Clear different registers on the DW1000*/
+
+    	/* device state management. */
+	// idle state
+	static void idle();
+	
+	// general configuration state
+	static void newConfiguration();
+	static void commitConfiguration();
+	
+    //Timing:
+    static void setDelay(const DWMTimestamp &time);
+
+	// reception state
+	static void newReceive();
+	static void startReceive();
+	static void clearReceiveStatus();
+    static void setReceiverAutoReenable(bool val);
+    static void receivePermanently();
+
+	// transmission state
+	static void newTransmit();
+	static void startTransmit();
+    static void clearTransmitStatus();
+
+
 private:
     template <uint8_t ID>
     using Register = DWMRegisterView<SPI, ID>;
@@ -438,6 +526,8 @@ private:
     SPI spi_;
     uint8_t rst_pin_{};
     uint8_t irq_pin_{};
+    bool _permanentReceive;
+    static uint8_t _deviceMode;
 };
 
 #endif
