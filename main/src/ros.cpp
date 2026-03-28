@@ -1,10 +1,13 @@
 #include "ros.h"
+#include "i2c.cpp"
+#include <cmath>
 
 #ifdef CONFIG_MICRO_ROS_ESP_XRCE_DDS_MIDDLEWARE
 #include <rmw_microros/rmw_microros.h>
 #endif
 
 #include <geometry_msgs/msg/twist.h>
+#include <sensor_msgs/msg/imu.h>
 
 #include "error.h"
 #include "queue.h"
@@ -12,6 +15,10 @@
 #include "freertos/task.h"
 
 static const uint32_t MSG_SIZE = 512;
+static const double G = 9.81;
+
+#define LSBSENS_GYRO 131 //LSB sensitivity for the gyroscope
+#define LSBSENS_ACCEL 16384 //LSB sensitivity for the accelerometer
 
 #define RCCHECK(fn) { \
     rcl_ret_t temp_rc = fn; \
@@ -36,6 +43,78 @@ static void callback(const void* msgin, void* context) {
     }
 }
 
+void ROS::imu_publish(void *arg){
+    rcl_allocator_t allocator = rcl_get_default_allocator();
+    rclc_support_t support;
+
+    rcl_node_t node;
+    rcl_publisher_t publisher;
+
+    sensor_msgs__msg__Imu imu_msg;
+
+    RCCHECK(rclc_support_init(&support, 0, NULL, &allocator));
+
+    RCCHECK(rclc_node_init_default(&node, "imu_node", "", &support));
+
+    RCCHECK(rclc_publisher_init_default(
+        &publisher,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu),
+        "imu/data"
+    ));
+
+    printf("IMU Publisher Started\n");
+
+    // -----------------------
+    // IMU INITIALIZATION
+    // -----------------------
+
+    uint8_t data[2];
+
+    ESP_ERROR_CHECK(i2c_master_init());
+    ESP_ERROR_CHECK(imu_register_write_byte(IMU_PWR_MGMT_1, 0x00));
+
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    ESP_ERROR_CHECK(mpu6050_register_read(IMU_WHO_AM_I_ADDR , data, 1));
+    printf("WHO_AM_I = %X\n", data[0]);
+
+    int16_t gyroX, gyroY, gyroZ;
+    int16_t accelX, accelY, accelZ;
+
+    ESP_ERROR_CHECK(imu_read_gyroscope_data(&gyroX, &gyroY, &gyroZ));
+    ESP_ERROR_CHECK(imu_read_accelerometer_data(&accelX, &accelY, &accelZ));
+
+    float gx = ((float)gyroX) / LSBSENS_GYRO;
+    float gy = ((float)gyroY) / LSBSENS_GYRO;
+    float gz = ((float)gyroZ) / LSBSENS_GYRO;
+
+    float ax = ((float)accelX) / LSBSENS_ACCEL;
+    float ay = ((float)accelY) / LSBSENS_ACCEL;
+    float az = ((float)accelZ) / LSBSENS_ACCEL;
+
+        // ROS expects rad/s
+    gx *= (M_PI / 180.0);
+    gy *= (M_PI / 180.0);
+    gz *= (M_PI / 180.0);
+
+    imu_msg.angular_velocity.x = gx;
+    imu_msg.angular_velocity.y = gy;
+    imu_msg.angular_velocity.z = gz;
+
+    imu_msg.linear_acceleration.x = ax * G;
+    imu_msg.linear_acceleration.y = ay * G;
+    imu_msg.linear_acceleration.z = az * G;
+
+    rcl_publish(&publisher, &imu_msg, NULL);
+
+    ESP_ERROR_CHECK(imu_register_write_byte(IMU_PWR_MGMT_1, 1 << IMU_PWR_MGMT_1_RESET_BIT));
+    ESP_LOGI(TAG, "I2C written successfully");
+
+    ESP_ERROR_CHECK(i2c_driver_delete(I2C_MASTER_NUM));
+    ESP_LOGI(TAG, "I2C unitialized successfully");
+
+}
 void ROS::spin(Consumer::QueueType& queue) {
     // Create memory allocator
     rcl_allocator_t allocator = rcl_get_default_allocator();

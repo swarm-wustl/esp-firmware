@@ -17,6 +17,7 @@
 namespace ROS {
     void spin(Consumer::QueueType& queue);
     void sendMessage();
+    void imu_publish(void *arg);
 }
 
 #endif
