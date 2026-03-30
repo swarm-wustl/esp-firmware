@@ -1,4 +1,6 @@
 #include "ros.h"
+#include "esp_mac.h"
+#include <stdio.h>
 
 #ifdef CONFIG_MICRO_ROS_ESP_XRCE_DDS_MIDDLEWARE
 #include <rmw_microros/rmw_microros.h>
@@ -43,6 +45,17 @@ static void callback(const void *msgin, void *context) {
 }
 
 void ROS::spin(Consumer::QueueType &queue) {
+  // Create ID from MAC address
+  uint8_t mac[6];
+  esp_read_mac(mac, ESP_MAC_WIFI_STA);
+
+  // uses the last 2 bytes, can be increased
+  char node_namespace[20];
+  snprintf(node_namespace, sizeof(node_namespace), "/swarmbot_%02x%02x", mac[4],
+           mac[5]);
+
+  log("Namespace generated: %s", node_namespace);
+
   // Create memory allocator
   rcl_allocator_t allocator = rcl_get_default_allocator();
   rclc_support_t support;
@@ -64,15 +77,15 @@ void ROS::spin(Consumer::QueueType &queue) {
   RCCHECK(rclc_support_init_with_options(&support, 0, NULL, &init_options,
                                          &allocator));
 
-  // Create node
+  // Create node with namespace
   rcl_node_t node;
-  RCCHECK(rclc_node_init_default(&node, "uros_node", "", &support));
+  RCCHECK(rclc_node_init_default(&node, "swarm", node_namespace, &support));
 
   // Create subscriber
   rcl_subscription_t subscriber;
   RCCHECK(rclc_subscription_init_default(
       &subscriber, &node,
-      ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist), "uros_topic"));
+      ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist), "cmd_vel"));
 
   // Create executor with a single handle
   rclc_executor_t executor;

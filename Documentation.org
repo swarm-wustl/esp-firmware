@@ -45,7 +45,7 @@ idf.py monitor
 
 You should see the ESP32 connect to your computer.
 
-N.B. For future runs, these can be combined into a single command: ~idf.py build flash run~.
+N.B. For future runs, these can be combined into a single command: ~idf.py build flash monitor~.
 
 ** MicroROS Daemon
 For your computer to communicate with the ESP32, you must be running the MicroROS daemon.
@@ -78,4 +78,29 @@ Note the presence of ~/uros_node~ and ~/uros_topic~ above. Now, you can publish 
 
 #+begin_src sh
 ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r /cmd_vel:=/uros_topic
+#+end_src
+
+* LSP Integration with ~compile_commands.json~
+ESP-IDF has build-in support generating ~compile_commands.json~.
+
+#+begin_src sh
+idf.py reconfigure -D CMAKE_EXPORT_COMPILE_COMMANDS=ON
+ln -s build/compile_commands.json .
+#+end_src
+
+** ...
+Copy the IDF from the container to a local folder.
+
+#+begin_src sh
+mkdir -p ./esp-idf-docker
+podman run --rm -v ./esp-idf-docker:/output espressif/idf:release-v5.2 cp -r /opt/esp/idf/. /output
+#+end_src
+
+#+begin_src sh
+# 1. Translate the project root (from /project to current dir)
+sed -i "s|/project|$PWD|g" compile_commands.json
+
+# 2. Translate the SDK path (from /opt/esp/idf to your local copy)
+# Replace ~/esp-idf-docker with wherever you put the SDK in Step 1
+sed -i "s|/opt/esp/idf|PWD/esp-idf-docker|g" compile_commands.json
 #+end_src

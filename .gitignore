@@ -2,5 +2,8 @@ build
 sdkconfig
 sdkconfig.old
 .direnv
+compile_commands.json
+esp-idf-docker
 .cache
+.clangd
 .DS_Store

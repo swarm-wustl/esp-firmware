@@ -12,7 +12,7 @@
 #include "driver/gpio.h"
 
 namespace ESP32 {
-    // TODO: move this outside of ESP32
+	// TODO: move this outside of ESP32
     class L298NMotorDriver {
     public:
         L298NMotorDriver();
@@ -38,6 +38,9 @@ namespace ESP32 {
 
         template <size_t MotorCount>
         static std::array<Motor::Command, MotorCount> convert_twist(geometry_msgs__msg__Twist msg);
+
+        static std::pair<double, double> calculate_drive_targets(double linear_x, double angular_z);
+        static Motor::Command create_command(Motor::Name name, double value);
     };
 
     class SPI {
@@ -73,6 +76,6 @@ namespace ESP32 {
         void set_level(gpio_num_t pin, HAL::Voltage level) { gpio_set_level(pin, HAL::to_level(level)); }
         void delay_ms(int ms) { vTaskDelay(pdMS_TO_TICKS(ms)); }
     };
-}
+} // namespace ESP32
 
 #endif
