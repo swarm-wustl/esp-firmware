@@ -24,24 +24,45 @@
 #define LOWER_LEFT_MOTOR_CHANNEL LEDC_CHANNEL_2
 #define LOWER_RIGHT_MOTOR_CHANNEL LEDC_CHANNEL_3
 
-#define ENA GPIO_NUM_4
-#define IN1 GPIO_NUM_16
-#define IN2 GPIO_NUM_17
+// u3
+#define ENA GPIO_NUM_19
+#define IN1 GPIO_NUM_26
+#define IN2 GPIO_NUM_27
 
-#define ENB GPIO_NUM_5
-#define IN3 GPIO_NUM_18
-#define IN4 GPIO_NUM_19
+#define ENB GPIO_NUM_25
+#define IN3 GPIO_NUM_32
+#define IN4 GPIO_NUM_33
 
-#define ENC GPIO_NUM_26
-#define IN5 GPIO_NUM_32
-#define IN6 GPIO_NUM_33
+// u2
+#define ENC GPIO_NUM_4
+#define IN5 GPIO_NUM_16
+#define IN6 GPIO_NUM_17
 
-#define END GPIO_NUM_27
-#define IN7 GPIO_NUM_14
-#define IN8 GPIO_NUM_15
+#define END GPIO_NUM_5
+#define IN7 GPIO_NUM_22
+#define IN8 GPIO_NUM_23
 
 #define STBY GPIO_NUM_0
 #define STBY_LOWER GPIO_NUM_25
+
+// #define ENA GPIO_NUM_4
+// #define IN1 GPIO_NUM_16
+// #define IN2 GPIO_NUM_17
+
+// #define ENB GPIO_NUM_5
+// #define IN3 GPIO_NUM_18
+// #define IN4 GPIO_NUM_19
+
+// #define ENC GPIO_NUM_2
+// #define IN5 GPIO_NUM_5
+// #define IN6 GPIO_NUM_16
+
+// #define END GPIO_NUM_15
+// #define IN7 GPIO_NUM_17
+// #define IN8 GPIO_NUM_4
+
+// #define STBY GPIO_NUM_23
+// #define STBY_LOWER GPIO_NUM_23
 
 #define GPIO_BITMASK                                                           \
   ((1ULL << ENA) | (1ULL << IN1) | (1ULL << IN2) | (1ULL << ENB) |             \
@@ -181,7 +202,7 @@ ESP32::DifferentialDriveController::convert_twist(
 
   // Overload linear y (strafing) to rotate the front face
   double target_lower =
-      (msg.linear.y == 0.0) ? 0.0 : std::copysign(0.5, msg.linear.y);
+      (msg.linear.y == 0.0) ? 0.0 : std::copysign(1.0, msg.linear.y);
 
   return std::array<Motor::Command, HW::MOTOR_COUNT>{
       create_command(Motor::Name::LEFT, target_L),
