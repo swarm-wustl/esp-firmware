@@ -45,42 +45,21 @@
 #define STBY GPIO_NUM_0
 #define STBY_LOWER GPIO_NUM_25
 
-// #define ENA GPIO_NUM_4
-// #define IN1 GPIO_NUM_16
-// #define IN2 GPIO_NUM_17
-
-// #define ENB GPIO_NUM_5
-// #define IN3 GPIO_NUM_18
-// #define IN4 GPIO_NUM_19
-
-// #define ENC GPIO_NUM_2
-// #define IN5 GPIO_NUM_5
-// #define IN6 GPIO_NUM_16
-
-// #define END GPIO_NUM_15
-// #define IN7 GPIO_NUM_17
-// #define IN8 GPIO_NUM_4
-
-// #define STBY GPIO_NUM_23
-// #define STBY_LOWER GPIO_NUM_23
-
 #define GPIO_BITMASK                                                           \
   ((1ULL << ENA) | (1ULL << IN1) | (1ULL << IN2) | (1ULL << ENB) |             \
    (1ULL << IN3) | (1ULL << IN4) | (1ULL << ENC) | (1ULL << IN5) |             \
    (1ULL << IN6) | (1ULL << END) | (1ULL << IN7) | (1ULL << IN8) |             \
    (1ULL << STBY) | (1ULL << STBY_LOWER))
 
-#define FLOAT_TOLERANCE 0.01
-
 static void setup_pwm() {
   // LEDC timer is used for LED dimming via PWM
   // but works well for motor control
   ledc_timer_config_t ledc_timer = {.speed_mode = LEDC_MODE,
-                                    .duty_resolution = LEDC_DUTY_RES,
-                                    .timer_num = LEDC_TIMER,
-                                    .freq_hz = LEDC_FREQUENCY,
-                                    .clk_cfg = LEDC_AUTO_CLK,
-                                    .deconfigure = false};
+									.duty_resolution = LEDC_DUTY_RES,
+									.timer_num = LEDC_TIMER,
+									.freq_hz = LEDC_FREQUENCY,
+									.clk_cfg = LEDC_AUTO_CLK,
+									.deconfigure = false};
   ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
 
   // Motor to pin mapping
