@@ -3,10 +3,7 @@
 
 #include <cstdarg>
 #include <cstdio>
-
-enum class Result {
-    SUCCESS
-};
+#include <iostream>
 
 /*
 - Prints a printf-formatted message to stderr
@@ -32,6 +29,13 @@ inline void log(const char* fmt, ...) {
     va_end(args); 
     
     printf("\n");
+}
+
+// Fancy log
+// Unfortunately, ESP-IDF doesn't supported std::println
+inline void logf(const auto&... args) {
+    ((std::cout << args << ' '), ...);
+    std::cout << std::endl;
 }
 
 #endif

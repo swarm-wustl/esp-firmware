@@ -5,6 +5,7 @@
 #include <utility>
 #include <array>
 #include "error.h"
+#include "result.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 
