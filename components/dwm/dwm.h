@@ -229,7 +229,7 @@ private:
   // It might just be adding complexity for no reason (ig bit_cast
   // optimization..?)
   void write_data(std::integral auto new_value) {
-    write_data(std::move(pack_data(new_value)));
+    write_data(pack_data(new_value));
   }
 
   void write_data(std::span<const std::byte, size_> new_data) {
