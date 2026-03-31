@@ -8,7 +8,9 @@
 
 #include <algorithm>
 
-#define WHEELBASE 0.5 // dist between wheels (m) (we're gonna fake it)
+// ~10 cm as of 2026-01-24
+#define WHEELBASE 0.10 // dist between wheels (m) (we're gonna fake it)
+#define ANGULAR_MULTIPLIER 2.0
 
 #define LEDC_TIMER LEDC_TIMER_0
 #define LEDC_MODE LEDC_LOW_SPEED_MODE
@@ -143,29 +145,43 @@ void ESP32::L298NMotorDriver::run(const Motor::Command &cmd) {
 template <>
 std::array<Motor::Command, 2> ESP32::DifferentialDriveController::convert_twist(
     geometry_msgs__msg__Twist msg) {
-  // TODO: handle angular later
-
-  // Assume linear_velocity is between -1 and 1
+  // TODO: this should set target RPMs for each motor and use PID with encoder
+  // feedback to ensure that that's being met Linear and angular velocity are
+  // given in m/s and rad/s from ROS2 The units here are all kind of fake
   double linear_velocity = msg.linear.x;
+  double angular_velocity = msg.angular.z; // yaw
 
-  Motor::Direction dir;
-  double pwm_ratio;
+  Motor::Direction dir_R;
+  Motor::Direction dir_L;
 
-  if (linear_velocity < 0) {
-    dir = Motor::Direction::REVERSE;
-    pwm_ratio = linear_velocity * -1.0;
-  } else if (linear_velocity > 0) {
-    dir = Motor::Direction::FORWARD;
-    pwm_ratio = linear_velocity;
+  // v_R = v + \frac{L\omega}{2}
+  // v_L = v - \frac{L\omega}{2}
+  double pwm_ratio_R =
+      linear_velocity + ANGULAR_MULTIPLIER * angular_velocity * WHEELBASE / 2;
+  double pwm_ratio_L =
+      linear_velocity - ANGULAR_MULTIPLIER * angular_velocity * WHEELBASE / 2;
+
+  if (pwm_ratio_R > 0) {
+    dir_R = Motor::Direction::FORWARD;
+  } else if (pwm_ratio_R < 0) {
+    dir_R = Motor::Direction::REVERSE;
   } else {
-    dir = Motor::Direction::STOP;
-    pwm_ratio = 0.0;
+    dir_R = Motor::Direction::STOP;
+  }
+
+  if (pwm_ratio_L > 0) {
+    dir_L = Motor::Direction::FORWARD;
+  } else if (pwm_ratio_L < 0) {
+    dir_L = Motor::Direction::REVERSE;
+  } else {
+    dir_L = Motor::Direction::STOP;
   }
 
   // PWM ratio must be [0, 1]
-  pwm_ratio = std::clamp(pwm_ratio, 0.0, 1.0);
+  pwm_ratio_R = std::clamp(std::abs(pwm_ratio_R), 0.0, 1.0);
+  pwm_ratio_L = std::clamp(std::abs(pwm_ratio_L), 0.0, 1.0);
 
   return std::array<Motor::Command, 2>{
-      Motor::Command{Motor::Name::LEFT, dir, pwm_ratio},
-      Motor::Command{Motor::Name::RIGHT, dir, pwm_ratio}};
+      Motor::Command{Motor::Name::LEFT, dir_L, pwm_ratio_L},
+      Motor::Command{Motor::Name::RIGHT, dir_R, pwm_ratio_R}};
 }
