@@ -56,7 +56,7 @@ concept IsTimestampRegister =
 
 template <HAL::GenericSPIController SPI, DWMRegisterID ID>
 class DWMRegisterView {
-  static constexpr size_t size_ = []() constexpr {
+  static constexpr size_t size_ = []() consteval {
     if constexpr (ID == DWMRegisterID::DEV_ID)
       return 4;
     else if constexpr (ID == DWMRegisterID::SYSTEM_EVENT_STATUS)
