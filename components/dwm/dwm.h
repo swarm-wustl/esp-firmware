@@ -209,7 +209,7 @@ public:
     }
   }
 
-  constexpr size_t size() const { return size_; }
+  consteval size_t size() const { return size_; }
 
 private:
   void read_data() {
@@ -229,7 +229,8 @@ private:
   // It might just be adding complexity for no reason (ig bit_cast
   // optimization..?)
   void write_data(std::integral auto new_value) {
-    write_data(pack_data(new_value));
+    std::array<std::byte, size_> data = pack_data(new_value);
+    write_data(std::span{data});
   }
 
   void write_data(std::span<std::byte, size_> new_data) {
