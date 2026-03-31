@@ -17,6 +17,7 @@ namespace HW {
     // Additionally, keeps it easy to create a new driver
     using DriveStyle = ESP32::DifferentialDriveController;
     using MotorDriver = ESP32::L298NMotorDriver;
+    using IMUSensor = ESP32::MPU6050Driver;
 }
 
 #endif

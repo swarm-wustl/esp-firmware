@@ -6,9 +6,11 @@
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "driver/uart.h"
+#include "driver/i2c_master.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 // ~10 cm as of 2026-01-24
 #define WHEELBASE 0.10 // dist between wheels (m)
@@ -45,42 +47,21 @@
 #define STBY GPIO_NUM_0
 #define STBY_LOWER GPIO_NUM_25
 
-// #define ENA GPIO_NUM_4
-// #define IN1 GPIO_NUM_16
-// #define IN2 GPIO_NUM_17
-
-// #define ENB GPIO_NUM_5
-// #define IN3 GPIO_NUM_18
-// #define IN4 GPIO_NUM_19
-
-// #define ENC GPIO_NUM_2
-// #define IN5 GPIO_NUM_5
-// #define IN6 GPIO_NUM_16
-
-// #define END GPIO_NUM_15
-// #define IN7 GPIO_NUM_17
-// #define IN8 GPIO_NUM_4
-
-// #define STBY GPIO_NUM_23
-// #define STBY_LOWER GPIO_NUM_23
-
 #define GPIO_BITMASK                                                           \
   ((1ULL << ENA) | (1ULL << IN1) | (1ULL << IN2) | (1ULL << ENB) |             \
    (1ULL << IN3) | (1ULL << IN4) | (1ULL << ENC) | (1ULL << IN5) |             \
    (1ULL << IN6) | (1ULL << END) | (1ULL << IN7) | (1ULL << IN8) |             \
    (1ULL << STBY) | (1ULL << STBY_LOWER))
 
-#define FLOAT_TOLERANCE 0.01
-
 static void setup_pwm() {
   // LEDC timer is used for LED dimming via PWM
   // but works well for motor control
   ledc_timer_config_t ledc_timer = {.speed_mode = LEDC_MODE,
-                                    .duty_resolution = LEDC_DUTY_RES,
-                                    .timer_num = LEDC_TIMER,
-                                    .freq_hz = LEDC_FREQUENCY,
-                                    .clk_cfg = LEDC_AUTO_CLK,
-                                    .deconfigure = false};
+									.duty_resolution = LEDC_DUTY_RES,
+									.timer_num = LEDC_TIMER,
+									.freq_hz = LEDC_FREQUENCY,
+									.clk_cfg = LEDC_AUTO_CLK,
+									.deconfigure = false};
   ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
 
   // Motor to pin mapping
@@ -206,7 +187,7 @@ ESP32::DifferentialDriveController::convert_twist(
 
   return std::array<Motor::Command, HW::MOTOR_COUNT>{
       create_command(Motor::Name::LEFT, target_L),
-      create_command(Motor::Name::RIGHT, target_R),
+      create_command(Motor::Name::RIGHT, -target_R),
       create_command(Motor::Name::LOWER_LEFT, target_lower),
       create_command(Motor::Name::LOWER_RIGHT, target_lower),
   };
@@ -240,4 +221,118 @@ ESP32::DifferentialDriveController::create_command(Motor::Name name,
   double pwm = std::clamp(std::abs(value), 0.0, 1.0);
 
   return Motor::Command{name, dir, pwm};
+}
+
+// MPU6050 Register addresses
+#define MPU6050_REG_PWR_MGMT_1   0x6B
+#define MPU6050_REG_GYRO_CONFIG  0x1B
+#define MPU6050_REG_ACCEL_CONFIG 0x1C
+#define MPU6050_REG_ACCEL_XOUT_H 0x3B
+
+// Scale factors for default settings (±2g accel, ±250°/s gyro)
+#define ACCEL_SCALE (9.81f / 16384.0f)    // Convert to m/s² (±2g range)
+#define GYRO_SCALE  (3.14159265f / 180.0f / 131.0f)  // Convert to rad/s (±250°/s range)
+
+ESP32::MPU6050Driver::MPU6050Driver()
+    : bus_handle(nullptr), dev_handle(nullptr), initialized(false) {}
+
+bool ESP32::MPU6050Driver::initialize() {
+  if (initialized) {
+    return true;
+  }
+
+  // Configure I2C master bus
+  i2c_master_bus_config_t bus_config = {};
+  bus_config.i2c_port = I2C_NUM_0;
+  bus_config.sda_io_num = I2C_SDA_PIN;
+  bus_config.scl_io_num = I2C_SCL_PIN;
+  bus_config.clk_source = I2C_CLK_SRC_DEFAULT;
+  bus_config.glitch_ignore_cnt = 7;
+  bus_config.flags.enable_internal_pullup = true;
+
+  esp_err_t err = i2c_new_master_bus(&bus_config, &bus_handle);
+  if (err != ESP_OK) {
+    log("Failed to create I2C master bus: %d", err);
+    return false;
+  }
+
+  // Configure MPU6050 device
+  i2c_device_config_t dev_config = {};
+  dev_config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+  dev_config.device_address = MPU6050_ADDR;
+  dev_config.scl_speed_hz = 400000;  // 400kHz
+
+  err = i2c_master_bus_add_device(bus_handle, &dev_config, &dev_handle);
+  if (err != ESP_OK) {
+    log("Failed to add MPU6050 device: %d", err);
+    return false;
+  }
+
+  // Wake up MPU6050 (write 0x00 to PWR_MGMT_1)
+  uint8_t wake_cmd[] = {MPU6050_REG_PWR_MGMT_1, 0x00};
+  err = i2c_master_transmit(dev_handle, wake_cmd, sizeof(wake_cmd), 100);
+  if (err != ESP_OK) {
+    log("Failed to wake MPU6050: %d", err);
+    return false;
+  }
+
+  // Configure gyroscope (±250°/s, default)
+  uint8_t gyro_cfg[] = {MPU6050_REG_GYRO_CONFIG, 0x00};
+  err = i2c_master_transmit(dev_handle, gyro_cfg, sizeof(gyro_cfg), 100);
+  if (err != ESP_OK) {
+    log("Failed to configure gyroscope: %d", err);
+    return false;
+  }
+
+  // Configure accelerometer (±2g, default)
+  uint8_t accel_cfg[] = {MPU6050_REG_ACCEL_CONFIG, 0x00};
+  err = i2c_master_transmit(dev_handle, accel_cfg, sizeof(accel_cfg), 100);
+  if (err != ESP_OK) {
+    log("Failed to configure accelerometer: %d", err);
+    return false;
+  }
+
+  initialized = true;
+  log("MPU6050 initialized successfully");
+  return true;
+}
+
+HAL::IMUData ESP32::MPU6050Driver::read() {
+  HAL::IMUData data = {0, 0, 0, 0, 0, 0};
+
+  if (!initialized) {
+    return data;
+  }
+
+  // Read 14 bytes starting from ACCEL_XOUT_H (accel: 6 bytes, temp: 2 bytes, gyro: 6 bytes)
+  uint8_t reg = MPU6050_REG_ACCEL_XOUT_H;
+  uint8_t buffer[14];
+
+  esp_err_t err = i2c_master_transmit_receive(dev_handle, &reg, 1, buffer, sizeof(buffer), 100);
+  if (err != ESP_OK) {
+    log("Failed to read MPU6050 data: %d", err);
+    return data;
+  }
+
+  // Parse accelerometer data (big-endian)
+  int16_t accel_x_raw = (buffer[0] << 8) | buffer[1];
+  int16_t accel_y_raw = (buffer[2] << 8) | buffer[3];
+  int16_t accel_z_raw = (buffer[4] << 8) | buffer[5];
+  // buffer[6] and buffer[7] are temperature, skip
+
+  // Parse gyroscope data (big-endian)
+  int16_t gyro_x_raw = (buffer[8] << 8) | buffer[9];
+  int16_t gyro_y_raw = (buffer[10] << 8) | buffer[11];
+  int16_t gyro_z_raw = (buffer[12] << 8) | buffer[13];
+
+  // Convert to physical units
+  data.accel_x = accel_x_raw * ACCEL_SCALE;
+  data.accel_y = accel_y_raw * ACCEL_SCALE;
+  data.accel_z = accel_z_raw * ACCEL_SCALE;
+
+  data.gyro_x = gyro_x_raw * GYRO_SCALE;
+  data.gyro_y = gyro_y_raw * GYRO_SCALE;
+  data.gyro_z = gyro_z_raw * GYRO_SCALE;
+
+  return data;
 }

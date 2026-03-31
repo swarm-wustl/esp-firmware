@@ -15,6 +15,11 @@ struct ConsumerTaskData {
   Consumer::QueueType queue;
 };
 
+struct ROSTaskData {
+  Consumer::QueueType &queue;
+  HW::IMUSensor imu;
+};
+
 static void consumerTaskWrapper(void *pvParameters) {
   ConsumerTaskData *data = reinterpret_cast<ConsumerTaskData *>(pvParameters);
 
@@ -24,10 +29,9 @@ static void consumerTaskWrapper(void *pvParameters) {
 }
 
 static void rosTaskWrapper(void *pvParameters) {
-  Consumer::QueueType *queue =
-      reinterpret_cast<Consumer::QueueType *>(pvParameters);
+  ROSTaskData *data = reinterpret_cast<ROSTaskData *>(pvParameters);
 
-  ROS::spin(*queue);
+  ROS::spin(data->queue, data->imu);
 
   vTaskDelete(nullptr);
 }
@@ -49,13 +53,15 @@ extern "C" void app_main(void) {
   static ConsumerTaskData consumerTaskData{HW::MotorDriver{},
                                            Consumer::QueueType{}};
 
+  static ROSTaskData rosTaskData{consumerTaskData.queue, HW::IMUSensor{}};
+
   log("Hello world!");
 
   xTaskCreate(
       rosTaskWrapper, "uros_task",
       4096, // TODO: see
             // https://github.com/micro-ROS/micro_ros_espidf_component/blob/cd1da2b3d7d73f48743a2c42ac0e915cd751bb74/examples/int32_publisher/main/main.c#L105
-      (void *)&consumerTaskData.queue, configMAX_PRIORITIES - 1, NULL);
+      (void *)&rosTaskData, configMAX_PRIORITIES - 1, NULL);
 
   xTaskCreate(consumerTaskWrapper, "consumer_task", 4096,
               (void *)&consumerTaskData, configMAX_PRIORITIES - 1, NULL);

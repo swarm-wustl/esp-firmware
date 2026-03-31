@@ -24,6 +24,16 @@ HAL Interface
 The traits and enums defined in this namespace can be used to create drivers for any board, i.e., ESP32.
 */
 namespace HAL {
+    struct IMUData {
+        float accel_x, accel_y, accel_z;  // m/s²
+        float gyro_x, gyro_y, gyro_z;     // rad/s
+    };
+
+    template <typename IMUDriver>
+    concept IMUSensorTrait = requires(IMUDriver driver) {
+        { driver.initialize() } -> std::same_as<bool>;
+        { driver.read() } -> std::same_as<IMUData>;
+    };
     enum class Voltage : uint32_t {
         HIGH = 1,
         LOW = 0

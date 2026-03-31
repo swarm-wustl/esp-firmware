@@ -13,9 +13,10 @@
 
 #include "consumer.h"
 #include "queue.h"
+#include "hardware.h"
 
 namespace ROS {
-    void spin(Consumer::QueueType& queue);
+    void spin(Consumer::QueueType& queue, HW::IMUSensor& imu);
     void sendMessage();
 }
 
