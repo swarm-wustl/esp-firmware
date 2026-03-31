@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstring>
 #include <string>
+#include <vector>
 
 // TODO: add noexcept to classes
 
@@ -56,17 +57,21 @@ concept IsTimestampRegister =
 
 template <HAL::GenericSPIController SPI, DWMRegisterID ID>
 class DWMRegisterView {
-  static constexpr size_t size_ = []() consteval {
-    if constexpr (ID == DWMRegisterID::DEV_ID)
-      return 4;
-    else if constexpr (ID == DWMRegisterID::SYSTEM_EVENT_STATUS)
-      return 5;
-    else if constexpr (ID == DWMRegisterID::SYS_TIME)
-      return 5;
-    else if constexpr (ID == DWMRegisterID::TX_FCTRL)
-      return 5;
-    else
-      static_assert(dependent_false<ID>, "Register size unspecified");
+  static constexpr size_t size_ = []() consteval -> size_t {
+    std::vector<std::pair<DWMRegisterID, size_t>> table{{
+      {DWMRegisterID::DEV_ID, 4},
+      {DWMRegisterID::SYSTEM_EVENT_STATUS, 5},
+      {DWMRegisterID::SYS_TIME, 5},
+      {DWMRegisterID::TX_FCTRL, 5}
+    }};
+
+    for (const auto& [id, size] : table) {
+      if (id == ID) {
+        return size;
+      }
+    }
+
+    // No default return value ensures if flow reaches this point, a compile error is triggered.
   }();
 
 public:
