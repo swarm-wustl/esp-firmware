@@ -18,6 +18,7 @@ namespace HW {
     using DriveStyle = ESP32::DifferentialDriveController;
     using MotorDriver = ESP32::L298NMotorDriver;
     using IMUSensor = ESP32::MPU6050Driver;
+    using EncoderDriver = ESP32::QuadratureEncoderDriver;
 }
 
 #endif

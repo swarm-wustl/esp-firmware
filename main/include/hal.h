@@ -34,6 +34,22 @@ namespace HAL {
         { driver.initialize() } -> std::same_as<bool>;
         { driver.read() } -> std::same_as<IMUData>;
     };
+
+    struct EncoderData {
+        int32_t left_ticks;
+        int32_t right_ticks;
+        double left_position;   // radians
+        double right_position;  // radians
+        double left_velocity;   // rad/s
+        double right_velocity;  // rad/s
+    };
+
+    template <typename EncoderDriver>
+    concept EncoderTrait = requires(EncoderDriver driver) {
+        { driver.initialize() } -> std::same_as<bool>;
+        { driver.read() } -> std::same_as<EncoderData>;
+        { driver.reset() } -> std::same_as<void>;
+    };
     enum class Voltage : uint32_t {
         HIGH = 1,
         LOW = 0

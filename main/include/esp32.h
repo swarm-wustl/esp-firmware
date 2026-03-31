@@ -5,6 +5,7 @@
 
 #include <geometry_msgs/msg/twist.h>
 #include "driver/i2c_master.h"
+#include "driver/pulse_cnt.h"
 
 #include "hal.h"
 
@@ -54,6 +55,36 @@ public:
     MPU6050Driver();
     bool initialize();
     HAL::IMUData read();
+};
+
+class QuadratureEncoderDriver {
+private:
+    pcnt_unit_handle_t left_unit;
+    pcnt_unit_handle_t right_unit;
+    bool initialized;
+
+    // Timestamp for velocity calculation
+    int64_t last_read_time_us;
+    int32_t last_left_ticks;
+    int32_t last_right_ticks;
+
+    static constexpr gpio_num_t LEFT_ENC_A = GPIO_NUM_34;
+    static constexpr gpio_num_t LEFT_ENC_B = GPIO_NUM_35;
+    static constexpr gpio_num_t RIGHT_ENC_A = GPIO_NUM_36;
+    static constexpr gpio_num_t RIGHT_ENC_B = GPIO_NUM_39;
+
+    // Encoder parameters
+    static constexpr int GEARING = 20;          // 20:1 gear ratio
+    static constexpr int ENCODER_CPR = 12;      // Counts per motor revolution
+    static constexpr int COUNTS_PER_REV = GEARING * ENCODER_CPR;  // 240 counts per wheel rev
+
+    bool setup_pcnt_unit(pcnt_unit_handle_t &unit, gpio_num_t pin_a, gpio_num_t pin_b);
+
+public:
+    QuadratureEncoderDriver();
+    bool initialize();
+    HAL::EncoderData read();
+    void reset();
 };
 } // namespace ESP32
 

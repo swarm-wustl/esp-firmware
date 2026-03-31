@@ -7,6 +7,8 @@
 #include "driver/ledc.h"
 #include "driver/uart.h"
 #include "driver/i2c_master.h"
+#include "driver/pulse_cnt.h"
+#include "esp_timer.h"
 
 #include <algorithm>
 #include <cmath>
@@ -335,4 +337,146 @@ HAL::IMUData ESP32::MPU6050Driver::read() {
   data.gyro_z = gyro_z_raw * GYRO_SCALE;
 
   return data;
+}
+
+// Quadrature Encoder Driver using PCNT
+#define PCNT_HIGH_LIMIT  32767
+#define PCNT_LOW_LIMIT  -32768
+
+ESP32::QuadratureEncoderDriver::QuadratureEncoderDriver()
+    : left_unit(nullptr), right_unit(nullptr), initialized(false),
+      last_read_time_us(0), last_left_ticks(0), last_right_ticks(0) {}
+
+bool ESP32::QuadratureEncoderDriver::setup_pcnt_unit(
+    pcnt_unit_handle_t &unit, gpio_num_t pin_a, gpio_num_t pin_b) {
+
+  // Configure PCNT unit
+  pcnt_unit_config_t unit_config = {};
+  unit_config.high_limit = PCNT_HIGH_LIMIT;
+  unit_config.low_limit = PCNT_LOW_LIMIT;
+
+  esp_err_t err = pcnt_new_unit(&unit_config, &unit);
+  if (err != ESP_OK) {
+    log("Failed to create PCNT unit: %d", err);
+    return false;
+  }
+
+  // Configure channel A (counts on A edges, direction from B)
+  pcnt_chan_config_t chan_a_config = {};
+  chan_a_config.edge_gpio_num = pin_a;
+  chan_a_config.level_gpio_num = pin_b;
+
+  pcnt_channel_handle_t chan_a = nullptr;
+  err = pcnt_new_channel(unit, &chan_a_config, &chan_a);
+  if (err != ESP_OK) {
+    log("Failed to add PCNT channel A: %d", err);
+    return false;
+  }
+
+  // Configure channel A edge actions for quadrature decoding
+  pcnt_channel_set_edge_action(chan_a, PCNT_CHANNEL_EDGE_ACTION_DECREASE, PCNT_CHANNEL_EDGE_ACTION_INCREASE);
+  pcnt_channel_set_level_action(chan_a, PCNT_CHANNEL_LEVEL_ACTION_KEEP, PCNT_CHANNEL_LEVEL_ACTION_INVERSE);
+
+  // Configure channel B (counts on B edges, direction from A)
+  pcnt_chan_config_t chan_b_config = {};
+  chan_b_config.edge_gpio_num = pin_b;
+  chan_b_config.level_gpio_num = pin_a;
+
+  pcnt_channel_handle_t chan_b = nullptr;
+  err = pcnt_new_channel(unit, &chan_b_config, &chan_b);
+  if (err != ESP_OK) {
+    log("Failed to add PCNT channel B: %d", err);
+    return false;
+  }
+
+  // Configure channel B edge actions for quadrature decoding
+  pcnt_channel_set_edge_action(chan_b, PCNT_CHANNEL_EDGE_ACTION_INCREASE, PCNT_CHANNEL_EDGE_ACTION_DECREASE);
+  pcnt_channel_set_level_action(chan_b, PCNT_CHANNEL_LEVEL_ACTION_KEEP, PCNT_CHANNEL_LEVEL_ACTION_INVERSE);
+
+  // Add glitch filter
+  pcnt_glitch_filter_config_t filter_config = {};
+  filter_config.max_glitch_ns = 1000;  // 1us glitch filter
+  pcnt_unit_set_glitch_filter(unit, &filter_config);
+
+  // Enable and start the unit
+  pcnt_unit_enable(unit);
+  pcnt_unit_clear_count(unit);
+  pcnt_unit_start(unit);
+
+  return true;
+}
+
+bool ESP32::QuadratureEncoderDriver::initialize() {
+  if (initialized) {
+    return true;
+  }
+
+  // Initialize left encoder
+  if (!setup_pcnt_unit(left_unit, LEFT_ENC_A, LEFT_ENC_B)) {
+    log("Failed to initialize left encoder");
+    return false;
+  }
+
+  // Initialize right encoder
+  if (!setup_pcnt_unit(right_unit, RIGHT_ENC_A, RIGHT_ENC_B)) {
+    log("Failed to initialize right encoder");
+    return false;
+  }
+
+  last_read_time_us = esp_timer_get_time();
+  initialized = true;
+  log("Encoders initialized successfully");
+  return true;
+}
+
+HAL::EncoderData ESP32::QuadratureEncoderDriver::read() {
+  HAL::EncoderData data = {0, 0, 0.0, 0.0, 0.0, 0.0};
+
+  if (!initialized) {
+    return data;
+  }
+
+  // Get current time
+  int64_t current_time_us = esp_timer_get_time();
+  double dt = (current_time_us - last_read_time_us) / 1000000.0;  // seconds
+
+  // Read current tick counts
+  int count_left = 0, count_right = 0;
+  pcnt_unit_get_count(left_unit, &count_left);
+  pcnt_unit_get_count(right_unit, &count_right);
+
+  data.left_ticks = count_left;
+  data.right_ticks = count_right;
+
+  // Convert ticks to radians
+  constexpr double TICKS_TO_RAD = (2.0 * 3.14159265358979) / COUNTS_PER_REV;
+  data.left_position = count_left * TICKS_TO_RAD;
+  data.right_position = count_right * TICKS_TO_RAD;
+
+  // Calculate velocity (rad/s)
+  if (dt > 0.0) {
+    int32_t delta_left = count_left - last_left_ticks;
+    int32_t delta_right = count_right - last_right_ticks;
+    data.left_velocity = (delta_left * TICKS_TO_RAD) / dt;
+    data.right_velocity = (delta_right * TICKS_TO_RAD) / dt;
+  }
+
+  // Update last values for next velocity calculation
+  last_read_time_us = current_time_us;
+  last_left_ticks = count_left;
+  last_right_ticks = count_right;
+
+  return data;
+}
+
+void ESP32::QuadratureEncoderDriver::reset() {
+  if (!initialized) {
+    return;
+  }
+
+  pcnt_unit_clear_count(left_unit);
+  pcnt_unit_clear_count(right_unit);
+  last_left_ticks = 0;
+  last_right_ticks = 0;
+  last_read_time_us = esp_timer_get_time();
 }

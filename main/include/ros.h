@@ -16,7 +16,7 @@
 #include "hardware.h"
 
 namespace ROS {
-    void spin(Consumer::QueueType& queue, HW::IMUSensor& imu);
+    void spin(Consumer::QueueType& queue, HW::IMUSensor& imu, HW::EncoderDriver& encoders);
     void sendMessage();
 }
 

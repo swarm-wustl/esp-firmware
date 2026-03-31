@@ -18,6 +18,7 @@ struct ConsumerTaskData {
 struct ROSTaskData {
   Consumer::QueueType &queue;
   HW::IMUSensor imu;
+  HW::EncoderDriver encoders;
 };
 
 static void consumerTaskWrapper(void *pvParameters) {
@@ -31,7 +32,7 @@ static void consumerTaskWrapper(void *pvParameters) {
 static void rosTaskWrapper(void *pvParameters) {
   ROSTaskData *data = reinterpret_cast<ROSTaskData *>(pvParameters);
 
-  ROS::spin(data->queue, data->imu);
+  ROS::spin(data->queue, data->imu, data->encoders);
 
   vTaskDelete(nullptr);
 }
@@ -53,7 +54,7 @@ extern "C" void app_main(void) {
   static ConsumerTaskData consumerTaskData{HW::MotorDriver{},
                                            Consumer::QueueType{}};
 
-  static ROSTaskData rosTaskData{consumerTaskData.queue, HW::IMUSensor{}};
+  static ROSTaskData rosTaskData{consumerTaskData.queue, HW::IMUSensor{}, HW::EncoderDriver{}};
 
   log("Hello world!");
 

@@ -8,7 +8,10 @@
 
 #include <geometry_msgs/msg/twist.h>
 #include <sensor_msgs/msg/imu.h>
+#include <sensor_msgs/msg/joint_state.h>
 #include <builtin_interfaces/msg/time.h>
+#include <rosidl_runtime_c/string_functions.h>
+#include <rosidl_runtime_c/primitives_sequence_functions.h>
 
 #include "error.h"
 #include "freertos/FreeRTOS.h"
@@ -39,6 +42,13 @@ static struct {
   rcl_publisher_t *publisher;
   sensor_msgs__msg__Imu *msg;
 } g_imu_ctx;
+
+// Context for encoder timer callback
+static struct {
+  HW::EncoderDriver *encoders;
+  rcl_publisher_t *publisher;
+  sensor_msgs__msg__JointState *msg;
+} g_encoder_ctx;
 
 static void twist_callback(const void *msgin, void *context) {
   printf("Received message!\n");
@@ -96,7 +106,35 @@ static void imu_timer_callback(rcl_timer_t *timer, int64_t last_call_time) {
   rcl_ret_t ret __attribute__((unused)) = rcl_publish(g_imu_ctx.publisher, g_imu_ctx.msg, NULL);
 }
 
-void ROS::spin(Consumer::QueueType &queue, HW::IMUSensor &imu) {
+static void encoder_timer_callback(rcl_timer_t *timer, int64_t last_call_time) {
+  (void)last_call_time;
+  (void)timer;
+
+  if (g_encoder_ctx.encoders == NULL || g_encoder_ctx.publisher == NULL || g_encoder_ctx.msg == NULL) {
+    return;
+  }
+
+  // Read encoder data
+  HAL::EncoderData enc_data = g_encoder_ctx.encoders->read();
+
+  // Get current time
+  int64_t time_us = esp_timer_get_time();
+  g_encoder_ctx.msg->header.stamp.sec = time_us / 1000000;
+  g_encoder_ctx.msg->header.stamp.nanosec = (time_us % 1000000) * 1000;
+
+  // Populate position (radians)
+  g_encoder_ctx.msg->position.data[0] = enc_data.left_position;
+  g_encoder_ctx.msg->position.data[1] = enc_data.right_position;
+
+  // Populate velocity (rad/s)
+  g_encoder_ctx.msg->velocity.data[0] = enc_data.left_velocity;
+  g_encoder_ctx.msg->velocity.data[1] = enc_data.right_velocity;
+
+  // Publish
+  rcl_ret_t ret __attribute__((unused)) = rcl_publish(g_encoder_ctx.publisher, g_encoder_ctx.msg, NULL);
+}
+
+void ROS::spin(Consumer::QueueType &queue, HW::IMUSensor &imu, HW::EncoderDriver &encoders) {
   // Create ID from MAC address
   uint8_t mac[6];
   esp_read_mac(mac, ESP_MAC_WIFI_STA);
@@ -111,6 +149,11 @@ void ROS::spin(Consumer::QueueType &queue, HW::IMUSensor &imu) {
   // Initialize IMU
   if (!imu.initialize()) {
     log("Failed to initialize IMU");
+  }
+
+  // Initialize encoders
+  if (!encoders.initialize()) {
+    log("Failed to initialize encoders");
   }
 
   // Create memory allocator
@@ -150,11 +193,23 @@ void ROS::spin(Consumer::QueueType &queue, HW::IMUSensor &imu) {
       &imu_publisher, &node,
       ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu), "imu/data"));
 
+  // Create encoder publisher
+  rcl_publisher_t encoder_publisher;
+  RCCHECK(rclc_publisher_init_default(
+      &encoder_publisher, &node,
+      ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, JointState), "joint_states"));
+
   // Create IMU timer (20ms period = 50Hz)
   rcl_timer_t imu_timer;
   const unsigned int imu_timer_period_ms = 20;
   RCCHECK(rclc_timer_init_default(
       &imu_timer, &support, RCL_MS_TO_NS(imu_timer_period_ms), imu_timer_callback));
+
+  // Create encoder timer (20ms period = 50Hz)
+  rcl_timer_t encoder_timer;
+  const unsigned int encoder_timer_period_ms = 20;
+  RCCHECK(rclc_timer_init_default(
+      &encoder_timer, &support, RCL_MS_TO_NS(encoder_timer_period_ms), encoder_timer_callback));
 
   // Initialize IMU message
   sensor_msgs__msg__Imu imu_msg;
@@ -171,6 +226,33 @@ void ROS::spin(Consumer::QueueType &queue, HW::IMUSensor &imu) {
   imu_msg.angular_velocity_covariance[0] = 0;
   imu_msg.linear_acceleration_covariance[0] = 0;
 
+  // Initialize JointState message for encoders
+  sensor_msgs__msg__JointState joint_state_msg;
+  sensor_msgs__msg__JointState__init(&joint_state_msg);
+
+  // Set frame_id for joint states
+  static const char joint_frame_id[] = "base_link";
+  joint_state_msg.header.frame_id.data = const_cast<char *>(joint_frame_id);
+  joint_state_msg.header.frame_id.size = sizeof(joint_frame_id) - 1;
+  joint_state_msg.header.frame_id.capacity = sizeof(joint_frame_id);
+
+  // Allocate and set joint names
+  static const char left_wheel_name[] = "left_wheel_joint";
+  static const char right_wheel_name[] = "right_wheel_joint";
+
+  rosidl_runtime_c__String__Sequence__init(&joint_state_msg.name, 2);
+  joint_state_msg.name.data[0].data = const_cast<char *>(left_wheel_name);
+  joint_state_msg.name.data[0].size = sizeof(left_wheel_name) - 1;
+  joint_state_msg.name.data[0].capacity = sizeof(left_wheel_name);
+  joint_state_msg.name.data[1].data = const_cast<char *>(right_wheel_name);
+  joint_state_msg.name.data[1].size = sizeof(right_wheel_name) - 1;
+  joint_state_msg.name.data[1].capacity = sizeof(right_wheel_name);
+
+  // Allocate position and velocity arrays
+  rosidl_runtime_c__double__Sequence__init(&joint_state_msg.position, 2);
+  rosidl_runtime_c__double__Sequence__init(&joint_state_msg.velocity, 2);
+  rosidl_runtime_c__double__Sequence__init(&joint_state_msg.effort, 0);  // Not used
+
   // Create callback contexts
   static TwistCallbackContext twist_ctx;
   twist_ctx.queue = &queue;
@@ -180,17 +262,23 @@ void ROS::spin(Consumer::QueueType &queue, HW::IMUSensor &imu) {
   g_imu_ctx.publisher = &imu_publisher;
   g_imu_ctx.msg = &imu_msg;
 
-  // Create executor with 2 handles (subscriber + timer)
+  // Set up global encoder context for timer callback
+  g_encoder_ctx.encoders = &encoders;
+  g_encoder_ctx.publisher = &encoder_publisher;
+  g_encoder_ctx.msg = &joint_state_msg;
+
+  // Create executor with 3 handles (subscriber + 2 timers)
   rclc_executor_t executor;
-  RCCHECK(rclc_executor_init(&executor, &support.context, 2, &allocator));
+  RCCHECK(rclc_executor_init(&executor, &support.context, 3, &allocator));
 
   // Add subscriber to executor
   geometry_msgs__msg__Twist msgin;
   RCCHECK(rclc_executor_add_subscription_with_context(
       &executor, &subscriber, &msgin, &twist_callback, (void *)&twist_ctx, ON_NEW_DATA));
 
-  // Add timer to executor
+  // Add timers to executor
   RCCHECK(rclc_executor_add_timer(&executor, &imu_timer));
+  RCCHECK(rclc_executor_add_timer(&executor, &encoder_timer));
 
   rclc_executor_spin(&executor);
 
