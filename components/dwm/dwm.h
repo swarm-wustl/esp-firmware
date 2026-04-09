@@ -58,20 +58,20 @@ concept IsTimestampRegister =
 template <HAL::GenericSPIController SPI, DWMRegisterID ID>
 class DWMRegisterView {
   static constexpr size_t size_ = []() consteval -> size_t {
-    std::vector<std::pair<DWMRegisterID, size_t>> table{{
-      {DWMRegisterID::DEV_ID, 4},
-      {DWMRegisterID::SYSTEM_EVENT_STATUS, 5},
-      {DWMRegisterID::SYS_TIME, 5},
-      {DWMRegisterID::TX_FCTRL, 5}
-    }};
+    std::vector<std::pair<DWMRegisterID, size_t>> table{
+        {{DWMRegisterID::DEV_ID, 4},
+         {DWMRegisterID::SYSTEM_EVENT_STATUS, 5},
+         {DWMRegisterID::SYS_TIME, 5},
+         {DWMRegisterID::TX_FCTRL, 5}}};
 
-    for (const auto& [id, size] : table) {
+    for (const auto &[id, size] : table) {
       if (id == ID) {
         return size;
       }
     }
 
-    // No default return value ensures if flow reaches this point, a compile error is triggered.
+    // No default return value ensures if flow reaches this point, a compile
+    // error is triggered.
   }();
 
 public:
@@ -267,18 +267,16 @@ private:
   static auto flatten_data(std::span<const std::byte, size_> data)
     requires(size_ <= sizeof(uint64_t))
   {
-    if constexpr (size_ == sizeof(uint16_t)) {
-      return std::bit_cast<uint16_t>(data);
-    } else if constexpr (size_ == sizeof(uint32_t)) {
-      return std::bit_cast<uint32_t>(data);
-    } else {
-      // std::bit_cast requires an exact size-match
-      // Therefore, std::memcpy is necessary since many DW1000 regs are 5 bytes
-      // in size (rather than uint64_t's 8 bytes)
-      uint64_t res{};
-      std::memcpy(&res, data.data(), size_);
-      return res;
-    }
+    // std::bit_cast requires an exact size-match
+    // Therefore, std::memcpy is necessary since many DW1000 regs are 5 bytes
+    // in size (rather than uint64_t's 8 bytes).
+    // Also, std::bit_cast does NOT work with std::span, so this function no
+    // longer uses bit_cast for compatible sizes (e.g., 4). To simplify things,
+    // it always uses std::memcpy. The lack of constexpr doesn't matter since
+    // the data parameter will always be at runtime regardless.
+    uint64_t res{};
+    std::memcpy(&res, data.data(), size_);
+    return res;
   }
 
   static std::array<std::byte, size_> pack_data(std::integral auto val) {
