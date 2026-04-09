@@ -456,6 +456,7 @@ public:
 private:
   template <DWMRegisterID ID> using Register = DWMRegisterView<SPI, ID>;
 
+  // TODO: remove const_cast shenanigans and just make this method non-const?
   template <DWMRegisterID ID> Register<ID> get_reg_view() const {
     return Register<ID>{const_cast<SPI &>(spi_)};
   }
