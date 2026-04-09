@@ -1,6 +1,8 @@
 #include "dwm.h"
 #include "esp32.h"
 #include "unity.h"
+#include <algorithm>
+#include <ranges>
 
 // TODO: make a mock DWM SPI struct
 
@@ -20,4 +22,23 @@ TEST_CASE("Test write device ID register view", "[dwm_reg]") {
   TEST_ASSERT_EQUAL(dev_id_reg.value(), 0xDECA0130);
   dev_id_reg |= 0xFFFFFFFF;
   TEST_ASSERT_EQUAL(dev_id_reg.value(), 0xDECA0130);
+}
+
+TEST_CASE("Test write and read-back TX buffer", "[dwm_reg]") {
+  ESP32::SPI spi{GPIO_NUM_4};
+  DWMRegisterView<ESP32::SPI, DWMRegisterID::TX_BUFFER> tx_buf_reg{spi};
+
+  // Store in BSS because the Unity task has limited stack space
+  static std::array<std::byte, 1024> test_data;
+
+  // Generate test values [0, 1, .., 1023]
+  std::ranges::copy(std::views::iota(0, 1024) |
+                        std::views::transform([](int i) {
+                          return std::byte{static_cast<uint8_t>(i)};
+                        }),
+                    test_data.begin());
+
+  tx_buf_reg.write_data(std::span{test_data});
+
+  // Try to read back data
 }

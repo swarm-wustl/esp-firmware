@@ -25,6 +25,7 @@ enum class DWMRegisterID : uint8_t {
   SYSTEM_EVENT_STATUS = 0x0F,
   RX_TIME = 0x15,
   TX_TIME = 0x17,
+  TX_BUFFER = 0x09,
 };
 
 class DWMTimestamp {
@@ -62,7 +63,8 @@ class DWMRegisterView {
         {{DWMRegisterID::DEV_ID, 4},
          {DWMRegisterID::SYSTEM_EVENT_STATUS, 5},
          {DWMRegisterID::SYS_TIME, 5},
-         {DWMRegisterID::TX_FCTRL, 5}}};
+         {DWMRegisterID::TX_FCTRL, 5},
+         {DWMRegisterID::TX_BUFFER, 1024}}};
 
     for (const auto &[id, size] : table) {
       if (id == ID) {
@@ -126,17 +128,6 @@ public:
   {
     // Copy the current data and AND the flags onto it
     uint64_t new_value = flatten_data(data_) & flags;
-    write_data(new_value);
-
-    return *this;
-  }
-
-  /*
-   * Equals: used to assign a value to a register.
-   */
-  DWMRegisterView &operator=(std::integral auto new_value)
-    requires(size_ <= sizeof(uint64_t))
-  {
     write_data(new_value);
 
     return *this;
@@ -216,20 +207,6 @@ public:
 
   consteval size_t size() const { return size_; }
 
-private:
-  void read_data() {
-    // Lower 6 bits store actual register
-    // MSbit = 0 represents read
-    uint8_t reg = 0x00 | (static_cast<uint8_t>(ID) & 0x3F);
-
-    // Store in single-value array to be compatible with SPI controller API
-    std::array<const std::byte, 1> tx{std::byte{reg}};
-
-    // Initiate SPI transfer
-    // TODO: error handle
-    spi_.transfer_halfduplex(tx, data_);
-  }
-
   // TODO: consider removing this and other cases of std::integral auto
   // It might just be adding complexity for no reason (ig bit_cast
   // optimization..?)
@@ -258,10 +235,25 @@ private:
     // Lastly, read data to get updated register value
     // This is for a few reasons:
     // 1) some registers are read-only, and writes should do nothing
-    // 2) some registers clear values by writing 1 to them (so the local array's
-    // state would be inverted) 3) we want the most updated register state after
-    // writing!
+    // 2) some registers clear values by writing 1 to them (so the local
+    // array's state would be inverted) 3) we want the most updated register
+    // state after writing!
+    // TODO: is this good design?
     read_data();
+  }
+
+private:
+  void read_data() {
+    // Lower 6 bits store actual register
+    // MSbit = 0 represents read
+    uint8_t reg = 0x00 | (static_cast<uint8_t>(ID) & 0x3F);
+
+    // Store in single-value array to be compatible with SPI controller API
+    std::array<const std::byte, 1> tx{std::byte{reg}};
+
+    // Initiate SPI transfer
+    // TODO: error handle
+    spi_.transfer_halfduplex(tx, data_);
   }
 
   static auto flatten_data(std::span<const std::byte, size_> data)
@@ -271,9 +263,9 @@ private:
     // Therefore, std::memcpy is necessary since many DW1000 regs are 5 bytes
     // in size (rather than uint64_t's 8 bytes).
     // Also, std::bit_cast does NOT work with std::span, so this function no
-    // longer uses bit_cast for compatible sizes (e.g., 4). To simplify things,
-    // it always uses std::memcpy. The lack of constexpr doesn't matter since
-    // the data parameter will always be at runtime regardless.
+    // longer uses bit_cast for compatible sizes (e.g., 4). To simplify
+    // things, it always uses std::memcpy. The lack of constexpr doesn't
+    // matter since the data parameter will always be at runtime regardless.
     uint64_t res{};
     std::memcpy(&res, data.data(), size_);
     return res;
