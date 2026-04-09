@@ -41,4 +41,7 @@ TEST_CASE("Test write and read-back TX buffer", "[dwm_reg]") {
   tx_buf_reg.write_data(std::span{test_data});
 
   // Try to read back data
+  static std::array<std::byte, 1024> response_data;
+  std::ranges::copy(tx_buf_reg.value(), response_data.begin());
+  TEST_ASSERT(test_data == response_data);
 }

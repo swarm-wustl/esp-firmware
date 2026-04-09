@@ -191,17 +191,19 @@ public:
     return *this;
   }
 
-  auto value()
-    requires(size_ <= sizeof(uint64_t))
-  {
+  auto value() {
     read_data();
 
-    auto res = flatten_data(data_);
+    if constexpr (size_ <= sizeof(uint64_t)) {
+      auto res = flatten_data(data_);
 
-    if constexpr (IsTimestampRegister<ID>) {
-      return DWMTimestamp{res};
+      if constexpr (IsTimestampRegister<ID>) {
+        return DWMTimestamp{res};
+      } else {
+        return res;
+      }
     } else {
-      return res;
+      return std::span<const std::byte, size_>{data_};
     }
   }
 
