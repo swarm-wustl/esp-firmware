@@ -434,9 +434,7 @@ public:
     return 0;
   }
 
-  auto get_device_id() const {
-    return get_reg_view<DWMRegisterID::DEV_ID>().value();
-  }
+  auto get_device_id() { return get_reg_view<DWMRegisterID::DEV_ID>().value(); }
 
   /*
    * Pulse Repetition Frequency
@@ -456,9 +454,8 @@ public:
 private:
   template <DWMRegisterID ID> using Register = DWMRegisterView<SPI, ID>;
 
-  // TODO: remove const_cast shenanigans and just make this method non-const?
-  template <DWMRegisterID ID> Register<ID> get_reg_view() const {
-    return Register<ID>{const_cast<SPI &>(spi_)};
+  template <DWMRegisterID ID> Register<ID> get_reg_view() {
+    return Register<ID>{spi_};
   }
 
   void hard_reset() {
