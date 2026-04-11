@@ -278,6 +278,26 @@ private:
   std::array<std::byte, size_> data_{};
 };
 
+// TODO: add this, and other related classes, to some sort of DWM namespace
+enum class PRF : uint8_t { MHZ_4 = 0b00, MHZ_16 = 0b01, MHZ_64 = 0b10 };
+
+constexpr std::string_view PRFToString(PRF prf) noexcept {
+  using namespace std::string_view_literals;
+
+  switch (prf) {
+  case PRF::MHZ_4:
+    return "4 MHz"sv;
+  case PRF::MHZ_16:
+    return "16 MHz"sv;
+  case PRF::MHZ_64:
+    return "64 MHz"sv;
+  default:
+    __builtin_unreachable();
+  }
+
+  return "UNKNOWN PRF"sv;
+}
+
 template <HAL::GenericSPIController SPI, HAL::GenericGPIOController GPIO>
 class DWM {
   static_assert(std::endian::native == std::endian::little,
@@ -370,25 +390,6 @@ public:
     return "UNKNOWN BITRATE"sv;
   }
 
-  enum class PRF : uint8_t { MHZ_4 = 0b00, MHZ_16 = 0b01, MHZ_64 = 0b10 };
-
-  static constexpr std::string_view PRFToString(PRF prf) noexcept {
-    using namespace std::string_view_literals;
-
-    switch (prf) {
-    case PRF::MHZ_4:
-      return "4 MHz"sv;
-    case PRF::MHZ_16:
-      return "16 MHz"sv;
-    case PRF::MHZ_64:
-      return "64 MHz"sv;
-    default:
-      __builtin_unreachable();
-    }
-
-    return "UNKNOWN PRF"sv;
-  }
-
   enum class PreambleLength : uint8_t {
     LEN_64 = 0b01'00,
     LEN_128 = 0b01'01,
@@ -430,7 +431,8 @@ public:
   /*
    * Pulse Repetition Frequency
    */
-  PRF tx_prf() const {
+  // TODO: rename this and related methods to get_*?
+  PRF tx_prf() {
     auto tx_fctrl = get_reg_view<DWMRegisterID::TX_FCTRL>();
     uint8_t raw_prf = tx_fctrl.bit_range(17, 16); // TODO: constants?
 
