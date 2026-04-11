@@ -191,9 +191,7 @@ public:
     return *this;
   }
 
-  auto value() {
-    read_data();
-
+  auto value() const {
     if constexpr (size_ <= sizeof(uint64_t)) {
       auto res = flatten_data(data_);
 
@@ -209,6 +207,19 @@ public:
 
   consteval size_t size() const { return size_; }
 
+  void read_data() {
+    // Lower 6 bits store actual register
+    // MSbit = 0 represents read
+    uint8_t reg = 0x00 | (static_cast<uint8_t>(ID) & 0x3F);
+
+    // Store in single-value array to be compatible with SPI controller API
+    std::array<const std::byte, 1> tx{std::byte{reg}};
+
+    // Initiate SPI transfer
+    // TODO: error handle
+    spi_.transfer_halfduplex(tx, data_);
+  }
+
   // TODO: consider removing this and other cases of std::integral auto
   // It might just be adding complexity for no reason (ig bit_cast
   // optimization..?)
@@ -216,6 +227,7 @@ public:
     write_data(pack_data(new_value));
   }
 
+  // TODO: maybe make the span have a dynamic_extent, and allow writes <= size_?
   void write_data(std::span<const std::byte, size_> new_data) {
     // Lower 6 bits store actual register
     // MSbit = 1 represents write
@@ -233,31 +245,9 @@ public:
     // Initiate SPI transfer
     // TODO: error handle
     spi_.transfer_halfduplex(tx, {});
-
-    // Lastly, read data to get updated register value
-    // This is for a few reasons:
-    // 1) some registers are read-only, and writes should do nothing
-    // 2) some registers clear values by writing 1 to them (so the local
-    // array's state would be inverted) 3) we want the most updated register
-    // state after writing!
-    // TODO: is this good design?
-    read_data();
   }
 
 private:
-  void read_data() {
-    // Lower 6 bits store actual register
-    // MSbit = 0 represents read
-    uint8_t reg = 0x00 | (static_cast<uint8_t>(ID) & 0x3F);
-
-    // Store in single-value array to be compatible with SPI controller API
-    std::array<const std::byte, 1> tx{std::byte{reg}};
-
-    // Initiate SPI transfer
-    // TODO: error handle
-    spi_.transfer_halfduplex(tx, data_);
-  }
-
   static auto flatten_data(std::span<const std::byte, size_> data)
     requires(size_ <= sizeof(uint64_t))
   {
@@ -294,6 +284,7 @@ class DWM {
                 "DWM1000 requires little-endian architecture");
 
 public:
+  // TODO: make GPIO rvalue ref?
   DWM(SPI &&spi, GPIO gpio, uint8_t rst_pin, uint8_t irq_pin)
       : spi_{std::move(spi)}, gpio_{std::move(gpio)}, rst_pin_{rst_pin},
         irq_pin_{irq_pin} {
