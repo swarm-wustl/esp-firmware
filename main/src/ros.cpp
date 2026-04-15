@@ -6,18 +6,18 @@
 #include <rmw_microros/rmw_microros.h>
 #endif
 
+#include <builtin_interfaces/msg/time.h>
 #include <geometry_msgs/msg/twist.h>
+#include <rosidl_runtime_c/primitives_sequence_functions.h>
+#include <rosidl_runtime_c/string_functions.h>
 #include <sensor_msgs/msg/imu.h>
 #include <sensor_msgs/msg/joint_state.h>
-#include <builtin_interfaces/msg/time.h>
-#include <rosidl_runtime_c/string_functions.h>
-#include <rosidl_runtime_c/primitives_sequence_functions.h>
 
 #include "error.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "queue.h"
-#include "esp_timer.h"
 
 static const uint32_t MSG_SIZE = 512;
 
@@ -36,7 +36,8 @@ struct TwistCallbackContext {
   Consumer::QueueType *queue;
 };
 
-// Context for IMU timer callback (static since timer callbacks don't support user data)
+// Context for IMU timer callback (static since timer callbacks don't support
+// user data)
 static struct {
   HW::IMUSensor *imu;
   rcl_publisher_t *publisher;
@@ -72,7 +73,8 @@ static void imu_timer_callback(rcl_timer_t *timer, int64_t last_call_time) {
   (void)last_call_time;
   (void)timer;
 
-  if (g_imu_ctx.imu == NULL || g_imu_ctx.publisher == NULL || g_imu_ctx.msg == NULL) {
+  if (g_imu_ctx.imu == NULL || g_imu_ctx.publisher == NULL ||
+      g_imu_ctx.msg == NULL) {
     return;
   }
 
@@ -99,18 +101,20 @@ static void imu_timer_callback(rcl_timer_t *timer, int64_t last_call_time) {
   g_imu_ctx.msg->orientation.x = 0;
   g_imu_ctx.msg->orientation.y = 0;
   g_imu_ctx.msg->orientation.z = 0;
-  g_imu_ctx.msg->orientation.w = 1;  // Identity quaternion
+  g_imu_ctx.msg->orientation.w = 1; // Identity quaternion
   g_imu_ctx.msg->orientation_covariance[0] = -1;
 
   // Publish
-  rcl_ret_t ret __attribute__((unused)) = rcl_publish(g_imu_ctx.publisher, g_imu_ctx.msg, NULL);
+  rcl_ret_t ret __attribute__((unused)) =
+      rcl_publish(g_imu_ctx.publisher, g_imu_ctx.msg, NULL);
 }
 
 static void encoder_timer_callback(rcl_timer_t *timer, int64_t last_call_time) {
   (void)last_call_time;
   (void)timer;
 
-  if (g_encoder_ctx.encoders == NULL || g_encoder_ctx.publisher == NULL || g_encoder_ctx.msg == NULL) {
+  if (g_encoder_ctx.encoders == NULL || g_encoder_ctx.publisher == NULL ||
+      g_encoder_ctx.msg == NULL) {
     return;
   }
 
@@ -131,10 +135,12 @@ static void encoder_timer_callback(rcl_timer_t *timer, int64_t last_call_time) {
   g_encoder_ctx.msg->velocity.data[1] = enc_data.right_velocity;
 
   // Publish
-  rcl_ret_t ret __attribute__((unused)) = rcl_publish(g_encoder_ctx.publisher, g_encoder_ctx.msg, NULL);
+  rcl_ret_t ret __attribute__((unused)) =
+      rcl_publish(g_encoder_ctx.publisher, g_encoder_ctx.msg, NULL);
 }
 
-void ROS::spin(Consumer::QueueType &queue, HW::IMUSensor &imu, HW::EncoderDriver &encoders) {
+void ROS::spin(Consumer::QueueType &queue, HW::IMUSensor &imu,
+               HW::EncoderDriver &encoders) {
   // Create ID from MAC address
   uint8_t mac[6];
   esp_read_mac(mac, ESP_MAC_WIFI_STA);
@@ -187,29 +193,32 @@ void ROS::spin(Consumer::QueueType &queue, HW::IMUSensor &imu, HW::EncoderDriver
       &subscriber, &node,
       ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist), "cmd_vel"));
 
-  // Create IMU publisher
+  // Create IMU publisher (Change to best_effort)
   rcl_publisher_t imu_publisher;
-  RCCHECK(rclc_publisher_init_default(
-      &imu_publisher, &node,
-      ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu), "imu/data"));
+  RCCHECK(rclc_publisher_init_best_effort(
+      &imu_publisher, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu),
+      "imu/data"));
 
-  // Create encoder publisher
+  // Create encoder publisher (Change to best_effort)
   rcl_publisher_t encoder_publisher;
-  RCCHECK(rclc_publisher_init_default(
+  RCCHECK(rclc_publisher_init_best_effort(
       &encoder_publisher, &node,
-      ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, JointState), "joint_states"));
+      ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, JointState),
+      "joint_states"));
 
-  // Create IMU timer (20ms period = 50Hz)
+  // Create IMU timer (20ms = 50Hz)
   rcl_timer_t imu_timer;
   const unsigned int imu_timer_period_ms = 20;
-  RCCHECK(rclc_timer_init_default(
-      &imu_timer, &support, RCL_MS_TO_NS(imu_timer_period_ms), imu_timer_callback));
+  RCCHECK(rclc_timer_init_default(&imu_timer, &support,
+                                  RCL_MS_TO_NS(imu_timer_period_ms),
+                                  imu_timer_callback));
 
-  // Create encoder timer (20ms period = 50Hz)
+  // Create encoder timer (20ms = 50Hz)
   rcl_timer_t encoder_timer;
   const unsigned int encoder_timer_period_ms = 20;
-  RCCHECK(rclc_timer_init_default(
-      &encoder_timer, &support, RCL_MS_TO_NS(encoder_timer_period_ms), encoder_timer_callback));
+  RCCHECK(rclc_timer_init_default(&encoder_timer, &support,
+                                  RCL_MS_TO_NS(encoder_timer_period_ms),
+                                  encoder_timer_callback));
 
   // Initialize IMU message
   sensor_msgs__msg__Imu imu_msg;
@@ -251,7 +260,8 @@ void ROS::spin(Consumer::QueueType &queue, HW::IMUSensor &imu, HW::EncoderDriver
   // Allocate position and velocity arrays
   rosidl_runtime_c__double__Sequence__init(&joint_state_msg.position, 2);
   rosidl_runtime_c__double__Sequence__init(&joint_state_msg.velocity, 2);
-  rosidl_runtime_c__double__Sequence__init(&joint_state_msg.effort, 0);  // Not used
+  rosidl_runtime_c__double__Sequence__init(&joint_state_msg.effort,
+                                           0); // Not used
 
   // Create callback contexts
   static TwistCallbackContext twist_ctx;
@@ -267,14 +277,15 @@ void ROS::spin(Consumer::QueueType &queue, HW::IMUSensor &imu, HW::EncoderDriver
   g_encoder_ctx.publisher = &encoder_publisher;
   g_encoder_ctx.msg = &joint_state_msg;
 
-  // Create executor with 3 handles (subscriber + 2 timers)
+  // Create executor (subscriber + IMU timer + encoder timer)
   rclc_executor_t executor;
   RCCHECK(rclc_executor_init(&executor, &support.context, 3, &allocator));
 
   // Add subscriber to executor
   geometry_msgs__msg__Twist msgin;
   RCCHECK(rclc_executor_add_subscription_with_context(
-      &executor, &subscriber, &msgin, &twist_callback, (void *)&twist_ctx, ON_NEW_DATA));
+      &executor, &subscriber, &msgin, &twist_callback, (void *)&twist_ctx,
+      ON_NEW_DATA));
 
   // Add timers to executor
   RCCHECK(rclc_executor_add_timer(&executor, &imu_timer));

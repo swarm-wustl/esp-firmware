@@ -60,8 +60,7 @@ extern "C" void app_main(void) {
 
   xTaskCreate(
       rosTaskWrapper, "uros_task",
-      4096, // TODO: see
-            // https://github.com/micro-ROS/micro_ros_espidf_component/blob/cd1da2b3d7d73f48743a2c42ac0e915cd751bb74/examples/int32_publisher/main/main.c#L105
+      16000,
       (void *)&rosTaskData, configMAX_PRIORITIES - 1, NULL);
 
   xTaskCreate(consumerTaskWrapper, "consumer_task", 4096,
