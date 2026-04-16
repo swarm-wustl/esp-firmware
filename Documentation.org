@@ -1,6 +1,17 @@
 * Sebastian's Flashing Instructions
 This works on NixOS despite the fact that ESPIDF and MicroROS really /do not want to work on NixOS/, so hopefully it should work on just about any Unix-like system.
 
+After cloning, make sure the Micro-ROS ESP-IDF component submodule is initialized. This can be done with ~git submodule init~ or manually with
+
+#+begin_src sh
+mkdir components
+cd components
+git clone https://github.com/micro-ROS/micro_ros_espidf_component/
+cd micro_ros_espidf_component
+git switch humble
+cd ../..
+#+end_src
+
 First, connect the ESP32 to your computer using a male USB-C to male USB-C that /is capable of data transfer/ (i.e., not just power). Check which USB port the ESP32 connected to:
 
 #+begin_src sh
