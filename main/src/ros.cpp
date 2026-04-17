@@ -79,40 +79,47 @@ void ROS::imu_publish(void *arg){
     ESP_ERROR_CHECK(mpu6050_register_read(IMU_WHO_AM_I_ADDR , data, 1));
     printf("WHO_AM_I = %X\n", data[0]);
 
-    int16_t gyroX, gyroY, gyroZ;
-    int16_t accelX, accelY, accelZ;
+    while (true){
+        int16_t gyroX, gyroY, gyroZ;
+        int16_t accelX, accelY, accelZ;
 
-    ESP_ERROR_CHECK(imu_read_gyroscope_data(&gyroX, &gyroY, &gyroZ));
-    ESP_ERROR_CHECK(imu_read_accelerometer_data(&accelX, &accelY, &accelZ));
+        if (imu_read_gyroscope_data(&gyroX, &gyroY, &gyroZ) == ESP_OK &&
+            imu_read_accelerometer_data(&accelX, &accelY, &accelZ) == ESP_OK) {
 
-    float gx = ((float)gyroX) / LSBSENS_GYRO;
-    float gy = ((float)gyroY) / LSBSENS_GYRO;
-    float gz = ((float)gyroZ) / LSBSENS_GYRO;
+                float gx = ((float)gyroX) / LSBSENS_GYRO;
+                float gy = ((float)gyroY) / LSBSENS_GYRO;
+                float gz = ((float)gyroZ) / LSBSENS_GYRO;
 
-    float ax = ((float)accelX) / LSBSENS_ACCEL;
-    float ay = ((float)accelY) / LSBSENS_ACCEL;
-    float az = ((float)accelZ) / LSBSENS_ACCEL;
+                float ax = ((float)accelX) / LSBSENS_ACCEL;
+                float ay = ((float)accelY) / LSBSENS_ACCEL;
+                float az = ((float)accelZ) / LSBSENS_ACCEL;
 
-        // ROS expects rad/s
-    gx *= (M_PI / 180.0);
-    gy *= (M_PI / 180.0);
-    gz *= (M_PI / 180.0);
+                    // ROS expects rad/s
+                gx *= (M_PI / 180.0);
+                gy *= (M_PI / 180.0);
+                gz *= (M_PI / 180.0);
 
-    imu_msg.angular_velocity.x = gx;
-    imu_msg.angular_velocity.y = gy;
-    imu_msg.angular_velocity.z = gz;
+                imu_msg.angular_velocity.x = gx;
+                imu_msg.angular_velocity.y = gy;
+                imu_msg.angular_velocity.z = gz;
 
-    imu_msg.linear_acceleration.x = ax * G;
-    imu_msg.linear_acceleration.y = ay * G;
-    imu_msg.linear_acceleration.z = az * G;
+                imu_msg.linear_acceleration.x = ax * G;
+                imu_msg.linear_acceleration.y = ay * G;
+                imu_msg.linear_acceleration.z = az * G;
 
-    rcl_publish(&publisher, &imu_msg, NULL);
+                rcl_publish(&publisher, &imu_msg, NULL);
+            }
+
+        vTaskDelay(pdMS_TO_TICKS(100));
+
+    }
 
     ESP_ERROR_CHECK(imu_register_write_byte(IMU_PWR_MGMT_1, 1 << IMU_PWR_MGMT_1_RESET_BIT));
     ESP_LOGI(TAG, "I2C written successfully");
 
     ESP_ERROR_CHECK(i2c_driver_delete(I2C_MASTER_NUM));
     ESP_LOGI(TAG, "I2C unitialized successfully");
+    
 
 }
 void ROS::spin(Consumer::QueueType& queue) {
