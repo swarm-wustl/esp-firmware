@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstring>
 #include <string>
+#include <vector>
 
 // TODO: add noexcept to classes
 
@@ -24,6 +25,7 @@ enum class DWMRegisterID : uint8_t {
   SYSTEM_EVENT_STATUS = 0x0F,
   RX_TIME = 0x15,
   TX_TIME = 0x17,
+  TX_BUFFER = 0x09,
 };
 
 class DWMTimestamp {
@@ -56,17 +58,22 @@ concept IsTimestampRegister =
 
 template <HAL::GenericSPIController SPI, DWMRegisterID ID>
 class DWMRegisterView {
-  static constexpr size_t size_ = []() constexpr {
-    if constexpr (ID == DWMRegisterID::DEV_ID)
-      return 4;
-    else if constexpr (ID == DWMRegisterID::SYSTEM_EVENT_STATUS)
-      return 5;
-    else if constexpr (ID == DWMRegisterID::SYS_TIME)
-      return 5;
-    else if constexpr (ID == DWMRegisterID::TX_FCTRL)
-      return 5;
-    else
-      static_assert(dependent_false<ID>, "Register size unspecified");
+  static constexpr size_t size_ = []() consteval -> size_t {
+    std::vector<std::pair<DWMRegisterID, size_t>> table{
+        {{DWMRegisterID::DEV_ID, 4},
+         {DWMRegisterID::SYSTEM_EVENT_STATUS, 5},
+         {DWMRegisterID::SYS_TIME, 5},
+         {DWMRegisterID::TX_FCTRL, 5},
+         {DWMRegisterID::TX_BUFFER, 1024}}};
+
+    for (const auto &[id, size] : table) {
+      if (id == ID) {
+        return size;
+      }
+    }
+
+    // No default return value ensures if flow reaches this point, a compile
+    // error is triggered.
   }();
 
 public:
@@ -121,17 +128,6 @@ public:
   {
     // Copy the current data and AND the flags onto it
     uint64_t new_value = flatten_data(data_) & flags;
-    write_data(new_value);
-
-    return *this;
-  }
-
-  /*
-   * Equals: used to assign a value to a register.
-   */
-  DWMRegisterView &operator=(std::integral auto new_value)
-    requires(size_ <= sizeof(uint64_t))
-  {
     write_data(new_value);
 
     return *this;
@@ -195,23 +191,22 @@ public:
     return *this;
   }
 
-  auto value()
-    requires(size_ <= sizeof(uint64_t))
-  {
-    read_data();
+  auto value() const {
+    if constexpr (size_ <= sizeof(uint64_t)) {
+      auto res = flatten_data(data_);
 
-    auto res = flatten_data(data_);
-
-    if constexpr (IsTimestampRegister<ID>) {
-      return DWMTimestamp{res};
+      if constexpr (IsTimestampRegister<ID>) {
+        return DWMTimestamp{res};
+      } else {
+        return res;
+      }
     } else {
-      return res;
+      return std::span<const std::byte, size_>{data_};
     }
   }
 
-  constexpr size_t size() const { return size_; }
+  consteval size_t size() const { return size_; }
 
-private:
   void read_data() {
     // Lower 6 bits store actual register
     // MSbit = 0 represents read
@@ -232,7 +227,8 @@ private:
     write_data(pack_data(new_value));
   }
 
-  void write_data(std::span<std::byte, size_> new_data) {
+  // TODO: maybe make the span have a dynamic_extent, and allow writes <= size_?
+  void write_data(std::span<const std::byte, size_> new_data) {
     // Lower 6 bits store actual register
     // MSbit = 1 represents write
     uint8_t reg = 0x80 | (static_cast<uint8_t>(ID) & 0x3F);
@@ -249,31 +245,22 @@ private:
     // Initiate SPI transfer
     // TODO: error handle
     spi_.transfer_halfduplex(tx, {});
-
-    // Lastly, read data to get updated register value
-    // This is for a few reasons:
-    // 1) some registers are read-only, and writes should do nothing
-    // 2) some registers clear values by writing 1 to them (so the local array's
-    // state would be inverted) 3) we want the most updated register state after
-    // writing!
-    read_data();
   }
 
-  static auto flatten_data(std::span<std::byte, size_> data)
+private:
+  static auto flatten_data(std::span<const std::byte, size_> data)
     requires(size_ <= sizeof(uint64_t))
   {
-    if constexpr (size_ == sizeof(uint16_t)) {
-      return std::bit_cast<uint16_t>(data);
-    } else if constexpr (size_ == sizeof(uint32_t)) {
-      return std::bit_cast<uint32_t>(data);
-    } else {
-      // std::bit_cast requires an exact size-match
-      // Therefore, std::memcpy is necessary since many DW1000 regs are 5 bytes
-      // in size (rather than uint64_t's 8 bytes)
-      uint64_t res{};
-      std::memcpy(&res, data.data(), size_);
-      return res;
-    }
+    // std::bit_cast requires an exact size-match
+    // Therefore, std::memcpy is necessary since many DW1000 regs are 5 bytes
+    // in size (rather than uint64_t's 8 bytes).
+    // Also, std::bit_cast does NOT work with std::span, so this function no
+    // longer uses bit_cast for compatible sizes (e.g., 4). To simplify
+    // things, it always uses std::memcpy. The lack of constexpr doesn't
+    // matter since the data parameter will always be at runtime regardless.
+    uint64_t res{};
+    std::memcpy(&res, data.data(), size_);
+    return res;
   }
 
   static std::array<std::byte, size_> pack_data(std::integral auto val) {
@@ -291,12 +278,33 @@ private:
   std::array<std::byte, size_> data_{};
 };
 
+// TODO: add this, and other related classes, to some sort of DWM namespace
+enum class PRF : uint8_t { MHZ_4 = 0b00, MHZ_16 = 0b01, MHZ_64 = 0b10 };
+
+constexpr std::string_view PRFToString(PRF prf) noexcept {
+  using namespace std::string_view_literals;
+
+  switch (prf) {
+  case PRF::MHZ_4:
+    return "4 MHz"sv;
+  case PRF::MHZ_16:
+    return "16 MHz"sv;
+  case PRF::MHZ_64:
+    return "64 MHz"sv;
+  default:
+    __builtin_unreachable();
+  }
+
+  return "UNKNOWN PRF"sv;
+}
+
 template <HAL::GenericSPIController SPI, HAL::GenericGPIOController GPIO>
 class DWM {
   static_assert(std::endian::native == std::endian::little,
                 "DWM1000 requires little-endian architecture");
 
 public:
+  // TODO: make GPIO rvalue ref?
   DWM(SPI &&spi, GPIO gpio, uint8_t rst_pin, uint8_t irq_pin)
       : spi_{std::move(spi)}, gpio_{std::move(gpio)}, rst_pin_{rst_pin},
         irq_pin_{irq_pin} {
@@ -382,25 +390,6 @@ public:
     return "UNKNOWN BITRATE"sv;
   }
 
-  enum class PRF : uint8_t { MHZ_4 = 0b00, MHZ_16 = 0b01, MHZ_64 = 0b10 };
-
-  static constexpr std::string_view PRFToString(PRF prf) noexcept {
-    using namespace std::string_view_literals;
-
-    switch (prf) {
-    case PRF::MHZ_4:
-      return "4 MHz"sv;
-    case PRF::MHZ_16:
-      return "16 MHz"sv;
-    case PRF::MHZ_64:
-      return "64 MHz"sv;
-    default:
-      __builtin_unreachable();
-    }
-
-    return "UNKNOWN PRF"sv;
-  }
-
   enum class PreambleLength : uint8_t {
     LEN_64 = 0b01'00,
     LEN_128 = 0b01'01,
@@ -437,14 +426,13 @@ public:
     return 0;
   }
 
-  auto get_device_id() const {
-    return get_reg_view<DWMRegisterID::DEV_ID>().value();
-  }
+  auto get_device_id() { return get_reg_view<DWMRegisterID::DEV_ID>().value(); }
 
   /*
    * Pulse Repetition Frequency
    */
-  PRF tx_prf() const {
+  // TODO: rename this and related methods to get_*?
+  PRF tx_prf() {
     auto tx_fctrl = get_reg_view<DWMRegisterID::TX_FCTRL>();
     uint8_t raw_prf = tx_fctrl.bit_range(17, 16); // TODO: constants?
 
@@ -459,8 +447,8 @@ public:
 private:
   template <DWMRegisterID ID> using Register = DWMRegisterView<SPI, ID>;
 
-  template <DWMRegisterID ID> Register<ID> get_reg_view() const {
-    return Register<ID>{const_cast<SPI &>(spi_)};
+  template <DWMRegisterID ID> Register<ID> get_reg_view() {
+    return Register<ID>{spi_};
   }
 
   void hard_reset() {

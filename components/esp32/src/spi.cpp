@@ -1,8 +1,10 @@
+#include "driver/spi_common.h"
 #include "esp32.h"
 
 #include "log.h"
 #include <memory>
 #include <utility>
+#include <vector>
 
 namespace ESP32 {
 constexpr int SPI_SCK = 18;
@@ -46,14 +48,14 @@ SPI::SPI(int cs) : cs_{cs}, owns_spi_line{true} {
       .clock_speed_hz = SPI_MASTER_FREQ_20M,
       .input_delay_ns = 0,
       .spics_io_num = cs_,
-      .flags = SPI_DEVICE_HALFDUPLEX,
+      .flags = 0,
       .queue_size = 4, // TODO: queue size
       .pre_cb = NULL,
       .post_cb = NULL};
 
   // TODO: throw?
   // TODO: dynamically choose host/port?
-  log("SPI init: %d", spi_bus_initialize(SPI2_HOST, &config, SPI_DMA_DISABLED));
+  log("SPI init: %d", spi_bus_initialize(SPI2_HOST, &config, SPI_DMA_CH_AUTO));
 
   log("SPI add device: %d",
       spi_bus_add_device(SPI2_HOST, &dev_config, &dev_handle_));
@@ -87,17 +89,28 @@ SPI &SPI::operator=(SPI &&other) {
 
 esp_err_t SPI::transfer_halfduplex(std::span<const std::byte> tx,
                                    std::span<std::byte> rx) {
-  spi_transaction_t transaction = {.length = BYTES_TO_BITS(tx.size_bytes()),
-                                   .rxlength = BYTES_TO_BITS(rx.size_bytes()),
-                                   .tx_buffer = tx.data(),
-                                   .rx_buffer = rx.data()};
+  // Use full-duplex since it allows large transfers via DMA channels (unlike
+  // half) To simulate half-duplex transfers, we first do a tx transfer, then an
+  // rx. This causes 2 transactions rather than 1, but makes large (e.g., 1024
+  // bytes) reads/writes possible.
+  size_t total = tx.size_bytes() + rx.size_bytes();
+
+  std::vector<std::byte> tx_buf(total, std::byte{0});
+  std::vector<std::byte> rx_buf(total, std::byte{0});
+
+  // copy header into tx_buf, rest is zeros (dummy bytes)
+  std::copy(tx.begin(), tx.end(), tx_buf.begin());
+
+  spi_transaction_t transaction = {.length = BYTES_TO_BITS(total),
+                                   .tx_buffer = tx_buf.data(),
+                                   .rx_buffer = rx_buf.data()};
 
   esp_err_t res = spi_device_transmit(dev_handle_, &transaction);
-
-  if (unlikely(res != ESP_OK)) {
+  if (unlikely(res != ESP_OK))
     return res;
-  }
 
+  // response starts after the header bytes
+  std::copy(rx_buf.begin() + tx.size_bytes(), rx_buf.end(), rx.begin());
   return ESP_OK;
 }
 
