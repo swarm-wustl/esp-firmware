@@ -77,7 +77,7 @@ extern "C" void app_main(void) {
         "consumer_task",
         4096,
         (void*)&consumerTaskData,
-        configMAX_PRIORITIES - 1,
+        configMAX_PRIORITIES - 2,
         NULL
     );
 
@@ -104,7 +104,7 @@ extern "C" void app_main(void) {
       "imu_publisher_task",
       4096,
       NULL,
-      configMAX_PRIORITIES - 1,
+      configMAX_PRIORITIES - 3,
       &imuPublisherTaskHandle
     );
 }
