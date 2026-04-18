@@ -35,6 +35,7 @@ class DWMTimestamp {
   static constexpr uint64_t DW1000_TIMESTAMP_MASK =
       DW1000_40BIT_MASK & ~DW1000_LOW_9BITS_MASK;
 
+
 public:
   using Duration = std::chrono::duration<
       uint64_t, std::ratio<1, 63'897'600'000>>; // each bit = ~15.65 ps
@@ -42,12 +43,32 @@ public:
   DWMTimestamp() = default;
   DWMTimestamp(uint64_t raw_time)
       : raw_time_{raw_time & DW1000_TIMESTAMP_MASK} {}
+  
 
+
+  
   Duration operator-(const DWMTimestamp &other) const {
-    return Duration{(raw_time_ - other.raw_time_) & DW1000_TIMESTAMP_MASK};
+
+    return Duration{wrap(raw_time_ - other.raw_time_) & DW1000_TIMESTAMP_MASK};
   }
 
+  update(uint64_t raw_time){
+    raw_time_ = raw_time & DW1000_TIMESTAMP_MASK;
+  }
+
+  Duration getDuration(){
+    return Duration{raw_time_}
+  }
+
+
 private:
+  wrap(uint64_t time_val)
+   {
+    if(_time_val < 0) {
+		  time_val += TIME_OVERFLOW;
+	    }
+	    return time_val;
+  }
   uint64_t raw_time_{};
 };
 
@@ -309,6 +330,62 @@ public:
       : spi_{std::move(spi)}, gpio_{std::move(gpio)}, rst_pin_{rst_pin},
         irq_pin_{irq_pin} {
     hard_reset();
+
+  /* ##### Print device id, address, etc. ###################################### */
+	/** 
+	Generates a String representation of the device identifier of the chip. That usually 
+	are the letters "DECA" plus the	version and revision numbers of the chip.
+
+	@param[out] msgBuffer The String buffer to be filled with printable device information.
+		Provide 128 bytes, this should be sufficient.
+	*/
+	static void getPrintableDeviceIdentifier(char msgBuffer[]);
+	
+	/** 
+	Generates a String representation of the extended unique identifier (EUI) of the chip.
+
+	@param[out] msgBuffer The String buffer to be filled with printable device information.
+		Provide 128 bytes, this should be sufficient.
+	*/
+	static void getPrintableExtendedUniqueIdentifier(char msgBuffer[]);
+	
+
+	static void         getTransmitTimestamp(DWMTimestamp& time);
+	static void         getReceiveTimestamp(DWMTimestamp& time);
+	static void         getSystemTimestamp(DWMTimestamp& time);
+	static void         getTransmitTimestamp(byte data[]);
+	static void         getReceiveTimestamp(byte data[]);
+	static void         getSystemTimestamp(byte data[]);
+
+    static auto getRXData();
+    /*Set and Clear different registers on the DW1000*/
+
+    	/* device state management. */
+	// idle state
+	static void idle();
+	
+	// general configuration state
+	static void newConfiguration();
+	static void commitConfiguration();
+	
+    //Timing:
+    static void setDelay(const DWMTimestamp &time);
+
+	// reception state
+	static void newReceive();
+	static void startReceive();
+	static void clearReceiveStatus();
+    static void setReceiverAutoReenable(bool val);
+    static void receivePermanently();
+
+	// transmission state
+	static void newTransmit();
+	static void startTransmit();
+    static void clearTransmitStatus();
+    static void  setData(byte data[], uint16_t n);
+	static void  setData(const String& data);
+    
+
     // auto id_reg = get_reg_view<DWM_REG_DEV_ID>();
     // // log("Reg size: %u", id_reg.size());
     // // log("Reg value: %X", id_reg.value());
