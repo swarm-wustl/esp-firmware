@@ -1,6 +1,8 @@
 {
   "name": "micro-ROS Dev",
-  "image": "microros/esp-idf-microros:latest",  // replace with your image name
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
   "workspaceFolder": "/workspace",      // where your code will be mounted
   "mounts": [
     "source=${localWorkspaceFolder},target=/workspace,type=bind"
