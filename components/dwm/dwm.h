@@ -2,21 +2,13 @@
 #define DWM_H
 
 #include "swarm_hal.h"
+#include <array>
 #include <bit>
 #include <chrono>
 #include <cstring>
-#include <string>
-#include <vector>
+#include <string_view>
 
 // TODO: add noexcept to classes
-
-// Allows for static_assert<false, ..> - like behavior
-// Without this weird hack, the static_assert is evaluated every time
-// instead of conditionally based on the branching
-// (always returns an error even when it shouldn't).
-// Should be properly fixed in C++26, but this is a workaround
-// https://en.cppreference.com/w/cpp/language/static_assert.html
-template <auto V> constexpr bool dependent_false = false;
 
 enum class DWMRegisterID : uint8_t {
   DEV_ID = 0x00,
@@ -59,12 +51,13 @@ concept IsTimestampRegister =
 template <HAL::GenericSPIController SPI, DWMRegisterID ID>
 class DWMRegisterView {
   static constexpr size_t size_ = []() consteval -> size_t {
-    std::vector<std::pair<DWMRegisterID, size_t>> table{
-        {{DWMRegisterID::DEV_ID, 4},
-         {DWMRegisterID::SYSTEM_EVENT_STATUS, 5},
-         {DWMRegisterID::SYS_TIME, 5},
-         {DWMRegisterID::TX_FCTRL, 5},
-         {DWMRegisterID::TX_BUFFER, 1024}}};
+    constexpr std::array<std::pair<DWMRegisterID, size_t>, 5> table{{
+        {DWMRegisterID::DEV_ID, 4},
+        {DWMRegisterID::SYSTEM_EVENT_STATUS, 5},
+        {DWMRegisterID::SYS_TIME, 5},
+        {DWMRegisterID::TX_FCTRL, 5},
+        {DWMRegisterID::TX_BUFFER, 1024},
+    }};
 
     for (const auto &[id, size] : table) {
       if (id == ID) {
@@ -72,8 +65,7 @@ class DWMRegisterView {
       }
     }
 
-    // No default return value ensures if flow reaches this point, a compile
-    // error is triggered.
+    throw "Unknown DWMRegisterID — add it to the size table";
   }();
 
 public:
