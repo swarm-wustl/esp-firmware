@@ -15,19 +15,19 @@ inline constexpr size_t BYTES_TO_BITS(size_t bytes) { return bytes * 8; }
 
 SPI::SPI(int cs) : cs_{cs}, owns_spi_line{true} {
   spi_bus_config_t config{
-      {SPI_MOSI},
-      {SPI_MISO},
-      {SPI_SCK},
-      {-1},
-      {-1},
-      {-1},
-      {-1},
-      {-1},
-      {-1},
-      {SOC_SPI_MAXIMUM_BUFFER_SIZE},
-      {SPICOMMON_BUSFLAG_MASTER},   // TODO
-      {ESP_INTR_CPU_AFFINITY_AUTO}, // TODO
-      {0}                           // TODO
+      .mosi_io_num = SPI_MOSI,
+      .miso_io_num = SPI_MISO,
+      .sclk_io_num = SPI_SCK,
+      .quadwp_io_num = -1,
+      .quadhd_io_num = -1,
+      .data4_io_num = -1,
+      .data5_io_num = -1,
+      .data6_io_num = -1,
+      .data7_io_num = -1,
+      .max_transfer_sz = SOC_SPI_MAXIMUM_BUFFER_SIZE,
+      .flags = SPICOMMON_BUSFLAG_MASTER, // TODO
+      .isr_cpu_id = ESP_INTR_CPU_AFFINITY_AUTO, // TODO
+      .intr_flags = 0,                          // TODO
   };
 
   spi_device_interface_config_t dev_config{
