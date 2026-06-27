@@ -48,25 +48,16 @@ concept IsTimestampRegister =
     ID == DWMRegisterID::SYS_TIME || ID == DWMRegisterID::TX_TIME ||
     ID == DWMRegisterID::RX_TIME;
 
+template <DWMRegisterID ID> struct RegisterSize;
+template <> struct RegisterSize<DWMRegisterID::DEV_ID>              { static constexpr size_t value = 4;    };
+template <> struct RegisterSize<DWMRegisterID::SYSTEM_EVENT_STATUS> { static constexpr size_t value = 5;    };
+template <> struct RegisterSize<DWMRegisterID::SYS_TIME>            { static constexpr size_t value = 5;    };
+template <> struct RegisterSize<DWMRegisterID::TX_FCTRL>            { static constexpr size_t value = 5;    };
+template <> struct RegisterSize<DWMRegisterID::TX_BUFFER>           { static constexpr size_t value = 1024; };
+
 template <HAL::GenericSPIController SPI, DWMRegisterID ID>
 class DWMRegisterView {
-  static constexpr size_t size_ = []() consteval -> size_t {
-    constexpr std::array<std::pair<DWMRegisterID, size_t>, 5> table{{
-        {DWMRegisterID::DEV_ID, 4},
-        {DWMRegisterID::SYSTEM_EVENT_STATUS, 5},
-        {DWMRegisterID::SYS_TIME, 5},
-        {DWMRegisterID::TX_FCTRL, 5},
-        {DWMRegisterID::TX_BUFFER, 1024},
-    }};
-
-    for (const auto &[id, size] : table) {
-      if (id == ID) {
-        return size;
-      }
-    }
-
-    throw "Unknown DWMRegisterID — add it to the size table";
-  }();
+  static constexpr size_t size_ = RegisterSize<ID>::value;
 
 public:
   explicit DWMRegisterView(SPI &spi) : spi_{spi} { read_data(); }
