@@ -11,7 +11,9 @@ ARG IDF_VERSION=release-v5.5
 FROM espressif/idf:${IDF_VERSION}
 
 # micro-ROS build dependencies, installed into the IDF Python virtualenv.
-RUN . $IDF_PATH/export.sh && \
+# IDF_PATH_FORCE=1 makes export.sh trust the IDF_PATH already set in the image
+# instead of trying (and failing) to auto-detect it from the build's cwd.
+RUN IDF_PATH_FORCE=1 . $IDF_PATH/export.sh && \
     pip3 install --no-cache-dir catkin_pkg colcon-common-extensions lark
 
 ENV LC_ALL=C.UTF-8
