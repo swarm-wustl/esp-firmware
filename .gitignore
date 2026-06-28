@@ -4,3 +4,4 @@ sdkconfig.old
 .direnv
 .cache
 .DS_Store
+__pycache__/
