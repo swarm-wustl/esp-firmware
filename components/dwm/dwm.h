@@ -319,8 +319,7 @@ public:
   /*
    * Pulse Repetition Frequency
    */
-  // TODO: rename this and related methods to get_*?
-  PRF tx_prf() {
+  PRF get_tx_prf() {
     auto tx_fctrl = get_reg_view<DWMRegisterID::TX_FCTRL>();
     uint8_t raw_prf = tx_fctrl.data().bit_range(17, 16); // TODO: constants?
 
@@ -349,7 +348,7 @@ private:
     gpio_.delay_ms(10);
   }
 
-  std::string_view tx_bit_rate() const {
+  std::string_view get_tx_bit_rate() const {
     auto tx_fctrl = get_reg_view<DWMRegisterID::TX_FCTRL>();
     uint8_t raw_bit_rate =
         tx_fctrl.data().bit_range(14, 13); // TODO: constants?
@@ -362,7 +361,7 @@ private:
     tx_fctrl.write_bit_range(14, 13, static_cast<uint64_t>(br));
   }
 
-  uint16_t tx_preamble_length() const {
+  uint16_t get_tx_preamble_length() const {
     auto tx_fctrl = get_reg_view<DWMRegisterID::TX_FCTRL>();
 
     uint8_t raw_psr = tx_fctrl.data().bit_range(19, 18); // TODO: constants?
