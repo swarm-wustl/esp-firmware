@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 # Written with Claude
+# See https://blog.golioth.io/usb-docker-windows-macos/
 
 # Forwards the ESP32's USB serial port into Docker over USB/IP so idf.py can
 # flash and monitor from inside the container. Run once per host boot; it's
@@ -29,11 +30,14 @@ start_pyusbip() {
     return
   fi
   echo "[usbip] starting pyusbip"
-  ( cd "$PYUSBIP_DIR" && source .venv/bin/activate \
-      && nohup python pyusbip.py >/tmp/pyusbip.log 2>&1 & )
+  (cd "$PYUSBIP_DIR" && source .venv/bin/activate &&
+    nohup python pyusbip.py >/tmp/pyusbip.log 2>&1 &)
   sleep 2
-  lsof -nP -iTCP:3240 -sTCP:LISTEN >/dev/null 2>&1 \
-    || { echo "[usbip] pyusbip failed to start; see /tmp/pyusbip.log" >&2; exit 1; }
+  lsof -nP -iTCP:3240 -sTCP:LISTEN >/dev/null 2>&1 ||
+    {
+      echo "[usbip] pyusbip failed to start; see /tmp/pyusbip.log" >&2
+      exit 1
+    }
   pyusbip_fresh=1
 }
 
@@ -50,8 +54,8 @@ start_devmgr() {
 
 detach_stale() {
   local port
-  port=$(vm usbip port 2>/dev/null | grep -B1 "$CP210X" \
-    | grep -oE "Port [0-9]+" | grep -oE "[0-9]+" | head -1 || true)
+  port=$(vm usbip port 2>/dev/null | grep -B1 "$CP210X" |
+    grep -oE "Port [0-9]+" | grep -oE "[0-9]+" | head -1 || true)
   if [ -n "$port" ]; then
     echo "[usbip] detaching stale port $port"
     vm usbip detach -p "$port" || true
@@ -66,8 +70,8 @@ attach() {
   fi
   detach_stale
   local busid
-  busid=$(vm usbip list -r "$REMOTE" 2>/dev/null \
-    | grep "$CP210X" | head -1 | awk -F: '{gsub(/ /,"",$1); print $1}' || true)
+  busid=$(vm usbip list -r "$REMOTE" 2>/dev/null |
+    grep "$CP210X" | head -1 | awk -F: '{gsub(/ /,"",$1); print $1}' || true)
   if [ -z "$busid" ]; then
     echo "[usbip] CP210x ($CP210X) not exported -- is the board plugged in?" >&2
     exit 1
