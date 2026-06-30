@@ -25,7 +25,7 @@ is_running() {
 up() {
   if is_running; then return 0; fi
   docker image inspect "$IMAGE" >/dev/null 2>&1 ||
-    die "image $IMAGE missing -- run: python3 scripts/swarm.py build-image"
+    die "image $IMAGE missing -- run: scripts/shell.sh build"
   docker rm -f "$NAME" >/dev/null 2>&1 || true
   docker run -d --name "$NAME" \
     -v "$REPO:/workspace" \
