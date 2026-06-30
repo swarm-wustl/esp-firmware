@@ -148,7 +148,7 @@ public:
   DWMRegisterView &write_bit_range(uint8_t hi, uint8_t lo, uint64_t value)
     requires(size_ <= sizeof(uint64_t))
   {
-    DWMData<size_> new_data = data_;
+    DWMData<size_> new_data{data_};
     new_data.write_bit_range(hi, lo, value);
     write_data(new_data.span());
 

@@ -28,10 +28,9 @@
  * 1024-byte TX_BUFFER) still support span/byte/bit access.
  */
 template <size_t N> class DWMData {
-  static_assert(std::endian::native == std::endian::little,
-                "DWMData assumes a little-endian host (DW1000 is little-endian)");
-
-  std::array<std::byte, N> bytes_{};
+  static_assert(
+      std::endian::native == std::endian::little,
+      "DWMData assumes a little-endian host (DW1000 is little-endian)");
 
 public:
   DWMData() = default;
@@ -112,6 +111,8 @@ public:
   bool operator==(const DWMData &) const = default;
 
 private:
+  std::array<std::byte, N> bytes_{};
+
   void assign_uint(std::integral auto val) {
     // std::bit_cast optimization when sizes match exactly.
     if constexpr (sizeof(val) == N) {
