@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+
+# Written with Claude
+
 """
 Wrapper over idf.py that runs build commands inside the micro-ROS Docker container
 and runs flash/monitor commands natively on the host (USB passthrough limitation on macOS).
@@ -35,6 +38,11 @@ from pathlib import Path
 # microros/esp-idf-microros image is stale (IDF v5.0), so we build our own off
 # espressif/idf with the micro-ROS Python deps added.
 DOCKER_IMAGE = "swarm-idf:latest"
+
+# Container mount point for the project. clangd runs inside the container (see
+# scripts/clangd.sh) and translates host paths to this with --path-mappings, so it
+# just needs to match the mount in scripts/clangd.sh and .devcontainer.
+WORKSPACE = "/workspace"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TEST_DIR = PROJECT_ROOT / "test"
 DOCKERFILE = PROJECT_ROOT / ".devcontainer" / "Dockerfile"
@@ -158,7 +166,7 @@ def docker_build(idf_args: list[str], project_dir: Path) -> int:
         if rc != 0:
             return rc
 
-    workspace = "/workspace"
+    workspace = WORKSPACE
     # Mount project root always; if building test, set working dir to test subdir
     workdir = workspace if project_dir == PROJECT_ROOT else f"{workspace}/test"
 

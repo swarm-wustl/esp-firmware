@@ -1,16 +1,19 @@
+# clangd config for the swarm project.
+#
+# clangd runs INSIDE the dev container (see scripts/clangd.sh), so it reads the
+# native ESP-IDF v5.5 headers and queries the xtensa cross-gcc (via the wrapper's
+# --query-driver) for the target and system include paths. We therefore do NOT
+# hand-roll toolchain/sysroot flags here -- only strip the handful of gcc-only
+# codegen flags clang's parser rejects, and route each file to the right
+# compile_commands.json.
+
 CompileFlags:
-  Remove: [-f*, -m*, -std=c++23, -std=gnu++23]
-  Add:
-    - --target=xtensa-esp32-elf
-    - -nostdinc
-    - -isystem/Users/prestonmeek/.espressif/tools/esp-clang/16.0.1-fe4f10a809/esp-clang/lib/clang/16/include
-    - -isystem/Users/prestonmeek/.espressif/tools/esp-clang/16.0.1-fe4f10a809/esp-clang/xtensa-esp32-elf/include/c++/11.2.0
-    - -isystem/Users/prestonmeek/.espressif/tools/esp-clang/16.0.1-fe4f10a809/esp-clang/xtensa-esp32-elf/include/c++/11.2.0/xtensa-esp32-elf
-    - -isystem/Users/prestonmeek/.espressif/tools/esp-clang/16.0.1-fe4f10a809/esp-clang/xtensa-esp32-elf/include
-    - -isystem/Users/prestonmeek/.espressif/tools/xtensa-esp-elf/esp-13.2.0_20250707/xtensa-esp-elf/xtensa-esp-elf/sys-include
-    - -isystem/Users/prestonmeek/.espressif/tools/xtensa-esp-elf/esp-13.2.0_20250707/xtensa-esp-elf/xtensa-esp-elf/include
-    - -std=gnu++2b
-    - -Wno-extern-c-compat
+  # gcc-specific flags clang doesn't understand; harmless to drop for parsing.
+  Remove:
+    - -mlongcalls
+    - -fstrict-volatile-bitfields
+    - -fno-tree-switch-conversion
+    - -fno-shrink-wrap
   CompilationDatabase: build
 
 ---
@@ -19,3 +22,15 @@ If:
 CompileFlags:
   CompilationDatabase: test/build
 
+---
+# dwm is a header-only component: no translation unit compiles its headers, so
+# clangd otherwise guesses a far-away C command as the proxy (c-header language,
+# wrong includes). Pin it to the test build DB -- reg_view.cpp sits next to the
+# headers and includes them -- and force C++ so the header-only templates parse.
+# NOTE: PathMatch is evaluated against the path relative to this .clangd file, so
+# there's no leading slash before "components".
+If:
+  PathMatch: ".*components/dwm/.*"
+CompileFlags:
+  CompilationDatabase: test/build
+  Add: [-xc++]
