@@ -247,57 +247,6 @@ public:
       : spi_{std::move(spi)}, gpio_{std::move(gpio)}, rst_pin_{rst_pin},
         irq_pin_{irq_pin} {
     hard_reset();
-    // auto id_reg = get_reg_view<DWM_REG_DEV_ID>();
-    // // log("Reg size: %u", id_reg.size());
-    // // log("Reg value: %X", id_reg.value());
-    // id_reg |= 0xFFFFFF;
-    // // log("Reg value (should be same): %X", id_reg.value());
-    //
-    // auto sys_status_reg = get_reg_view<DWM_REG_SYSTEM_EVENT_STATUS>();
-    // // log("Value before: %llX", sys_status_reg.value());
-    // sys_status_reg.clear_flags(0xFF);
-    // // log("Value after: %llX", sys_status_reg.value());
-    //
-    // auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
-    //
-    // // log("Current transmit bit rate: %X %X", ((tx_fctrl.bit(14) << 1) |
-    // // tx_fctrl.bit(13)), tx_fctrl.data().bit_range(14, 13)); logf("Bit rate,
-    // PRF,
-    // // preamble length (but nice!):", tx_bit_rate(), tx_prf(),
-    // // tx_preamble_length());
-    //
-    // set_tx_bit_rate(BitRate::KBPS_100);
-    // set_tx_prf(PRF::MHZ_4);
-    // set_tx_preamble_length(PreambleLength::LEN_2048);
-    //
-    // // logf("New bit rate, PRF, preamble length:", tx_bit_rate(), "--",
-    // // tx_prf(), "--", tx_preamble_length());
-    // hard_reset();
-    // // logf("Reset bit rate, PRF, preamble length:", tx_bit_rate(), "--",
-    // // tx_prf(), "--", tx_preamble_length());
-    //
-    // /* *** */
-    //
-    // auto sys_time_reg = get_reg_view<DWM_REG_SYS_TIME>();
-    //
-    // // Use the DW1000's own timestamp for precise intervals
-    // auto start = sys_time_reg.value();
-    // auto target_duration = std::chrono::milliseconds{300};
-    //
-    // while (true) {
-    //   auto current = sys_time_reg.value();
-    //   auto elapsed = current - start;
-    //
-    //   if (elapsed >= target_duration) {
-    //     auto us =
-    //     std::chrono::duration_cast<std::chrono::microseconds>(elapsed)
-    //                   .count();
-    //     // logf("DELTA SYS TIME:", us, "microseconds");
-    //     start = current; // Reset for next interval
-    //   }
-    //
-    //   gpio_.delay_ms(50); // Small delay to not busy-wait
-    // }
   }
 
   ~DWM() = default;
