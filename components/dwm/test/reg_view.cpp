@@ -32,18 +32,6 @@ TEST_CASE("Test read device ID register view", "[dwm_reg]") {
   TEST_ASSERT_EQUAL(dev_id_reg.value(), 0xDECA0130);
 }
 
-TEST_CASE("Test write device ID register view", "[dwm_reg]") {
-  hard_reset();
-  ESP32::SPI spi{GPIO_NUM_4};
-  DWMRegisterView<ESP32::SPI, DWMRegisterID::DEV_ID> dev_id_reg{spi};
-
-  // ID register is read-only, so value should stay the same
-  TEST_ASSERT_EQUAL(dev_id_reg.value(), 0xDECA0130);
-  dev_id_reg |= 0xFFFFFFFF;
-  dev_id_reg.read_data();
-  TEST_ASSERT_EQUAL(dev_id_reg.value(), 0xDECA0130);
-}
-
 TEST_CASE("Test write and read-back TX buffer", "[dwm_reg]") {
   hard_reset();
   ESP32::SPI spi{GPIO_NUM_4};
@@ -66,11 +54,11 @@ TEST_CASE("Test write and read-back TX buffer", "[dwm_reg]") {
     return std::byte{static_cast<uint8_t>(std::rand() % 256)};
   });
 
-  // Write but don't read, should be old test data still
+  // Write-through cache: value() reflects the write immediately, no read needed
   tx_buf_reg.write_data(std::span{test_data[1]});
-  TEST_ASSERT(std::ranges::equal(test_data[0], tx_buf_reg.value()));
+  TEST_ASSERT(std::ranges::equal(test_data[1], tx_buf_reg.value()));
 
-  // Read back response, should now equal new test data
+  // Read back from the device, still the new test data
   tx_buf_reg.read_data();
   TEST_ASSERT(std::ranges::equal(test_data[1], tx_buf_reg.value()));
 }

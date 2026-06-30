@@ -49,26 +49,40 @@ concept IsTimestampRegister =
     ID == DWMRegisterID::SYS_TIME || ID == DWMRegisterID::TX_TIME ||
     ID == DWMRegisterID::RX_TIME;
 
-template <DWMRegisterID ID> struct RegisterSize;
-template <> struct RegisterSize<DWMRegisterID::DEV_ID> {
-  static constexpr size_t value = 4;
+enum class RegAccess : uint8_t { ReadOnly, ReadWrite, WriteOneClear };
+
+template <DWMRegisterID ID> struct RegisterInfo;
+template <> struct RegisterInfo<DWMRegisterID::DEV_ID> {
+  static constexpr size_t size = 4;
+  static constexpr RegAccess access = RegAccess::ReadOnly;
 };
-template <> struct RegisterSize<DWMRegisterID::SYSTEM_EVENT_STATUS> {
-  static constexpr size_t value = 5;
+template <> struct RegisterInfo<DWMRegisterID::SYSTEM_EVENT_STATUS> {
+  static constexpr size_t size = 5;
+  static constexpr RegAccess access = RegAccess::WriteOneClear;
 };
-template <> struct RegisterSize<DWMRegisterID::SYS_TIME> {
-  static constexpr size_t value = 5;
+template <> struct RegisterInfo<DWMRegisterID::SYS_TIME> {
+  static constexpr size_t size = 5;
+  static constexpr RegAccess access = RegAccess::ReadOnly;
 };
-template <> struct RegisterSize<DWMRegisterID::TX_FCTRL> {
-  static constexpr size_t value = 5;
+template <> struct RegisterInfo<DWMRegisterID::TX_FCTRL> {
+  static constexpr size_t size = 5;
+  static constexpr RegAccess access = RegAccess::ReadWrite;
 };
-template <> struct RegisterSize<DWMRegisterID::TX_BUFFER> {
-  static constexpr size_t value = 1024;
+template <> struct RegisterInfo<DWMRegisterID::TX_BUFFER> {
+  static constexpr size_t size = 1024;
+  static constexpr RegAccess access = RegAccess::ReadWrite;
 };
+
+template <DWMRegisterID ID>
+concept IsWritable = RegisterInfo<ID>::access != RegAccess::ReadOnly;
+template <DWMRegisterID ID>
+concept IsReadWrite = RegisterInfo<ID>::access == RegAccess::ReadWrite;
+template <DWMRegisterID ID>
+concept IsWriteOneClear = RegisterInfo<ID>::access == RegAccess::WriteOneClear;
 
 template <HAL::GenericSPIController SPI, DWMRegisterID ID>
 class DWMRegisterView {
-  static constexpr size_t size_ = RegisterSize<ID>::value;
+  static constexpr size_t size_ = RegisterInfo<ID>::size;
 
 public:
   explicit DWMRegisterView(SPI &spi) : spi_{spi} { read_data(); }
@@ -84,45 +98,26 @@ public:
   void operator=(DWMRegisterView &&) = delete;
 
   /*
-   * Clear register values by writing flags.
-   * This is for registers that have status bits/bytes that are cleared by
-   * writing 1 to them.
-   */
-  DWMRegisterView &clear_flags(uint64_t flags)
-    requires(size_ <= sizeof(uint64_t))
-  {
-    // For the DW1000 in particular, when we write flags, we are CLEARING
-    // values. Thus, we don't OR the flags with the original value, we just
-    // write the flags directly.
-    write_data(flags);
-
-    return *this;
-  }
-
-  /*
-   * OR: used to OR values to a register.
-   * This is primarily for configuring registers.
+   * For a normal RW register this is a read-modify-write OR. For a
+   * write-1-to-clear register, writing a 1 clears the bit, so we write the
+   * flags directly with no read-back.
    */
   DWMRegisterView &operator|=(uint64_t flags)
-    requires(size_ <= sizeof(uint64_t))
+    requires IsWritable<ID> && (size_ <= sizeof(uint64_t))
   {
-    // Copy the current data and OR the flags onto it
-    uint64_t new_value = data_.to_uint() | flags;
-    write_data(new_value);
+    if constexpr (IsWriteOneClear<ID>) {
+      write_data(flags);
+    } else {
+      write_data(data_.to_uint() | flags);
+    }
 
     return *this;
   }
 
-  /*
-   * AND: used to AND values to a register.
-   * This is primarily for configuring registers.
-   */
   DWMRegisterView &operator&=(uint64_t flags)
-    requires(size_ <= sizeof(uint64_t))
+    requires IsReadWrite<ID> && (size_ <= sizeof(uint64_t))
   {
-    // Copy the current data and AND the flags onto it
-    uint64_t new_value = data_.to_uint() & flags;
-    write_data(new_value);
+    write_data(data_.to_uint() & flags);
 
     return *this;
   }
@@ -146,7 +141,7 @@ public:
    * (Unlike DWMData::write_bit_range, this also pushes the result over SPI.)
    */
   DWMRegisterView &write_bit_range(uint8_t hi, uint8_t lo, uint64_t value)
-    requires(size_ <= sizeof(uint64_t))
+    requires IsReadWrite<ID> && (size_ <= sizeof(uint64_t))
   {
     DWMData<size_> new_data{data_};
     new_data.write_bit_range(hi, lo, value);
@@ -187,12 +182,16 @@ public:
   // TODO: consider removing this and other cases of std::integral auto
   // It might just be adding complexity for no reason (ig bit_cast
   // optimization..?)
-  void write_data(std::integral auto new_value) {
+  void write_data(std::integral auto new_value)
+    requires IsWritable<ID> && (size_ <= sizeof(uint64_t))
+  {
     write_data(DWMData<size_>{new_value}.span());
   }
 
   // TODO: maybe make the span have a dynamic_extent, and allow writes <= size_?
-  void write_data(std::span<const std::byte, size_> new_data) {
+  void write_data(std::span<const std::byte, size_> new_data)
+    requires IsWritable<ID>
+  {
     // Lower 6 bits store actual register
     // MSbit = 1 represents write
     uint8_t reg = 0x80 | (static_cast<uint8_t>(ID) & 0x3F);
@@ -202,6 +201,7 @@ public:
     std::array<std::byte, size_ + 1> tx{};
 
     // Store the register in byte 0, then copy the rest of the data
+    // TODO: use std::ranges::copy and std::ranges in general instead
     auto it = tx.begin();
     *it = std::byte{reg};
     std::copy(new_data.begin(), new_data.end(), ++it);
@@ -209,6 +209,15 @@ public:
     // Initiate SPI transfer
     // TODO: error handle
     spi_.transfer_halfduplex(tx, {});
+
+    // For RW registers the written value is the new on-chip state, so keep the
+    // cache coherent. Write-1-to-clear registers must be re-read instead.
+    if constexpr (IsReadWrite<ID>) {
+      std::copy(new_data.begin(), new_data.end(), data_.span().begin());
+    }
+
+    // TODO: 'debug' mode that does read-back and asserts that the cached value
+    // equals the read-back
   }
 
 private:

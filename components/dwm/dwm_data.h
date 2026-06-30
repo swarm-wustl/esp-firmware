@@ -41,7 +41,11 @@ public:
    * kept). This matches how DW1000 register writes work — you write a value
    * that is known to fit in the register's width.
    */
-  explicit DWMData(std::integral auto val) { assign_uint(val); }
+  explicit DWMData(std::integral auto val)
+    requires(N <= sizeof(uint64_t))
+  {
+    assign_uint(val);
+  }
 
   // --- raw access (used by the SPI layer) ---
 
