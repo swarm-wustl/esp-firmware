@@ -1,6 +1,7 @@
 #ifndef DWM_H
 #define DWM_H
 
+#include "dwm_data.h"
 #include "swarm_hal.h"
 #include <array>
 #include <bit>
@@ -49,11 +50,21 @@ concept IsTimestampRegister =
     ID == DWMRegisterID::RX_TIME;
 
 template <DWMRegisterID ID> struct RegisterSize;
-template <> struct RegisterSize<DWMRegisterID::DEV_ID>              { static constexpr size_t value = 4;    };
-template <> struct RegisterSize<DWMRegisterID::SYSTEM_EVENT_STATUS> { static constexpr size_t value = 5;    };
-template <> struct RegisterSize<DWMRegisterID::SYS_TIME>            { static constexpr size_t value = 5;    };
-template <> struct RegisterSize<DWMRegisterID::TX_FCTRL>            { static constexpr size_t value = 5;    };
-template <> struct RegisterSize<DWMRegisterID::TX_BUFFER>           { static constexpr size_t value = 1024; };
+template <> struct RegisterSize<DWMRegisterID::DEV_ID> {
+  static constexpr size_t value = 4;
+};
+template <> struct RegisterSize<DWMRegisterID::SYSTEM_EVENT_STATUS> {
+  static constexpr size_t value = 5;
+};
+template <> struct RegisterSize<DWMRegisterID::SYS_TIME> {
+  static constexpr size_t value = 5;
+};
+template <> struct RegisterSize<DWMRegisterID::TX_FCTRL> {
+  static constexpr size_t value = 5;
+};
+template <> struct RegisterSize<DWMRegisterID::TX_BUFFER> {
+  static constexpr size_t value = 1024;
+};
 
 template <HAL::GenericSPIController SPI, DWMRegisterID ID>
 class DWMRegisterView {
@@ -96,7 +107,7 @@ public:
     requires(size_ <= sizeof(uint64_t))
   {
     // Copy the current data and OR the flags onto it
-    uint64_t new_value = flatten_data(data_) | flags;
+    uint64_t new_value = data_.to_uint() | flags;
     write_data(new_value);
 
     return *this;
@@ -110,7 +121,7 @@ public:
     requires(size_ <= sizeof(uint64_t))
   {
     // Copy the current data and AND the flags onto it
-    uint64_t new_value = flatten_data(data_) & flags;
+    uint64_t new_value = data_.to_uint() & flags;
     write_data(new_value);
 
     return *this;
@@ -124,59 +135,29 @@ public:
   }
 
   /*
-   * Get the specified byte from data
+   * Access the locally-cached register bytes for bit/byte-level reads, e.g.
+   * reg.data().bit_range(17, 16). The byte twiddling lives on DWMData; this
+   * view is responsible only for SPI framing and persisting writes to the chip.
    */
-  std::byte byte(size_t byte_index) const {
-    // TODO: some sort of oob check?
-    return data_[byte_index];
-  }
-
-  // TODO: once supported, switch to multi-dimension operator[]
-  // Supposed to be in C++23 but I guess ESP-IDF is a bit behind on features
-  /*
-   * Get the specified bit from data, given a byte and bit offset
-   */
-  uint8_t bit(size_t byte_index, size_t bit_offset) const {
-    return static_cast<uint8_t>((data_[byte_index] >> bit_offset)) & 1;
-  }
+  const DWMData<size_> &data() const { return data_; }
 
   /*
-   * Get the specified bit from data, given a bit number
+   * Read-modify-write a bit range and persist it to the device.
+   * (Unlike DWMData::write_bit_range, this also pushes the result over SPI.)
    */
-  uint8_t bit(size_t bit_number) const {
-    return bit(bit_number / 8, bit_number % 8);
-  }
-
-  /*
-   * Get the specified data from a bit range
-   * Inspired by Verilog syntax, e.g., x[15:12]
-   */
-  uint64_t bit_range(uint8_t hi, uint8_t lo) const
-    requires(size_ <= sizeof(uint64_t))
-  {
-    uint64_t raw_data = flatten_data(data_) >> lo;
-    uint64_t mask = (1ULL << (1 + hi - lo)) - 1;
-    return raw_data & mask;
-  }
-
   DWMRegisterView &write_bit_range(uint8_t hi, uint8_t lo, uint64_t value)
     requires(size_ <= sizeof(uint64_t))
   {
-    // First, clear the bits in the given bit range
-    uint64_t raw_data = flatten_data(data_);
-    uint64_t mask = (1ULL << (1 + hi - lo)) - 1;
-    raw_data &= ~(mask << lo);
-
-    // Then, write the new data in
-    raw_data |= (value & mask) << lo;
-    write_data(raw_data);
+    DWMData<size_> new_data = data_;
+    new_data.write_bit_range(hi, lo, value);
+    write_data(new_data.span());
 
     return *this;
   }
 
   auto value() const {
     if constexpr (size_ <= sizeof(uint64_t)) {
-      auto res = flatten_data(data_);
+      auto res = data_.to_uint();
 
       if constexpr (IsTimestampRegister<ID>) {
         return DWMTimestamp{res};
@@ -184,7 +165,7 @@ public:
         return res;
       }
     } else {
-      return std::span<const std::byte, size_>{data_};
+      return data_.span();
     }
   }
 
@@ -200,14 +181,14 @@ public:
 
     // Initiate SPI transfer
     // TODO: error handle
-    spi_.transfer_halfduplex(tx, data_);
+    spi_.transfer_halfduplex(tx, data_.span());
   }
 
   // TODO: consider removing this and other cases of std::integral auto
   // It might just be adding complexity for no reason (ig bit_cast
   // optimization..?)
   void write_data(std::integral auto new_value) {
-    write_data(pack_data(new_value));
+    write_data(DWMData<size_>{new_value}.span());
   }
 
   // TODO: maybe make the span have a dynamic_extent, and allow writes <= size_?
@@ -231,34 +212,8 @@ public:
   }
 
 private:
-  static auto flatten_data(std::span<const std::byte, size_> data)
-    requires(size_ <= sizeof(uint64_t))
-  {
-    // std::bit_cast requires an exact size-match
-    // Therefore, std::memcpy is necessary since many DW1000 regs are 5 bytes
-    // in size (rather than uint64_t's 8 bytes).
-    // Also, std::bit_cast does NOT work with std::span, so this function no
-    // longer uses bit_cast for compatible sizes (e.g., 4). To simplify
-    // things, it always uses std::memcpy. The lack of constexpr doesn't
-    // matter since the data parameter will always be at runtime regardless.
-    uint64_t res{};
-    std::memcpy(&res, data.data(), size_);
-    return res;
-  }
-
-  static std::array<std::byte, size_> pack_data(std::integral auto val) {
-    // std::bit_cast optimization
-    if constexpr (sizeof(val) == size_) {
-      return std::bit_cast<std::array<std::byte, size_>>(val);
-    } else {
-      std::array<std::byte, size_> new_data{};
-      std::memcpy(new_data.data(), &val, size_);
-      return new_data;
-    }
-  }
-
   SPI &spi_{};
-  std::array<std::byte, size_> data_{};
+  DWMData<size_> data_{};
 };
 
 // TODO: add this, and other related classes, to some sort of DWM namespace
@@ -306,7 +261,8 @@ public:
     // auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
     //
     // // log("Current transmit bit rate: %X %X", ((tx_fctrl.bit(14) << 1) |
-    // // tx_fctrl.bit(13)), tx_fctrl.bit_range(14, 13)); logf("Bit rate, PRF,
+    // // tx_fctrl.bit(13)), tx_fctrl.data().bit_range(14, 13)); logf("Bit rate,
+    // PRF,
     // // preamble length (but nice!):", tx_bit_rate(), tx_prf(),
     // // tx_preamble_length());
     //
@@ -417,7 +373,7 @@ public:
   // TODO: rename this and related methods to get_*?
   PRF tx_prf() {
     auto tx_fctrl = get_reg_view<DWMRegisterID::TX_FCTRL>();
-    uint8_t raw_prf = tx_fctrl.bit_range(17, 16); // TODO: constants?
+    uint8_t raw_prf = tx_fctrl.data().bit_range(17, 16); // TODO: constants?
 
     return static_cast<PRF>(raw_prf);
   }
@@ -446,7 +402,8 @@ private:
 
   std::string_view tx_bit_rate() const {
     auto tx_fctrl = get_reg_view<DWMRegisterID::TX_FCTRL>();
-    uint8_t raw_bit_rate = tx_fctrl.bit_range(14, 13); // TODO: constants?
+    uint8_t raw_bit_rate =
+        tx_fctrl.data().bit_range(14, 13); // TODO: constants?
 
     return BitRateToString(static_cast<BitRate>(raw_bit_rate));
   }
@@ -459,8 +416,8 @@ private:
   uint16_t tx_preamble_length() const {
     auto tx_fctrl = get_reg_view<DWMRegisterID::TX_FCTRL>();
 
-    uint8_t raw_psr = tx_fctrl.bit_range(19, 18); // TODO: constants?
-    uint8_t raw_pe = tx_fctrl.bit_range(21, 20);  // TODO: constants?
+    uint8_t raw_psr = tx_fctrl.data().bit_range(19, 18); // TODO: constants?
+    uint8_t raw_pe = tx_fctrl.data().bit_range(21, 20);  // TODO: constants?
     uint8_t psr_pe_combined = (raw_psr << 2) | raw_pe;
 
     return PreambleLengthToUInt(static_cast<PreambleLength>(psr_pe_combined));

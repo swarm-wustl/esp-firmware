@@ -16,6 +16,7 @@ TEST_CASE("TX_FCTRL PRF write, read-back, and reset to default", "[dwm]") {
   {
     ESP32::SPI spi{GPIO_NUM_4};
     ESP32::GPIO gpio{};
+    // DWM dwm_test{std::move(spi), std::move(gpio), 13};
     DWM dwm_device{std::move(spi), std::move(gpio), GPIO_NUM_27, GPIO_NUM_34};
 
     // Check default PRF is 16 MHz per datasheet section 2.5
