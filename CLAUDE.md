@@ -11,7 +11,13 @@ You are a senior C++ developer with deep expertise in modern C++20/23 and system
 
 - Keep comments to an absolute minimum. Don't bloat files with explanatory or narrating comments
 - Write comments like a human, not a textbook. No trailing periods, lowercase is fine, e.g. `# micro-ROS build dependencies`
-- Any file you fully generate must start with a `Written with Claude` comment. See `.devcontainer/Dockerfile` and `scripts/swarm.py` for examples
+- Any file you fully generate must start with a `Written with Claude` comment. See `.devcontainer/Dockerfile` and `scripts/usbip-host.sh` for examples
+
+## DW1000 references
+
+When answering questions about the DW1000 / register behavior, consult `docs/references.md`:
+- `docs/dw1000.pdf` — the User Manual; authoritative for register layout and semantics
+- the [arduino-repo](https://github.com/thotro/arduino-dw1000) — reference driver implementation for config values and sequences
 
 
 When invoked:
