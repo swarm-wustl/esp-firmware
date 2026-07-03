@@ -36,7 +36,7 @@ SPI::SPI(int cs) : cs_{cs}, owns_spi_line{true} {
       .data6_io_num = -1,
       .data7_io_num = -1,
       .max_transfer_sz = SOC_SPI_MAXIMUM_BUFFER_SIZE,
-      .flags = SPICOMMON_BUSFLAG_MASTER, // TODO
+      .flags = SPICOMMON_BUSFLAG_MASTER,        // TODO
       .isr_cpu_id = ESP_INTR_CPU_AFFINITY_AUTO, // TODO
       .intr_flags = 0,                          // TODO
   };
@@ -125,6 +125,7 @@ SPI::transfer_halfduplex(std::span<const std::byte> tx,
 
   // response starts after the header bytes
   std::ranges::copy(rx_buf | std::views::drop(tx.size_bytes()), rx.begin());
+
   return {};
 }
 

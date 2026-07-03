@@ -1,9 +1,15 @@
-file(GLOB_RECURSE SOURCES "*.cpp")
+# host-runnable unit tests (pure value types + mock SPI); build on every target
+set(srcs "dwm_data_test.cpp" "mock_reg_view_test.cpp")
+set(reqs unity dwm)
 
-# TODO: probably shouldn't rely on esp32, just mocks... but not sure
+# hardware integration tests need real ESP32 peripherals, so skip on the host
+if(NOT "${IDF_TARGET}" STREQUAL "linux")
+    list(APPEND srcs "reg_view.cpp" "test.cpp")
+    list(APPEND reqs esp32)
+endif()
+
 idf_component_register(
-    SRCS ${SOURCES}
+    SRCS ${srcs}
     INCLUDE_DIRS "."
-    REQUIRES unity dwm esp32
+    REQUIRES ${reqs}
 )
-

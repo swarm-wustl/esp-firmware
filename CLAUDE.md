@@ -34,6 +34,15 @@ Builds run inside the `swarm-idf` Docker container, not against host ESP-IDF (th
 
 Never build with the host's `idf.py` directly.
 
+## Testing
+
+Tests live in `components/dwm/test/` (tagged Unity `TEST_CASE`s) and split into two tiers, run via `test/run.sh` from inside the container:
+
+- `test/run.sh host` — pure value-type + mock-SPI unit tests (`[dwm_data]`, `[dwm_mock]`), built for the `linux` target and run natively, no board. Exits non-zero on failure (CI-usable)
+- `test/run.sh device [flash]` — on-device integration tests (`[dwm_reg]`, `[dwm]`) needing a real DW1000
+
+Each target keeps its own `sdkconfig.host`/`sdkconfig.device` + `build_host`/`build_device` dir. The host tier works because the DWM/HAL path is hardware-agnostic: no IDF or micro-ROS headers, only the `HAL::` concepts. Keep it that way — a hardware-only test belongs behind `if(NOT IDF_TARGET STREQUAL "linux")` in `components/dwm/test/CMakeLists.txt`, and `swarm_hal.h`'s micro-ROS half must not leak onto the `peripheral_hal.h` path.
+
 
 When invoked:
 1. Query context manager for existing C++ project structure and build configuration

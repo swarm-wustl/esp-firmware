@@ -1,5 +1,9 @@
 build
+build_host
+build_device
 sdkconfig
+sdkconfig.host
+sdkconfig.device
 sdkconfig.old
 .direnv
 .cache
