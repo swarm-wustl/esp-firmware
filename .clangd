@@ -1,3 +1,5 @@
+# Written with Claude
+
 # clangd runs inside the dev container (see scripts/clangd.sh) and reads the
 # ESP-IDF compile_commands.json. Those commands carry xtensa-gcc codegen flags
 # that clangd's embedded clang rejects outright -- strip them so parsing works.
