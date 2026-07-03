@@ -1,6 +1,6 @@
 #include "dwm.h"
 #include "mock_spi.h"
-#include "swarm_hal.h"
+#include "peripheral_hal.h"
 #include "unity.h"
 #include <cstddef>
 #include <vector>

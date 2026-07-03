@@ -2,7 +2,7 @@
 #define DWM_H
 
 #include "dwm_data.h"
-#include "swarm_hal.h"
+#include "peripheral_hal.h"
 #include <algorithm>
 #include <array>
 #include <bit>
