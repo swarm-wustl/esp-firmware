@@ -21,36 +21,36 @@ TEST_CASE("read() serves canned bytes little-endian", "[dwm_mock]") {
 
 TEST_CASE("read() propagates a transfer failure", "[dwm_mock]") {
   MockSPI spi;
-  spi.fail_with = ESP_FAIL;
+  spi.fail_with = HAL::SpiError::TransferFailed;
 
   DWMRegisterView<MockSPI, DWMRegisterID::DEV_ID> reg{spi};
   auto v = reg.read();
 
   TEST_ASSERT_FALSE(v.has_value());
-  TEST_ASSERT_EQUAL(ESP_FAIL, v.error());
+  TEST_ASSERT_TRUE(v.error() == HAL::SpiError::TransferFailed);
 }
 
 TEST_CASE("write_data() propagates a transfer failure", "[dwm_mock]") {
   MockSPI spi;
-  spi.fail_with = ESP_ERR_TIMEOUT;
+  spi.fail_with = HAL::SpiError::Timeout;
 
   DWMRegisterView<MockSPI, DWMRegisterID::TX_FCTRL> reg{spi};
   DWMData<5> payload{static_cast<uint64_t>(0x1234)};
   auto res = reg.write_data(payload.span());
 
   TEST_ASSERT_FALSE(res.has_value());
-  TEST_ASSERT_EQUAL(ESP_ERR_TIMEOUT, res.error());
+  TEST_ASSERT_TRUE(res.error() == HAL::SpiError::Timeout);
 }
 
 TEST_CASE("write_bit_range short-circuits when the read fails", "[dwm_mock]") {
   MockSPI spi;
-  spi.fail_with = ESP_FAIL;
+  spi.fail_with = HAL::SpiError::TransferFailed;
 
   DWMRegisterView<MockSPI, DWMRegisterID::TX_FCTRL> reg{spi};
   auto res = reg.write_bit_range(17, 16, 0b10);
 
   TEST_ASSERT_FALSE(res.has_value());
-  TEST_ASSERT_EQUAL(ESP_FAIL, res.error());
+  TEST_ASSERT_TRUE(res.error() == HAL::SpiError::TransferFailed);
   // the read failed, so the write transfer must never have happened
   TEST_ASSERT_EQUAL(1, spi.transfer_count);
   TEST_ASSERT_TRUE(spi.last_write.empty());

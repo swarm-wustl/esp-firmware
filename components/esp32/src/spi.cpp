@@ -15,6 +15,15 @@ constexpr int SPI_MOSI = 23;
 
 inline constexpr size_t BYTES_TO_BITS(size_t bytes) { return bytes * 8; }
 
+static HAL::SpiError from_esp_err(esp_err_t err) {
+  switch (err) {
+  case ESP_ERR_TIMEOUT:
+    return HAL::SpiError::Timeout;
+  default:
+    return HAL::SpiError::TransferFailed;
+  }
+}
+
 SPI::SPI(int cs) : cs_{cs}, owns_spi_line{true} {
   spi_bus_config_t config{
       .mosi_io_num = SPI_MOSI,
@@ -89,8 +98,9 @@ SPI &SPI::operator=(SPI &&other) {
   return *this;
 }
 
-std::expected<void, esp_err_t> SPI::transfer_halfduplex(std::span<const std::byte> tx,
-                                                        std::span<std::byte> rx) {
+std::expected<void, HAL::SpiError>
+SPI::transfer_halfduplex(std::span<const std::byte> tx,
+                         std::span<std::byte> rx) {
   // Use full-duplex since it allows large transfers via DMA channels (unlike
   // half) To simulate half-duplex transfers, we first do a tx transfer, then an
   // rx. This causes 2 transactions rather than 1, but makes large (e.g., 1024
@@ -108,8 +118,10 @@ std::expected<void, esp_err_t> SPI::transfer_halfduplex(std::span<const std::byt
                                    .rx_buffer = rx_buf.data()};
 
   esp_err_t res = spi_device_transmit(dev_handle_, &transaction);
-  if (unlikely(res != ESP_OK))
-    return std::unexpected(res);
+  if (unlikely(res != ESP_OK)) {
+    log("SPI transfer failed: %d", res);
+    return std::unexpected(from_esp_err(res));
+  }
 
   // response starts after the header bytes
   std::ranges::copy(rx_buf | std::views::drop(tx.size_bytes()), rx.begin());

@@ -127,11 +127,11 @@ public:
   DWMRegisterView(DWMRegisterView &&) = delete;
   void operator=(DWMRegisterView &&) = delete;
 
-  [[nodiscard]] std::expected<ValueType, esp_err_t> read() {
+  [[nodiscard]] std::expected<ValueType, HAL::SpiError> read() {
     return read_into_cache().transform([this] { return interpret(data_); });
   }
 
-  [[nodiscard]] std::expected<void, esp_err_t> operator|=(uint64_t flags)
+  [[nodiscard]] std::expected<void, HAL::SpiError> operator|=(uint64_t flags)
     requires IsWritable<ID> && (size_ <= sizeof(uint64_t))
   {
     if constexpr (IsWriteOneClear<ID>) {
@@ -143,7 +143,7 @@ public:
     }
   }
 
-  [[nodiscard]] std::expected<void, esp_err_t> operator&=(uint64_t flags)
+  [[nodiscard]] std::expected<void, HAL::SpiError> operator&=(uint64_t flags)
     requires IsReadWrite<ID> && (size_ <= sizeof(uint64_t))
   {
     return read_into_cache().and_then(
@@ -151,13 +151,13 @@ public:
   }
 
   // TODO
-  [[nodiscard]] std::expected<void, esp_err_t> operator+=(uint64_t)
+  [[nodiscard]] std::expected<void, HAL::SpiError> operator+=(uint64_t)
     requires IsTimestampRegister<ID>
   {
     return {};
   }
 
-  [[nodiscard]] std::expected<void, esp_err_t>
+  [[nodiscard]] std::expected<void, HAL::SpiError>
   write_bit_range(uint8_t hi, uint8_t lo, uint64_t value)
     requires IsReadWrite<ID> && (size_ <= sizeof(uint64_t))
   {
@@ -173,7 +173,7 @@ public:
   // TODO: consider removing this and other cases of std::integral auto
   // It might just be adding complexity for no reason (ig bit_cast
   // optimization..?)
-  [[nodiscard]] std::expected<void, esp_err_t>
+  [[nodiscard]] std::expected<void, HAL::SpiError>
   write_data(std::integral auto new_value)
     requires IsWritable<ID> && (size_ <= sizeof(uint64_t))
   {
@@ -181,7 +181,7 @@ public:
   }
 
   // TODO: maybe make the span have a dynamic_extent, and allow writes <= size_?
-  [[nodiscard]] std::expected<void, esp_err_t>
+  [[nodiscard]] std::expected<void, HAL::SpiError>
   write_data(std::span<const std::byte, size_> new_data)
     requires IsWritable<ID>
   {
@@ -204,7 +204,7 @@ private:
   SPI &spi_;
   DWMData<size_> data_{};
 
-  std::expected<void, esp_err_t> read_into_cache() {
+  std::expected<void, HAL::SpiError> read_into_cache() {
     // header: MSbit = 0 for read, lower 6 bits = register id
     uint8_t reg = 0x00 | (static_cast<uint8_t>(ID) & 0x3F);
 
@@ -311,7 +311,7 @@ public:
     return 0;
   }
 
-  std::expected<uint32_t, esp_err_t> get_device_id() {
+  std::expected<uint32_t, HAL::SpiError> get_device_id() {
     return get_reg_view<DWMRegisterID::DEV_ID>().read().transform(
         [](uint64_t raw) { return static_cast<uint32_t>(raw); });
   }
@@ -319,24 +319,24 @@ public:
   /*
    * Pulse Repetition Frequency
    */
-  std::expected<PRF, esp_err_t> get_tx_prf() {
+  std::expected<PRF, HAL::SpiError> get_tx_prf() {
     return get_reg_view<DWMRegisterID::TX_FCTRL>().read().transform(
         [](uint64_t raw) {
           return static_cast<PRF>((raw >> 16) & 0b11); // TODO: constants?
         });
   }
 
-  std::expected<void, esp_err_t> set_tx_prf(PRF prf) {
+  std::expected<void, HAL::SpiError> set_tx_prf(PRF prf) {
     return get_reg_view<DWMRegisterID::TX_FCTRL>().write_bit_range(
         17, 16, static_cast<uint64_t>(prf));
   }
 
   // valid only once LDEDONE is set for the corresponding reception
-  std::expected<DWMTimestamp, esp_err_t> get_rx_timestamp() {
+  std::expected<DWMTimestamp, HAL::SpiError> get_rx_timestamp() {
     return get_reg_view<DWMRegisterID::RX_TIME>().read();
   }
 
-  std::expected<DWMTimestamp, esp_err_t> get_tx_timestamp() {
+  std::expected<DWMTimestamp, HAL::SpiError> get_tx_timestamp() {
     return get_reg_view<DWMRegisterID::TX_TIME>().read();
   }
 
@@ -357,7 +357,7 @@ private:
     gpio_.delay_ms(10);
   }
 
-  std::expected<std::string_view, esp_err_t> get_tx_bit_rate() {
+  std::expected<std::string_view, HAL::SpiError> get_tx_bit_rate() {
     return get_reg_view<DWMRegisterID::TX_FCTRL>().read().transform(
         [](uint64_t raw) {
           return BitRateToString(
@@ -365,12 +365,12 @@ private:
         });
   }
 
-  std::expected<void, esp_err_t> set_tx_bit_rate(BitRate br) {
+  std::expected<void, HAL::SpiError> set_tx_bit_rate(BitRate br) {
     return get_reg_view<DWMRegisterID::TX_FCTRL>().write_bit_range(
         14, 13, static_cast<uint64_t>(br));
   }
 
-  std::expected<uint16_t, esp_err_t> get_tx_preamble_length() {
+  std::expected<uint16_t, HAL::SpiError> get_tx_preamble_length() {
     return get_reg_view<DWMRegisterID::TX_FCTRL>().read().transform(
         [](uint64_t raw) {
           uint8_t raw_psr = (raw >> 18) & 0b11; // TODO: constants?
@@ -382,7 +382,7 @@ private:
         });
   }
 
-  std::expected<void, esp_err_t> set_tx_preamble_length(PreambleLength pl) {
+  std::expected<void, HAL::SpiError> set_tx_preamble_length(PreambleLength pl) {
     uint8_t psr_pe_combined = static_cast<uint8_t>(pl);
     uint8_t raw_psr = (psr_pe_combined >> 2) & 0b11;
     uint8_t raw_pe = psr_pe_combined & 0b11;

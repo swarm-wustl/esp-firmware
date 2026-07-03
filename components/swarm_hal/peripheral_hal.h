@@ -8,7 +8,6 @@
 #include <expected>
 #include <span>
 
-#include "esp_err.h"
 #include "hal/gpio_types.h"
 
 namespace HAL {
@@ -18,12 +17,14 @@ constexpr uint32_t to_level(HAL::Voltage voltage) {
   return static_cast<uint32_t>(voltage);
 }
 
+enum class SpiError : uint8_t { TransferFailed, Timeout };
+
 template <typename SPI>
 concept GenericSPIController =
     requires(SPI spi, std::span<std::byte> rx, std::span<const std::byte> tx) {
       {
         spi.transfer_halfduplex(tx, rx)
-      } -> std::same_as<std::expected<void, esp_err_t>>;
+      } -> std::same_as<std::expected<void, SpiError>>;
     };
 
 template <typename GPIO>
