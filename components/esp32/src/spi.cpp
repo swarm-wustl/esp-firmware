@@ -87,8 +87,8 @@ SPI &SPI::operator=(SPI &&other) {
   return *this;
 }
 
-esp_err_t SPI::transfer_halfduplex(std::span<const std::byte> tx,
-                                   std::span<std::byte> rx) {
+std::expected<void, esp_err_t> SPI::transfer_halfduplex(std::span<const std::byte> tx,
+                                                        std::span<std::byte> rx) {
   // Use full-duplex since it allows large transfers via DMA channels (unlike
   // half) To simulate half-duplex transfers, we first do a tx transfer, then an
   // rx. This causes 2 transactions rather than 1, but makes large (e.g., 1024
@@ -107,11 +107,11 @@ esp_err_t SPI::transfer_halfduplex(std::span<const std::byte> tx,
 
   esp_err_t res = spi_device_transmit(dev_handle_, &transaction);
   if (unlikely(res != ESP_OK))
-    return res;
+    return std::unexpected(res);
 
   // response starts after the header bytes
   std::copy(rx_buf.begin() + tx.size_bytes(), rx_buf.end(), rx.begin());
-  return ESP_OK;
+  return {};
 }
 
 void SPI::swap(SPI &other) {

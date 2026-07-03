@@ -7,7 +7,9 @@
 #include <bit>
 #include <chrono>
 #include <cstring>
+#include <expected>
 #include <string_view>
+#include <utility>
 
 // TODO: add noexcept to classes
 
@@ -84,10 +86,26 @@ template <HAL::GenericSPIController SPI, DWMRegisterID ID>
 class DWMRegisterView {
   static constexpr size_t size_ = RegisterInfo<ID>::size;
 
+  // static so ValueType can decltype the result before the class is complete
+  static auto interpret(const DWMData<size_> &data) {
+    if constexpr (size_ <= sizeof(uint64_t)) {
+      if constexpr (IsTimestampRegister<ID>) {
+        return DWMTimestamp{data.to_uint()};
+      } else {
+        return data.to_uint();
+      }
+    } else {
+      return data.span();
+    }
+  }
+
 public:
-  explicit DWMRegisterView(SPI &spi) : spi_{spi} { read_data(); }
+  // return type of an object returned from read(), derived from interpret()
+  // based on regtype, fully known at comptime
+  using ValueType = decltype(interpret(std::declval<const DWMData<size_> &>()));
 
   // TODO: constructor that takes in data?
+  explicit DWMRegisterView(SPI &spi) : spi_{spi} {}
 
   ~DWMRegisterView() = default;
 
@@ -97,132 +115,92 @@ public:
   DWMRegisterView(DWMRegisterView &&) = delete;
   void operator=(DWMRegisterView &&) = delete;
 
-  /*
-   * For a normal RW register this is a read-modify-write OR. For a
-   * write-1-to-clear register, writing a 1 clears the bit, so we write the
-   * flags directly with no read-back.
-   */
-  DWMRegisterView &operator|=(uint64_t flags)
+  [[nodiscard]] std::expected<ValueType, esp_err_t> read() {
+    return read_into_cache().transform([this] { return interpret(data_); });
+  }
+
+  [[nodiscard]] std::expected<void, esp_err_t> operator|=(uint64_t flags)
     requires IsWritable<ID> && (size_ <= sizeof(uint64_t))
   {
     if constexpr (IsWriteOneClear<ID>) {
-      write_data(flags);
+      // writing a 1 clears the bit, so write flags directly with no read-back
+      return write_data(flags);
     } else {
-      write_data(data_.to_uint() | flags);
+      return read_into_cache().and_then(
+          [&] { return write_data(data_.to_uint() | flags); });
     }
-
-    return *this;
   }
 
-  DWMRegisterView &operator&=(uint64_t flags)
+  [[nodiscard]] std::expected<void, esp_err_t> operator&=(uint64_t flags)
     requires IsReadWrite<ID> && (size_ <= sizeof(uint64_t))
   {
-    write_data(data_.to_uint() & flags);
-
-    return *this;
+    return read_into_cache().and_then(
+        [&] { return write_data(data_.to_uint() & flags); });
   }
 
   // TODO
-  DWMRegisterView &operator+=(uint64_t)
+  [[nodiscard]] std::expected<void, esp_err_t> operator+=(uint64_t)
     requires IsTimestampRegister<ID>
   {
-    return *this;
+    return {};
   }
 
-  /*
-   * Access the locally-cached register bytes for bit/byte-level reads, e.g.
-   * reg.data().bit_range(17, 16). The byte twiddling lives on DWMData; this
-   * view is responsible only for SPI framing and persisting writes to the chip.
-   */
-  const DWMData<size_> &data() const { return data_; }
-
-  /*
-   * Read-modify-write a bit range and persist it to the device.
-   * (Unlike DWMData::write_bit_range, this also pushes the result over SPI.)
-   */
-  DWMRegisterView &write_bit_range(uint8_t hi, uint8_t lo, uint64_t value)
+  [[nodiscard]] std::expected<void, esp_err_t>
+  write_bit_range(uint8_t hi, uint8_t lo, uint64_t value)
     requires IsReadWrite<ID> && (size_ <= sizeof(uint64_t))
   {
-    DWMData<size_> new_data{data_};
-    new_data.write_bit_range(hi, lo, value);
-    write_data(new_data.span());
-
-    return *this;
-  }
-
-  auto value() const {
-    if constexpr (size_ <= sizeof(uint64_t)) {
-      auto res = data_.to_uint();
-
-      if constexpr (IsTimestampRegister<ID>) {
-        return DWMTimestamp{res};
-      } else {
-        return res;
-      }
-    } else {
-      return data_.span();
-    }
+    return read_into_cache().and_then([&] {
+      DWMData<size_> new_data{data_};
+      new_data.write_bit_range(hi, lo, value);
+      return write_data(new_data.span());
+    });
   }
 
   consteval size_t size() const { return size_; }
 
-  void read_data() {
-    // Lower 6 bits store actual register
-    // MSbit = 0 represents read
-    uint8_t reg = 0x00 | (static_cast<uint8_t>(ID) & 0x3F);
-
-    // Store in single-value array to be compatible with SPI controller API
-    std::array<const std::byte, 1> tx{std::byte{reg}};
-
-    // Initiate SPI transfer
-    // TODO: error handle
-    spi_.transfer_halfduplex(tx, data_.span());
-  }
-
   // TODO: consider removing this and other cases of std::integral auto
   // It might just be adding complexity for no reason (ig bit_cast
   // optimization..?)
-  void write_data(std::integral auto new_value)
+  [[nodiscard]] std::expected<void, esp_err_t>
+  write_data(std::integral auto new_value)
     requires IsWritable<ID> && (size_ <= sizeof(uint64_t))
   {
-    write_data(DWMData<size_>{new_value}.span());
+    return write_data(DWMData<size_>{new_value}.span());
   }
 
   // TODO: maybe make the span have a dynamic_extent, and allow writes <= size_?
-  void write_data(std::span<const std::byte, size_> new_data)
+  [[nodiscard]] std::expected<void, esp_err_t>
+  write_data(std::span<const std::byte, size_> new_data)
     requires IsWritable<ID>
   {
-    // Lower 6 bits store actual register
-    // MSbit = 1 represents write
+    // header: MSbit = 1 for write, lower 6 bits = register id
     uint8_t reg = 0x80 | (static_cast<uint8_t>(ID) & 0x3F);
 
-    // Create a std::array one larger than our data
-    // This is because the first byte in the transfer needs to be the register
-    std::array<std::byte, size_ + 1> tx{};
-
-    // Store the register in byte 0, then copy the rest of the data
     // TODO: use std::ranges::copy and std::ranges in general instead
+    std::array<std::byte, size_ + 1> tx{};
     auto it = tx.begin();
     *it = std::byte{reg};
     std::copy(new_data.begin(), new_data.end(), ++it);
 
-    // Initiate SPI transfer
-    // TODO: error handle
-    spi_.transfer_halfduplex(tx, {});
-
-    // For RW registers the written value is the new on-chip state, so keep the
-    // cache coherent. Write-1-to-clear registers must be re-read instead.
-    if constexpr (IsReadWrite<ID>) {
-      std::copy(new_data.begin(), new_data.end(), data_.span().begin());
-    }
-
-    // TODO: 'debug' mode that does read-back and asserts that the cached value
-    // equals the read-back
+    return spi_.transfer_halfduplex(tx, {}).transform([&] {
+      // WOC registers must be re-read instead of trusting the written value
+      if constexpr (IsReadWrite<ID>) {
+        std::copy(new_data.begin(), new_data.end(), data_.span().begin());
+      }
+    });
   }
 
 private:
-  SPI &spi_{};
+  SPI &spi_;
   DWMData<size_> data_{};
+
+  std::expected<void, esp_err_t> read_into_cache() {
+    // header: MSbit = 0 for read, lower 6 bits = register id
+    uint8_t reg = 0x00 | (static_cast<uint8_t>(ID) & 0x3F);
+
+    std::array<const std::byte, 1> tx{std::byte{reg}};
+    return spi_.transfer_halfduplex(tx, data_.span());
+  }
 };
 
 // TODO: add this, and other related classes, to some sort of DWM namespace
@@ -323,21 +301,24 @@ public:
     return 0;
   }
 
-  auto get_device_id() { return get_reg_view<DWMRegisterID::DEV_ID>().value(); }
+  std::expected<uint32_t, esp_err_t> get_device_id() {
+    return get_reg_view<DWMRegisterID::DEV_ID>().read().transform(
+        [](uint64_t raw) { return static_cast<uint32_t>(raw); });
+  }
 
   /*
    * Pulse Repetition Frequency
    */
-  PRF get_tx_prf() {
-    auto tx_fctrl = get_reg_view<DWMRegisterID::TX_FCTRL>();
-    uint8_t raw_prf = tx_fctrl.data().bit_range(17, 16); // TODO: constants?
-
-    return static_cast<PRF>(raw_prf);
+  std::expected<PRF, esp_err_t> get_tx_prf() {
+    return get_reg_view<DWMRegisterID::TX_FCTRL>().read().transform(
+        [](uint64_t raw) {
+          return static_cast<PRF>((raw >> 16) & 0b11); // TODO: constants?
+        });
   }
 
-  void set_tx_prf(PRF prf) {
-    auto tx_fctrl = get_reg_view<DWMRegisterID::TX_FCTRL>();
-    tx_fctrl.write_bit_range(17, 16, static_cast<uint64_t>(prf));
+  std::expected<void, esp_err_t> set_tx_prf(PRF prf) {
+    return get_reg_view<DWMRegisterID::TX_FCTRL>().write_bit_range(
+        17, 16, static_cast<uint64_t>(prf));
   }
 
 private:
@@ -357,37 +338,40 @@ private:
     gpio_.delay_ms(10);
   }
 
-  std::string_view get_tx_bit_rate() const {
-    auto tx_fctrl = get_reg_view<DWMRegisterID::TX_FCTRL>();
-    uint8_t raw_bit_rate =
-        tx_fctrl.data().bit_range(14, 13); // TODO: constants?
-
-    return BitRateToString(static_cast<BitRate>(raw_bit_rate));
+  std::expected<std::string_view, esp_err_t> get_tx_bit_rate() {
+    return get_reg_view<DWMRegisterID::TX_FCTRL>().read().transform(
+        [](uint64_t raw) {
+          return BitRateToString(
+              static_cast<BitRate>((raw >> 13) & 0b11)); // TODO: constants?
+        });
   }
 
-  void set_tx_bit_rate(BitRate br) {
-    auto tx_fctrl = get_reg_view<DWMRegisterID::TX_FCTRL>();
-    tx_fctrl.write_bit_range(14, 13, static_cast<uint64_t>(br));
+  std::expected<void, esp_err_t> set_tx_bit_rate(BitRate br) {
+    return get_reg_view<DWMRegisterID::TX_FCTRL>().write_bit_range(
+        14, 13, static_cast<uint64_t>(br));
   }
 
-  uint16_t get_tx_preamble_length() const {
-    auto tx_fctrl = get_reg_view<DWMRegisterID::TX_FCTRL>();
+  std::expected<uint16_t, esp_err_t> get_tx_preamble_length() {
+    return get_reg_view<DWMRegisterID::TX_FCTRL>().read().transform(
+        [](uint64_t raw) {
+          uint8_t raw_psr = (raw >> 18) & 0b11; // TODO: constants?
+          uint8_t raw_pe = (raw >> 20) & 0b11;  // TODO: constants?
+          uint8_t psr_pe_combined = (raw_psr << 2) | raw_pe;
 
-    uint8_t raw_psr = tx_fctrl.data().bit_range(19, 18); // TODO: constants?
-    uint8_t raw_pe = tx_fctrl.data().bit_range(21, 20);  // TODO: constants?
-    uint8_t psr_pe_combined = (raw_psr << 2) | raw_pe;
-
-    return PreambleLengthToUInt(static_cast<PreambleLength>(psr_pe_combined));
+          return PreambleLengthToUInt(
+              static_cast<PreambleLength>(psr_pe_combined));
+        });
   }
 
-  void set_tx_preamble_length(PreambleLength pl) {
+  std::expected<void, esp_err_t> set_tx_preamble_length(PreambleLength pl) {
     uint8_t psr_pe_combined = static_cast<uint8_t>(pl);
     uint8_t raw_psr = (psr_pe_combined >> 2) & 0b11;
     uint8_t raw_pe = psr_pe_combined & 0b11;
 
     auto tx_fctrl = get_reg_view<DWMRegisterID::TX_FCTRL>();
-    tx_fctrl.write_bit_range(19, 18, raw_psr);
-    tx_fctrl.write_bit_range(21, 20, raw_pe);
+    return tx_fctrl.write_bit_range(19, 18, raw_psr).and_then([&] {
+      return tx_fctrl.write_bit_range(21, 20, raw_pe);
+    });
   }
 
   SPI spi_;

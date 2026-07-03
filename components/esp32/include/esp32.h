@@ -53,8 +53,8 @@ public:
   SPI(SPI &&other);
   SPI &operator=(SPI &&other);
 
-  esp_err_t transfer_halfduplex(std::span<const std::byte> tx,
-                                std::span<std::byte> rx);
+  std::expected<void, esp_err_t> transfer_halfduplex(std::span<const std::byte> tx,
+                                                     std::span<std::byte> rx);
 
 private:
   int cs_{};

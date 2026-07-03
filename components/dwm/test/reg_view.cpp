@@ -29,7 +29,10 @@ TEST_CASE("Test read device ID register view", "[dwm_reg]") {
   DWMRegisterView<ESP32::SPI, DWMRegisterID::DEV_ID> dev_id_reg{spi};
 
   TEST_ASSERT_EQUAL(dev_id_reg.size(), 4);
-  TEST_ASSERT_EQUAL(dev_id_reg.value(), 0xDECA0130);
+
+  auto id = dev_id_reg.read();
+  TEST_ASSERT_TRUE(id.has_value());
+  TEST_ASSERT_EQUAL(0xDECA0130, *id);
 }
 
 TEST_CASE("Test write and read-back TX buffer", "[dwm_reg]") {
@@ -45,22 +48,23 @@ TEST_CASE("Test write and read-back TX buffer", "[dwm_reg]") {
   });
 
   // Write data, read back the response, and compare
-  tx_buf_reg.write_data(std::span{test_data[0]});
-  tx_buf_reg.read_data();
-  TEST_ASSERT(std::ranges::equal(test_data[0], tx_buf_reg.value()));
+  TEST_ASSERT_TRUE(tx_buf_reg.write_data(std::span{test_data[0]}).has_value());
+
+  auto readback = tx_buf_reg.read();
+  TEST_ASSERT_TRUE(readback.has_value());
+  TEST_ASSERT(std::ranges::equal(test_data[0], *readback));
 
   // Re-generate random values in range [0, 255]
   std::ranges::generate(test_data[1], []() {
     return std::byte{static_cast<uint8_t>(std::rand() % 256)};
   });
 
-  // Write-through cache: value() reflects the write immediately, no read needed
-  tx_buf_reg.write_data(std::span{test_data[1]});
-  TEST_ASSERT(std::ranges::equal(test_data[1], tx_buf_reg.value()));
+  TEST_ASSERT_TRUE(tx_buf_reg.write_data(std::span{test_data[1]}).has_value());
 
   // Read back from the device, still the new test data
-  tx_buf_reg.read_data();
-  TEST_ASSERT(std::ranges::equal(test_data[1], tx_buf_reg.value()));
+  readback = tx_buf_reg.read();
+  TEST_ASSERT_TRUE(readback.has_value());
+  TEST_ASSERT(std::ranges::equal(test_data[1], *readback));
 }
 
 // --- DWMData unit tests (pure value type, no hardware needed) ---

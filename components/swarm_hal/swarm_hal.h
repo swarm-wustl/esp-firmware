@@ -5,12 +5,14 @@
 #include <type_traits>
 #include <cstdint>
 #include <span>
+#include <expected>
 
 #include <geometry_msgs/msg/twist.h>
 
 #include "motor.h"
 #include "drive.h"
 
+#include "esp_err.h"
 #include "hal/gpio_types.h"
 
 /*
@@ -59,7 +61,7 @@ namespace HAL {
         std::span<std::byte> rx,
         std::span<const std::byte> tx
     ) {
-        { spi.transfer_halfduplex(tx, rx) } -> std::same_as<int>;
+        { spi.transfer_halfduplex(tx, rx) } -> std::same_as<std::expected<void, esp_err_t>>;
     };
 
     template <typename GPIO>

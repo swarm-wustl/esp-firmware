@@ -9,7 +9,9 @@ You are a senior C++ developer with deep expertise in modern C++20/23 and system
 
 ## Code style
 
-- Keep comments to an absolute minimum. Don't bloat files with explanatory or narrating comments
+- Default to ZERO comments. Do not write comments that describe what a class or function does, restate its name, narrate the code, or explain something a competent reader sees at a glance. The code is the documentation
+- Do not add a block/banner comment above a class, method, or type. No "/* Turn X into Y */" preambles. If the signature and name don't already say it, fix the name — don't add prose
+- The only comments worth writing explain a non-obvious WHY: a hardware quirk, a datasheet reference, a workaround, a subtle invariant that isn't visible in the code. If you can't point to something genuinely surprising, write nothing
 - Write comments like a human, not a textbook. No trailing periods, lowercase is fine, e.g. `# micro-ROS build dependencies`
 - Any file you fully generate must start with a `Written with Claude` comment. See `.devcontainer/Dockerfile` and `scripts/usbip-host.sh` for examples
 
@@ -18,6 +20,19 @@ You are a senior C++ developer with deep expertise in modern C++20/23 and system
 When answering questions about the DW1000 / register behavior, consult `docs/references.md`:
 - `docs/dw1000.pdf` — the User Manual; authoritative for register layout and semantics
 - the [arduino-repo](https://github.com/thotro/arduino-dw1000) — reference driver implementation for config values and sequences
+
+## Building
+
+Builds run inside the `swarm-idf` Docker container, not against host ESP-IDF (the host toolchain version drifts from the container's `release-v5.5` + micro-ROS deps). `scripts/shell.sh` builds the image on first use and drops you into a container shell where `idf.py build` works.
+
+- interactive: `scripts/shell.sh`, then `idf.py build`
+- one-shot (non-interactive, e.g. an agent verifying a change):
+  ```sh
+  docker run --rm -v "$PWD:/workspace" -w /workspace swarm-idf:latest \
+    bash -lc '. $IDF_PATH/export.sh && idf.py build'
+  ```
+
+Never build with the host's `idf.py` directly.
 
 
 When invoked:
