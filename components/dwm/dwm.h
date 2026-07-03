@@ -3,6 +3,7 @@
 
 #include "dwm_data.h"
 #include "swarm_hal.h"
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <chrono>
@@ -176,16 +177,14 @@ public:
     // header: MSbit = 1 for write, lower 6 bits = register id
     uint8_t reg = 0x80 | (static_cast<uint8_t>(ID) & 0x3F);
 
-    // TODO: use std::ranges::copy and std::ranges in general instead
     std::array<std::byte, size_ + 1> tx{};
-    auto it = tx.begin();
-    *it = std::byte{reg};
-    std::copy(new_data.begin(), new_data.end(), ++it);
+    tx[0] = std::byte{reg};
+    std::ranges::copy(new_data, tx.begin() + 1);
 
     return spi_.transfer_halfduplex(tx, {}).transform([&] {
       // WOC registers must be re-read instead of trusting the written value
       if constexpr (IsReadWrite<ID>) {
-        std::copy(new_data.begin(), new_data.end(), data_.span().begin());
+        std::ranges::copy(new_data, data_.span().begin());
       }
     });
   }

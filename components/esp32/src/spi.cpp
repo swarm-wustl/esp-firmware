@@ -2,7 +2,9 @@
 #include "esp32.h"
 
 #include "log.h"
+#include <algorithm>
 #include <memory>
+#include <ranges>
 #include <utility>
 #include <vector>
 
@@ -99,7 +101,7 @@ std::expected<void, esp_err_t> SPI::transfer_halfduplex(std::span<const std::byt
   std::vector<std::byte> rx_buf(total, std::byte{0});
 
   // copy header into tx_buf, rest is zeros (dummy bytes)
-  std::copy(tx.begin(), tx.end(), tx_buf.begin());
+  std::ranges::copy(tx, tx_buf.begin());
 
   spi_transaction_t transaction = {.length = BYTES_TO_BITS(total),
                                    .tx_buffer = tx_buf.data(),
@@ -110,7 +112,7 @@ std::expected<void, esp_err_t> SPI::transfer_halfduplex(std::span<const std::byt
     return std::unexpected(res);
 
   // response starts after the header bytes
-  std::copy(rx_buf.begin() + tx.size_bytes(), rx_buf.end(), rx.begin());
+  std::ranges::copy(rx_buf | std::views::drop(tx.size_bytes()), rx.begin());
   return {};
 }
 
