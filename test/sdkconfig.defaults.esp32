@@ -1,0 +1,5 @@
+# The DW1000 tests run in main_task and put large buffers on the stack (the
+# TX_BUFFER register is 1 KB, its round-trip test another 2 KB). ESP32 task
+# stacks are heap-allocated, so overflowing the default 3584-byte main stack
+# smashes adjacent heap blocks -> tlsf "block must be free" aborts.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
