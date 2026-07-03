@@ -1,36 +1,19 @@
-# clangd config for the swarm project.
-#
-# clangd runs INSIDE the dev container (see scripts/clangd.sh), so it reads the
-# native ESP-IDF v5.5 headers and queries the xtensa cross-gcc (via the wrapper's
-# --query-driver) for the target and system include paths. We therefore do NOT
-# hand-roll toolchain/sysroot flags here -- only strip the handful of gcc-only
-# codegen flags clang's parser rejects, and route each file to the right
-# compile_commands.json.
-
+# clangd runs inside the dev container (see scripts/clangd.sh) and reads the
+# ESP-IDF compile_commands.json. Those commands carry xtensa-gcc codegen flags
+# that clangd's embedded clang rejects outright -- strip them so parsing works.
+# Non-test files use clangd's auto-discovered root build/ DB.
 CompileFlags:
-  # gcc-specific flags clang doesn't understand; harmless to drop for parsing.
   Remove:
     - -mlongcalls
     - -fstrict-volatile-bitfields
     - -fno-tree-switch-conversion
     - -fno-shrink-wrap
-  CompilationDatabase: build
 
 ---
+# Test sources exist only in the test project's build DB, not the root app build
+# that clangd auto-discovers -- so point them at the device test build (produced
+# by `test/run.sh device`), which carries their real include paths.
 If:
-  PathMatch: ".*/test/.*"
+  PathMatch: ".*test/.*"
 CompileFlags:
-  CompilationDatabase: test/build
-
----
-# dwm is a header-only component: no translation unit compiles its headers, so
-# clangd otherwise guesses a far-away C command as the proxy (c-header language,
-# wrong includes). Pin it to the test build DB -- reg_view.cpp sits next to the
-# headers and includes them -- and force C++ so the header-only templates parse.
-# NOTE: PathMatch is evaluated against the path relative to this .clangd file, so
-# there's no leading slash before "components".
-If:
-  PathMatch: ".*components/dwm/.*"
-CompileFlags:
-  CompilationDatabase: test/build
-  Add: [-xc++]
+  CompilationDatabase: test/build_device
