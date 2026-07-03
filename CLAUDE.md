@@ -42,7 +42,13 @@ Tests live in `components/dwm/test/` (tagged Unity `TEST_CASE`s) and split into 
 - `./test/run.py device` — on-device integration tests (`[dwm_reg]`, `[dwm]`) needing a real DW1000; pytest flashes and runs over serial
 - extra args pass through to pytest, e.g. `./test/run.py host -s`
 
-The app (`test/main/main.cpp`) is `unity_run_menu()`; `test/pytest_dwm.py` sends `*` to run the whole suite, parses each `:PASS`/`:FAIL` line, and reports each Unity case as a `pytest-subtests` subtest — so every case prints individually (`run.py` passes `-v`) and the summary counts them ("N subtests passed"). (Per-case `run_all_single_board_cases()` hangs on the linux target, so we run all at once.) Each target keeps its own `sdkconfig.host`/`sdkconfig.device` + `build_host`/`build_device` dir. The host tier works because the DWM/HAL path is hardware-agnostic: no IDF or micro-ROS headers, only the `HAL::` concepts. Keep it that way — a hardware-only test belongs behind `if(NOT IDF_TARGET STREQUAL "linux")` in `components/dwm/test/CMakeLists.txt`, and `swarm_hal.h`'s micro-ROS half must not leak onto the `peripheral_hal.h` path.
+The app (`test/main/main.cpp`) is `unity_run_menu()`. `test/pytest_dwm.py` branches on target:
+- **host**: runs the whole suite at once (`*`), parses each `:PASS`/`:FAIL` line, reports each case as a `pytest-subtests` subtest — every case prints (`run.py` passes `-v`), summary counts them
+- **device**: `run_all_single_board_cases()` — records per-case durations and attributes crashes to the right case — then replays `dut.testsuite.testcases` into subtests so each case still prints like host. It hangs on the linux target, which is why host drives the menu itself.
+
+Each target keeps its own `sdkconfig.host`/`sdkconfig.device` + `build_host`/`build_device` dir.
+
+The `--flash_*` esptool deprecation warnings on device runs are expected and can't be fixed here: `pytest-embedded-serial-esp` requires esptool v5 (which renamed those options), while IDF 5.5 still emits the old form. Can't downgrade esptool (v5 is required) or upgrade IDF past 5.5 (micro-ROS's tested ceiling). Harmless — leave them. The host tier works because the DWM/HAL path is hardware-agnostic: no IDF or micro-ROS headers, only the `HAL::` concepts. Keep it that way — a hardware-only test belongs behind `if(NOT IDF_TARGET STREQUAL "linux")` in `components/dwm/test/CMakeLists.txt`, and `swarm_hal.h`'s micro-ROS half must not leak onto the `peripheral_hal.h` path.
 
 
 When invoked:
