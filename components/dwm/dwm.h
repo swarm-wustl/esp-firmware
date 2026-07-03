@@ -47,6 +47,7 @@ private:
   uint64_t raw_time_{};
 };
 
+// TODO: consider moving this into RegisterInfo
 template <DWMRegisterID ID>
 concept IsTimestampRegister =
     ID == DWMRegisterID::SYS_TIME || ID == DWMRegisterID::TX_TIME ||
