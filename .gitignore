@@ -5,6 +5,7 @@ sdkconfig
 sdkconfig.host
 sdkconfig.device
 sdkconfig.old
+sdkconfig.*.old
 .direnv
 .cache
 .DS_Store
