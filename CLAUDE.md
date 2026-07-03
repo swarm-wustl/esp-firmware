@@ -36,12 +36,13 @@ Never build with the host's `idf.py` directly.
 
 ## Testing
 
-Tests live in `components/dwm/test/` (tagged Unity `TEST_CASE`s) and split into two tiers, run via `test/run.sh` from inside the container:
+Tests live in `components/dwm/test/` (tagged Unity `TEST_CASE`s) and split into two tiers, launched via `test/run.py` (which builds the app then hands off to `pytest-embedded`). Run from inside the container:
 
-- `test/run.sh host` — pure value-type + mock-SPI unit tests (`[dwm_data]`, `[dwm_mock]`), built for the `linux` target and run natively, no board. Exits non-zero on failure (CI-usable)
-- `test/run.sh device [flash]` — on-device integration tests (`[dwm_reg]`, `[dwm]`) needing a real DW1000
+- `./test/run.py host` — pure value-type + mock-SPI unit tests (`[dwm_data]`, `[dwm_mock]`), built for the `linux` target and run natively, no board
+- `./test/run.py device` — on-device integration tests (`[dwm_reg]`, `[dwm]`) needing a real DW1000; pytest flashes and runs over serial
+- extra args pass through to pytest, e.g. `./test/run.py host -s`
 
-Each target keeps its own `sdkconfig.host`/`sdkconfig.device` + `build_host`/`build_device` dir. The host tier works because the DWM/HAL path is hardware-agnostic: no IDF or micro-ROS headers, only the `HAL::` concepts. Keep it that way — a hardware-only test belongs behind `if(NOT IDF_TARGET STREQUAL "linux")` in `components/dwm/test/CMakeLists.txt`, and `swarm_hal.h`'s micro-ROS half must not leak onto the `peripheral_hal.h` path.
+The app (`test/main/main.cpp`) is `unity_run_menu()`; `test/pytest_dwm.py` sends `*` to run the whole suite, parses each `:PASS`/`:FAIL` line, and reports each Unity case as a `pytest-subtests` subtest — so every case prints individually (`run.py` passes `-v`) and the summary counts them ("N subtests passed"). (Per-case `run_all_single_board_cases()` hangs on the linux target, so we run all at once.) Each target keeps its own `sdkconfig.host`/`sdkconfig.device` + `build_host`/`build_device` dir. The host tier works because the DWM/HAL path is hardware-agnostic: no IDF or micro-ROS headers, only the `HAL::` concepts. Keep it that way — a hardware-only test belongs behind `if(NOT IDF_TARGET STREQUAL "linux")` in `components/dwm/test/CMakeLists.txt`, and `swarm_hal.h`'s micro-ROS half must not leak onto the `peripheral_hal.h` path.
 
 
 When invoked:

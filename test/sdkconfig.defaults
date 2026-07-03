@@ -1,8 +1,6 @@
-# Unity test framework: enable 64-bit assertion macros (TEST_ASSERT_*_HEX64,
-# etc.) -- needed for DWMData tests over 40-bit/64-bit registers.
+# needed for 40-bit/64-bit DWM regs
 CONFIG_UNITY_ENABLE_64BIT=y
 
-# Clearer test output: colored PASS/FAIL and a backtrace on each failure.
-CONFIG_UNITY_ENABLE_COLOR=y
+# backtrace on each failure
 CONFIG_UNITY_ENABLE_BACKTRACE_ON_FAIL=y
 

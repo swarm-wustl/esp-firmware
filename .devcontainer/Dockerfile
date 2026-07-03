@@ -7,6 +7,11 @@ FROM espressif/idf:${IDF_VERSION}
 RUN IDF_PATH_FORCE=1 . $IDF_PATH/export.sh && \
     pip3 install --no-cache-dir catkin_pkg colcon-common-extensions lark
 
+# test runner: pytest-embedded drives the unity menu (host + device); see test/run.py
+# pytest-subtests reports each unity case individually
+RUN IDF_PATH_FORCE=1 . $IDF_PATH/export.sh && \
+    pip3 install --no-cache-dir pytest-embedded pytest-embedded-idf pytest-embedded-serial-esp pytest-subtests
+
 # clangd for in-container LSP (see scripts/clangd.sh, .nvim.lua)
 # See scripts/clangd.sh
 RUN IDF_PATH_FORCE=1 . $IDF_PATH/export.sh && \
