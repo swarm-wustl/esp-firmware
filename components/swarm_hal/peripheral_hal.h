@@ -8,14 +8,14 @@
 #include <expected>
 #include <span>
 
-#include "hal/gpio_types.h"
-
 namespace HAL {
 enum class Voltage : uint32_t { HIGH = 1, LOW = 0 };
 
 constexpr uint32_t to_level(HAL::Voltage voltage) {
   return static_cast<uint32_t>(voltage);
 }
+
+enum class PinMode : uint8_t { Input, Output };
 
 enum class SpiError : uint8_t { TransferFailed, Timeout };
 
@@ -29,8 +29,7 @@ concept GenericSPIController =
 
 template <typename GPIO>
 concept GenericGPIOController =
-    requires(GPIO gpio, gpio_num_t pin, gpio_mode_t mode, Voltage voltage,
-             int ms) {
+    requires(GPIO gpio, int pin, PinMode mode, Voltage voltage, int ms) {
       { gpio.set_direction(pin, mode) } -> std::same_as<void>;
       { gpio.set_level(pin, voltage) } -> std::same_as<void>;
       { gpio.delay_ms(ms) } -> std::same_as<void>;

@@ -7,16 +7,14 @@
 // TODO: figure out a much better way to do this
 void hard_reset() {
   ESP32::GPIO gpio_{};
-  auto rst_pin_ = GPIO_NUM_27;
+  int rst_pin = GPIO_NUM_27;
 
-  gpio_num_t rst = static_cast<gpio_num_t>(rst_pin_);
-
-  gpio_.set_direction(rst, GPIO_MODE_OUTPUT);
-  gpio_.set_level(rst, HAL::Voltage::LOW);
+  gpio_.set_direction(rst_pin, HAL::PinMode::Output);
+  gpio_.set_level(rst_pin, HAL::Voltage::LOW);
   gpio_.delay_ms(10);
 
   // Release — set to input, let internal pull-up take over
-  gpio_.set_direction(rst, GPIO_MODE_INPUT);
+  gpio_.set_direction(rst_pin, HAL::PinMode::Input);
   gpio_.delay_ms(10);
 }
 

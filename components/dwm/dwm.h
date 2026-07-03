@@ -348,12 +348,10 @@ private:
   }
 
   void hard_reset() {
-    gpio_num_t rst = static_cast<gpio_num_t>(rst_pin_);
-
-    gpio_.set_direction(rst, GPIO_MODE_OUTPUT);
-    gpio_.set_level(rst, HAL::Voltage::LOW);
+    gpio_.set_direction(rst_pin_, HAL::PinMode::Output);
+    gpio_.set_level(rst_pin_, HAL::Voltage::LOW);
     gpio_.delay_ms(10);
-    gpio_.set_level(rst, HAL::Voltage::HIGH);
+    gpio_.set_level(rst_pin_, HAL::Voltage::HIGH);
     gpio_.delay_ms(10);
   }
 

@@ -75,11 +75,13 @@ public:
   GPIO(GPIO &&) = default;
   GPIO &operator=(GPIO &&) = default;
 
-  void set_direction(gpio_num_t pin, gpio_mode_t mode) {
-    gpio_set_direction(pin, mode);
+  void set_direction(int pin, HAL::PinMode mode) {
+    gpio_set_direction(static_cast<gpio_num_t>(pin),
+                       mode == HAL::PinMode::Output ? GPIO_MODE_OUTPUT
+                                                    : GPIO_MODE_INPUT);
   }
-  void set_level(gpio_num_t pin, HAL::Voltage level) {
-    gpio_set_level(pin, HAL::to_level(level));
+  void set_level(int pin, HAL::Voltage level) {
+    gpio_set_level(static_cast<gpio_num_t>(pin), HAL::to_level(level));
   }
   void delay_ms(int ms) { vTaskDelay(pdMS_TO_TICKS(ms)); }
 };
