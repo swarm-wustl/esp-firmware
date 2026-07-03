@@ -67,6 +67,16 @@ template <> struct RegisterInfo<DWMRegisterID::SYS_TIME> {
   static constexpr size_t size = 5;
   static constexpr RegAccess access = RegAccess::ReadOnly;
 };
+template <> struct RegisterInfo<DWMRegisterID::RX_TIME> {
+  // 5 = the RX_STAMP subfield at offset 0, not the full 14-octet register
+  static constexpr size_t size = 5;
+  static constexpr RegAccess access = RegAccess::ReadOnly;
+};
+template <> struct RegisterInfo<DWMRegisterID::TX_TIME> {
+  // 5 = the TX_STAMP subfield at offset 0, not the full 10-octet register
+  static constexpr size_t size = 5;
+  static constexpr RegAccess access = RegAccess::ReadOnly;
+};
 template <> struct RegisterInfo<DWMRegisterID::TX_FCTRL> {
   static constexpr size_t size = 5;
   static constexpr RegAccess access = RegAccess::ReadWrite;
@@ -318,6 +328,15 @@ public:
   std::expected<void, esp_err_t> set_tx_prf(PRF prf) {
     return get_reg_view<DWMRegisterID::TX_FCTRL>().write_bit_range(
         17, 16, static_cast<uint64_t>(prf));
+  }
+
+  // valid only once LDEDONE is set for the corresponding reception
+  std::expected<DWMTimestamp, esp_err_t> get_rx_timestamp() {
+    return get_reg_view<DWMRegisterID::RX_TIME>().read();
+  }
+
+  std::expected<DWMTimestamp, esp_err_t> get_tx_timestamp() {
+    return get_reg_view<DWMRegisterID::TX_TIME>().read();
   }
 
 private:
