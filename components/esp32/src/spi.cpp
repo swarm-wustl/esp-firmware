@@ -56,7 +56,10 @@ SPI::SPI(int cs) : cs_{cs}, owns_spi_line{true} {
       .duty_cycle_pos = 0,
       .cs_ena_pretrans = 0,
       .cs_ena_posttrans = 0,
-      .clock_speed_hz = SPI_MASTER_FREQ_20M,
+      // DW1000 needs SPI <= 3 MHz during init (esp. while the LDE load forces
+      // the 19.2 MHz XTI clock). 2 MHz is safe for the whole session; can raise
+      // to 20 MHz post-init later. TODO: slow-init then switch to fast.
+      .clock_speed_hz = 2 * 1000 * 1000,
       .input_delay_ns = 0,
       .spics_io_num = cs_,
       .flags = 0,

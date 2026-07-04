@@ -41,13 +41,40 @@ The types used should only be taken from hardware.h's defintions.
 */
 extern "C" void app_main(void) {
   log("Testing UWB");
+  log("FreeRTOS tick: %d Hz", CONFIG_FREERTOS_HZ);
 
   HW::SPI spi{GPIO_NUM_4}; // TODO: put pins in a config somewhere
   HW::GPIO gpio{};
   DWM dwm_sensor{std::move(spi), std::move(gpio), GPIO_NUM_27, GPIO_NUM_34};
 
+  // bring-up: flip to false on the responder board
+  constexpr bool kInitiator = true;
+
+  if (auto id = dwm_sensor.get_device_id()) {
+    log("DW1000 id: 0x%08lX", static_cast<unsigned long>(*id));
+  } else {
+    log("DW1000 id read failed");
+  }
+
+  if (auto r = dwm_sensor.configure(); r) {
+    log("DW1000 configured");
+  } else {
+    log("DW1000 configure failed");
+  }
+
   while (true) {
-    vTaskDelay(1);
+    if constexpr (kInitiator) {
+      if (auto d = dwm_sensor.range()) {
+        log("range: %d cm", static_cast<int>(*d * 100.0));
+      } else {
+        log("range failed");
+      }
+      vTaskDelay(pdMS_TO_TICKS(200));
+    } else {
+      auto r = dwm_sensor.respond();
+      log("respond: %s", r ? "ok" : "fail");
+      vTaskDelay(pdMS_TO_TICKS(10));
+    }
   }
 #if defined(CONFIG_MICRO_ROS_ESP_NETIF_WLAN) ||                                \
     defined(CONFIG_MICRO_ROS_ESP_NETIF_ENET)

@@ -83,7 +83,15 @@ public:
   void set_level(int pin, HAL::Voltage level) {
     gpio_set_level(static_cast<gpio_num_t>(pin), HAL::to_level(level));
   }
-  void delay_ms(int ms) { vTaskDelay(pdMS_TO_TICKS(ms)); }
+  void delay_ms(int ms) {
+    // a nonzero delay must be at least one tick, else pdMS_TO_TICKS rounds sub-
+    // tick values to 0 -> vTaskDelay(0) never yields -> idle task starves
+    TickType_t ticks = pdMS_TO_TICKS(ms);
+    if (ms > 0 && ticks == 0) {
+      ticks = 1;
+    }
+    vTaskDelay(ticks);
+  }
 };
 } // namespace ESP32
 

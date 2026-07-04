@@ -2,6 +2,7 @@
 #define DWM_H
 
 #include "dwm_data.h"
+#include "dwm_regs.h"
 #include "peripheral_hal.h"
 #include <algorithm>
 #include <array>
@@ -9,8 +10,10 @@
 #include <chrono>
 #include <cstring>
 #include <expected>
+#include <span>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 // TODO: add noexcept to classes
 
@@ -25,22 +28,20 @@ enum class DWMRegisterID : uint8_t {
 };
 
 class DWMTimestamp {
-  // Keeps bits [39:9], clears bits [63:40] and [8:0]
+  // full 40-bit counter. do NOT drop the low bits: the sub-nanosecond flight
+  // time that ranging measures lives in them (1 m ~= 213 of these ~15.65 ps
+  // ticks, and the low 9 bits span ~8 ns). masking them zeroes the measurement.
   static constexpr uint64_t DW1000_40BIT_MASK = 0xFF'FF'FF'FF'FFULL;
-  static constexpr uint64_t DW1000_LOW_9BITS_MASK = 0x1FFULL;
-  static constexpr uint64_t DW1000_TIMESTAMP_MASK =
-      DW1000_40BIT_MASK & ~DW1000_LOW_9BITS_MASK;
 
 public:
   using Duration = std::chrono::duration<
       uint64_t, std::ratio<1, 63'897'600'000>>; // each bit = ~15.65 ps
 
   DWMTimestamp() = default;
-  DWMTimestamp(uint64_t raw_time)
-      : raw_time_{raw_time & DW1000_TIMESTAMP_MASK} {}
+  DWMTimestamp(uint64_t raw_time) : raw_time_{raw_time & DW1000_40BIT_MASK} {}
 
   Duration operator-(const DWMTimestamp &other) const {
-    return Duration{(raw_time_ - other.raw_time_) & DW1000_TIMESTAMP_MASK};
+    return Duration{(raw_time_ - other.raw_time_) & DW1000_40BIT_MASK};
   }
 
 private:
@@ -340,11 +341,282 @@ public:
     return get_reg_view<DWMRegisterID::TX_TIME>().read();
   }
 
+  /*
+   * Full device init for the default mode (channel 5, 16 MHz PRF, preamble 128,
+   * 6.8 Mbps). Order matters: LDE microcode must be loaded from OTP before the
+   * receiver is used, or RX timestamps are garbage (manual 2.5.5.10).
+   */
+  std::expected<void, HAL::SpiError> configure() {
+    hard_reset();
+    return load_lde()
+        .and_then([this] { return write_config_table(); })
+        .and_then([this] {
+          return write_sub_value(dw1000::CHAN_CTRL, 0, dw1000::CHAN_CTRL_VALUE, 4);
+        })
+        .and_then([this] {
+          return write_sub_value(dw1000::TX_ANTD, 0, dw1000::ANTENNA_DELAY, 2);
+        })
+        .and_then([this] {
+          // RX antenna delay (LDE_RXANTD, 0x2E:1804) -- balances TX_ANTD, else
+          // ~half the antenna delay stays uncompensated as a fixed offset
+          return write_sub_value(0x2E, 0x1804, dw1000::ANTENNA_DELAY, 2);
+        })
+        .and_then([this] { return set_tx_prf(PRF::MHZ_16); })
+        .and_then([this] { return set_tx_bit_rate(BitRate::MBPS_68); })
+        .and_then([this] { return set_tx_preamble_length(PreambleLength::LEN_128); });
+  }
+
+  // Write payload to TX_BUFFER, set the frame length, start TX, wait for TXFRS.
+  std::expected<void, HAL::SpiError> transmit(std::span<const std::byte> payload) {
+    uint16_t frame_len = static_cast<uint16_t>(payload.size() + 2); // +2 FCS
+    auto tx_fctrl = get_reg_view<DWMRegisterID::TX_FCTRL>();
+    // abort any in-progress RX/TX first, else a stuck transceiver ignores TXSTRT
+    return force_idle()
+        .and_then([&] { return write_sub(dw1000::TX_BUFFER, 0, payload); })
+        .and_then([&] { return tx_fctrl.write_bit_range(6, 0, frame_len); })
+        .and_then([this] {
+          return write_sub_value(dw1000::SYS_CTRL, 0, dw1000::TXSTRT, 1);
+        })
+        .and_then([this] { return poll_status(dw1000::TXFRS, 10); })
+        .and_then([this] { return clear_status(dw1000::TXFRS); });
+  }
+
+  std::expected<void, HAL::SpiError> start_receive() {
+    return force_idle().and_then([this] {
+      return write_sub_value(dw1000::SYS_CTRL, 0, dw1000::RXENAB, 2);
+    });
+  }
+
+  // Enable RX, wait for a good frame, read it into `out`. Returns payload length
+  // (FCS stripped), capped to out.size().
+  // raw SYS_STATUS, for bring-up diagnostics
+  std::expected<uint64_t, HAL::SpiError> read_sys_status() {
+    return read_status();
+  }
+
+  std::expected<size_t, HAL::SpiError> receive(std::span<std::byte> out,
+                                               int timeout_ms = 100) {
+    // clear any stale RX event bits first, else a leftover RXFCG makes
+    // poll_status return immediately with no real frame
+    return clear_status(dw1000::RXFCG | dw1000::RXDFR | dw1000::RX_ERROR)
+        .and_then([this] { return start_receive(); })
+        .and_then([&]() -> std::expected<size_t, HAL::SpiError> {
+          if (auto r = poll_status(dw1000::RXFCG, timeout_ms); !r) {
+            return std::unexpected(r.error());
+          }
+
+          std::array<std::byte, 4> finfo{};
+          if (auto f = read_sub(dw1000::RX_FINFO, 0, finfo); !f) {
+            return std::unexpected(f.error());
+          }
+          uint16_t len = static_cast<uint16_t>(
+              ((std::to_integer<uint16_t>(finfo[1]) << 8) |
+               std::to_integer<uint16_t>(finfo[0])) &
+              0x03FF);
+
+          size_t payload = len >= 2 ? len - 2u : 0;
+          size_t n = std::min(payload, out.size());
+          if (auto d = read_sub(dw1000::RX_BUFFER, 0, out.first(n)); !d) {
+            return std::unexpected(d.error());
+          }
+          if (auto c = clear_status(dw1000::RXFCG | dw1000::RXDFR); !c) {
+            return std::unexpected(c.error());
+          }
+          return n;
+        });
+  }
+
+  /*
+   * Single-sided two-way ranging, initiator side. Sends a poll, receives the
+   * responder's reply-time, and returns distance in meters.
+   *   t_round = rx(reply) - tx(poll)          [measured here]
+   *   t_reply = tx(reply) - rx(poll)          [measured by responder, sent back]
+   *   tof     = (t_round - t_reply) / 2
+   */
+  std::expected<double, HAL::SpiError> range() {
+    std::array<std::byte, 1> poll{RANGE_POLL};
+    if (auto r = transmit(poll); !r) {
+      return std::unexpected(r.error());
+    }
+    auto t_poll_tx = get_tx_timestamp();
+    if (!t_poll_tx) {
+      return std::unexpected(t_poll_tx.error());
+    }
+
+    // timing reply: its rx timestamp is t_round's end
+    std::array<std::byte, 1> reply{};
+    if (auto n = receive(reply, 20); !n) {
+      return std::unexpected(n.error());
+    }
+    auto t_reply_rx = get_rx_timestamp();
+    if (!t_reply_rx) {
+      return std::unexpected(t_reply_rx.error());
+    }
+
+    // final frame carries the responder's t_reply (8 LE bytes after the type)
+    std::array<std::byte, 9> final_frame{};
+    if (auto n = receive(final_frame, 20); !n) {
+      return std::unexpected(n.error());
+    }
+    uint64_t t_reply = 0;
+    for (int i = 0; i < 8; ++i) {
+      t_reply |=
+          static_cast<uint64_t>(std::to_integer<uint8_t>(final_frame[1 + i]))
+          << (8 * i);
+    }
+
+    uint64_t t_round = (*t_reply_rx - *t_poll_tx).count();
+    double tof =
+        (static_cast<double>(t_round) - static_cast<double>(t_reply)) / 2.0;
+    return tof * SECONDS_PER_TICK * SPEED_OF_LIGHT;
+  }
+
+  // Responder side: wait for a poll, send a timing reply, then a final frame
+  // carrying t_reply = tx(reply) - rx(poll).
+  std::expected<void, HAL::SpiError> respond(int timeout_ms = 1000) {
+    std::array<std::byte, 1> poll{};
+    if (auto n = receive(poll, timeout_ms); !n) {
+      return std::unexpected(n.error());
+    }
+    auto t_poll_rx = get_rx_timestamp();
+    if (!t_poll_rx) {
+      return std::unexpected(t_poll_rx.error());
+    }
+
+    std::array<std::byte, 1> reply{RANGE_REPLY};
+    if (auto r = transmit(reply); !r) {
+      return std::unexpected(r.error());
+    }
+    auto t_reply_tx = get_tx_timestamp();
+    if (!t_reply_tx) {
+      return std::unexpected(t_reply_tx.error());
+    }
+
+    uint64_t t_reply = (*t_reply_tx - *t_poll_rx).count();
+    std::array<std::byte, 9> final_frame{RANGE_REPLY};
+    for (int i = 0; i < 8; ++i) {
+      final_frame[1 + i] = std::byte((t_reply >> (8 * i)) & 0xFF);
+    }
+    return transmit(final_frame);
+  }
+
 private:
   template <DWMRegisterID ID> using Register = DWMRegisterView<SPI, ID>;
 
   template <DWMRegisterID ID> Register<ID> get_reg_view() {
     return Register<ID>{spi_};
+  }
+
+  static constexpr double SECONDS_PER_TICK = 1.0 / 63'897'600'000.0;
+  static constexpr double SPEED_OF_LIGHT = 299'792'458.0;
+  static constexpr std::byte RANGE_POLL{0x01};
+  static constexpr std::byte RANGE_REPLY{0x02};
+
+  // sub-addressed SPI header (manual 2.2.1.2): 1 octet non-indexed, 2 for an
+  // offset <= 0x7F, 3 with the extended-address flag for larger offsets
+  static uint8_t make_header(std::array<std::byte, 3> &hdr, bool write,
+                             uint8_t reg, uint16_t offset) {
+    uint8_t b0 = (write ? 0x80 : 0x00) | (reg & 0x3F) | (offset ? 0x40 : 0x00);
+    hdr[0] = std::byte{b0};
+    if (offset == 0) {
+      return 1;
+    }
+    if (offset <= 0x7F) {
+      hdr[1] = std::byte(offset & 0x7F);
+      return 2;
+    }
+    hdr[1] = std::byte(0x80 | (offset & 0x7F));
+    hdr[2] = std::byte((offset >> 7) & 0xFF);
+    return 3;
+  }
+
+  std::expected<void, HAL::SpiError>
+  write_sub(uint8_t reg, uint16_t offset, std::span<const std::byte> data) {
+    std::array<std::byte, 3> hdr{};
+    uint8_t hlen = make_header(hdr, true, reg, offset);
+    std::vector<std::byte> tx(hlen + data.size());
+    std::copy_n(hdr.begin(), hlen, tx.begin());
+    std::ranges::copy(data, tx.begin() + hlen);
+    return spi_.transfer_halfduplex(tx, {});
+  }
+
+  std::expected<void, HAL::SpiError>
+  read_sub(uint8_t reg, uint16_t offset, std::span<std::byte> out) {
+    std::array<std::byte, 3> hdr{};
+    uint8_t hlen = make_header(hdr, false, reg, offset);
+    return spi_.transfer_halfduplex(std::span<const std::byte>{hdr.data(), hlen},
+                                    out);
+  }
+
+  std::expected<void, HAL::SpiError>
+  write_sub_value(uint8_t reg, uint16_t offset, uint32_t value, uint8_t size) {
+    std::array<std::byte, 4> bytes{};
+    for (uint8_t i = 0; i < size; ++i) {
+      bytes[i] = std::byte((value >> (8 * i)) & 0xFF);
+    }
+    return write_sub(reg, offset, std::span<const std::byte>{bytes.data(), size});
+  }
+
+  std::expected<uint64_t, HAL::SpiError> read_status() {
+    std::array<std::byte, 5> b{};
+    return read_sub(dw1000::SYS_STATUS, 0, b).transform([&] {
+      uint64_t v = 0;
+      for (int i = 0; i < 5; ++i) {
+        v |= static_cast<uint64_t>(std::to_integer<uint8_t>(b[i])) << (8 * i);
+      }
+      return v;
+    });
+  }
+
+  // SYS_STATUS is write-1-to-clear; our event bits live in the low 4 octets
+  std::expected<void, HAL::SpiError> clear_status(uint32_t bits) {
+    return write_sub_value(dw1000::SYS_STATUS, 0, bits, 4);
+  }
+
+  // abort any in-progress TX/RX and return the transceiver to IDLE
+  std::expected<void, HAL::SpiError> force_idle() {
+    return write_sub_value(dw1000::SYS_CTRL, 0, dw1000::TRXOFF, 1);
+  }
+
+  // poll SYS_STATUS until `mask` is set, an RX error appears, or we time out
+  // TODO: distinct DWMError for timeout / rx-error vs a genuine SPI failure
+  std::expected<void, HAL::SpiError> poll_status(uint32_t mask, int timeout_ms) {
+    for (int i = 0; i < timeout_ms; ++i) {
+      auto s = read_status();
+      if (!s) {
+        return std::unexpected(s.error());
+      }
+      if (*s & mask) {
+        return {};
+      }
+      if (*s & dw1000::RX_ERROR) {
+        return std::unexpected(HAL::SpiError::TransferFailed);
+      }
+      gpio_.delay_ms(1);
+    }
+    return std::unexpected(HAL::SpiError::Timeout);
+  }
+
+  // manual 2.5.5.10 Table 4: force sys clock, kick OTP->LDE, restore clock
+  std::expected<void, HAL::SpiError> load_lde() {
+    return write_sub_value(dw1000::PMSC, 0x00, 0x0301, 2)
+        .and_then(
+            [this] { return write_sub_value(dw1000::OTP_IF, 0x06, 0x8000, 2); })
+        .and_then([this]() -> std::expected<void, HAL::SpiError> {
+          gpio_.delay_ms(1); // >= 150 us
+          return {};
+        })
+        .and_then(
+            [this] { return write_sub_value(dw1000::PMSC, 0x00, 0x0200, 2); });
+  }
+
+  std::expected<void, HAL::SpiError> write_config_table() {
+    for (const auto &w : dw1000::DEFAULT_CONFIG) {
+      if (auto r = write_sub_value(w.reg, w.offset, w.value, w.size); !r) {
+        return r;
+      }
+    }
+    return {};
   }
 
   void hard_reset() {
