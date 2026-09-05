@@ -351,7 +351,8 @@ public:
     return load_lde()
         .and_then([this] { return write_config_table(); })
         .and_then([this] {
-          return write_sub_value(dw1000::CHAN_CTRL, 0, dw1000::CHAN_CTRL_VALUE, 4);
+          return write_sub_value(dw1000::CHAN_CTRL, 0, dw1000::CHAN_CTRL_VALUE,
+                                 4);
         })
         .and_then([this] {
           return write_sub_value(dw1000::TX_ANTD, 0, dw1000::ANTENNA_DELAY, 2);
@@ -363,14 +364,17 @@ public:
         })
         .and_then([this] { return set_tx_prf(PRF::MHZ_16); })
         .and_then([this] { return set_tx_bit_rate(BitRate::MBPS_68); })
-        .and_then([this] { return set_tx_preamble_length(PreambleLength::LEN_128); });
+        .and_then(
+            [this] { return set_tx_preamble_length(PreambleLength::LEN_128); });
   }
 
   // Write payload to TX_BUFFER, set the frame length, start TX, wait for TXFRS.
-  std::expected<void, HAL::SpiError> transmit(std::span<const std::byte> payload) {
+  std::expected<void, HAL::SpiError>
+  transmit(std::span<const std::byte> payload) {
     uint16_t frame_len = static_cast<uint16_t>(payload.size() + 2); // +2 FCS
     auto tx_fctrl = get_reg_view<DWMRegisterID::TX_FCTRL>();
-    // abort any in-progress RX/TX first, else a stuck transceiver ignores TXSTRT
+    // abort any in-progress RX/TX first, else a stuck transceiver ignores
+    // TXSTRT
     return force_idle()
         .and_then([&] { return write_sub(dw1000::TX_BUFFER, 0, payload); })
         .and_then([&] { return tx_fctrl.write_bit_range(6, 0, frame_len); })
@@ -387,9 +391,9 @@ public:
     });
   }
 
-  // Enable RX, wait for a good frame, read it into `out`. Returns payload length
-  // (FCS stripped), capped to out.size().
-  // raw SYS_STATUS, for bring-up diagnostics
+  // Enable RX, wait for a good frame, read it into `out`. Returns payload
+  // length (FCS stripped), capped to out.size(). raw SYS_STATUS, for bring-up
+  // diagnostics
   std::expected<uint64_t, HAL::SpiError> read_sys_status() {
     return read_status();
   }
@@ -430,8 +434,8 @@ public:
    * Single-sided two-way ranging, initiator side. Sends a poll, receives the
    * responder's reply-time, and returns distance in meters.
    *   t_round = rx(reply) - tx(poll)          [measured here]
-   *   t_reply = tx(reply) - rx(poll)          [measured by responder, sent back]
-   *   tof     = (t_round - t_reply) / 2
+   *   t_reply = tx(reply) - rx(poll)          [measured by responder, sent
+   * back] tof     = (t_round - t_reply) / 2
    */
   std::expected<double, HAL::SpiError> range() {
     std::array<std::byte, 1> poll{RANGE_POLL};
@@ -540,12 +544,12 @@ private:
     return spi_.transfer_halfduplex(tx, {});
   }
 
-  std::expected<void, HAL::SpiError>
-  read_sub(uint8_t reg, uint16_t offset, std::span<std::byte> out) {
+  std::expected<void, HAL::SpiError> read_sub(uint8_t reg, uint16_t offset,
+                                              std::span<std::byte> out) {
     std::array<std::byte, 3> hdr{};
     uint8_t hlen = make_header(hdr, false, reg, offset);
-    return spi_.transfer_halfduplex(std::span<const std::byte>{hdr.data(), hlen},
-                                    out);
+    return spi_.transfer_halfduplex(
+        std::span<const std::byte>{hdr.data(), hlen}, out);
   }
 
   std::expected<void, HAL::SpiError>
@@ -554,7 +558,8 @@ private:
     for (uint8_t i = 0; i < size; ++i) {
       bytes[i] = std::byte((value >> (8 * i)) & 0xFF);
     }
-    return write_sub(reg, offset, std::span<const std::byte>{bytes.data(), size});
+    return write_sub(reg, offset,
+                     std::span<const std::byte>{bytes.data(), size});
   }
 
   std::expected<uint64_t, HAL::SpiError> read_status() {
@@ -580,7 +585,8 @@ private:
 
   // poll SYS_STATUS until `mask` is set, an RX error appears, or we time out
   // TODO: distinct DWMError for timeout / rx-error vs a genuine SPI failure
-  std::expected<void, HAL::SpiError> poll_status(uint32_t mask, int timeout_ms) {
+  std::expected<void, HAL::SpiError> poll_status(uint32_t mask,
+                                                 int timeout_ms) {
     for (int i = 0; i < timeout_ms; ++i) {
       auto s = read_status();
       if (!s) {
