@@ -45,11 +45,9 @@ static void callback(const void *msgin, void *context) {
 }
 
 void ROS::spin(Consumer::QueueType &queue, TwistHandler on_twist) {
-  // Create memory allocator
   rcl_allocator_t allocator = rcl_get_default_allocator();
   rclc_support_t support;
 
-  // Create default init options
   rcl_init_options_t init_options = rcl_get_zero_initialized_init_options();
   RCCHECK(rcl_init_options_init(&init_options, allocator));
 
@@ -62,25 +60,20 @@ void ROS::spin(Consumer::QueueType &queue, TwistHandler on_twist) {
       CONFIG_MICRO_ROS_AGENT_IP, CONFIG_MICRO_ROS_AGENT_PORT, rmw_options));
 #endif
 
-  // Create init_options
   RCCHECK(rclc_support_init_with_options(&support, 0, NULL, &init_options,
                                          &allocator));
 
-  // Create node
   rcl_node_t node;
   RCCHECK(rclc_node_init_default(&node, "uros_node", "", &support));
 
-  // Create subscriber
   rcl_subscription_t subscriber;
   RCCHECK(rclc_subscription_init_default(
       &subscriber, &node,
       ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist), "uros_topic"));
 
-  // Create executor with a single handle
   rclc_executor_t executor;
   RCCHECK(rclc_executor_init(&executor, &support.context, 1, &allocator));
 
-  // Add subscriber to executor
   geometry_msgs__msg__Twist msgin;
   CallbackContext ctx{queue, on_twist};
   RCCHECK(rclc_executor_add_subscription_with_context(

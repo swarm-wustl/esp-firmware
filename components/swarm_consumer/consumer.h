@@ -10,6 +10,7 @@
 #include "motor.h"
 #include "queue.h"
 #include "swarm_hal.h"
+#include <optional>
 
 namespace Consumer {
 constexpr size_t CONSUMER_QUEUE_SIZE = 25;
@@ -29,22 +30,22 @@ template <HAL::MotorDriverTrait MotorDriver>
 void spin(MotorDriver &driver, QueueType &queue) {
   // TODO: set some sort of frequency for this to be called
   while (1) {
-    MessageTag tag;
-    MessageBody body;
+    std::optional<QueueType::Message> msg = queue.pop();
 
-    queue.pop(tag, body);
+    if (!msg) {
+      continue;
+    }
 
-    switch (tag) {
+    switch (msg->tag) {
     case MessageTag::MOTOR_COMMAND: {
-      Motor::Command cmd = body.motor_cmd;
-      driver.run(cmd);
+      driver.run(msg->body.motor_cmd);
       break;
     }
 
     default: {
       ESP_LOGE("consumer", "Unhandled message type: tag=%d",
-               static_cast<int>(tag));
-      abort();
+               static_cast<int>(msg->tag));
+      break;
     }
     }
   }

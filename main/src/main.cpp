@@ -8,7 +8,8 @@
 #include <uros_network_interfaces.h>
 
 #include "freertos/FreeRTOS.h"
-#include <memory>
+#include <optional>
+#include <utility>
 
 static const char *TAG = "main";
 
@@ -46,8 +47,10 @@ static void onTwist(const geometry_msgs__msg__Twist &twist,
       HW::DriveStyle::convert_twist<HW::MOTOR_COUNT>(twist);
 
   for (Motor::Command cmd : motor_commands) {
-    queue.push(Consumer::MessageTag::MOTOR_COMMAND,
-                      Consumer::MessageBody{.motor_cmd = cmd});
+    if (!queue.push(Consumer::MessageTag::MOTOR_COMMAND,
+                    Consumer::MessageBody{.motor_cmd = cmd})) {
+      ESP_LOGE(TAG, "Dropped motor command: consumer queue full");
+    }
   }
 }
 
@@ -60,12 +63,6 @@ static void rosTaskWrapper(void *pvParameters) {
   vTaskDelete(nullptr);
 }
 
-/*
-Main Function
-Describe the physical layout of the system.
-For example, you could have multiple motor drivers, sensors, etc.
-The types used should only be taken from hardware.h's defintions.
-*/
 extern "C" void app_main(void) {
   ESP_LOGI(TAG, "Testing UWB");
   ESP_LOGI(TAG, "FreeRTOS tick: %d Hz", CONFIG_FREERTOS_HZ);
@@ -108,10 +105,17 @@ extern "C" void app_main(void) {
   ESP_ERROR_CHECK(uros_network_interface_initialize());
 #endif
 
+  std::optional<Consumer::QueueType> queue = Consumer::QueueType::create();
+
+  if (!queue) {
+    ESP_LOGE(TAG, "Unable to create consumer queue");
+    return;
+  }
+
   // Make the struct static so it lives as long as the program (incase mani()
   // ever terminates)
   static ConsumerTaskData consumerTaskData{HW::MotorDriver{},
-                                           Consumer::QueueType{}};
+                                           std::move(*queue)};
 
   ESP_LOGI(TAG, "Hello world!");
 

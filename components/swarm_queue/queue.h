@@ -1,64 +1,84 @@
+// Written with Claude
 #ifndef CUSTOM_QUEUE_H
 #define CUSTOM_QUEUE_H
 
-#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
-#include <cstdlib>
+#include <expected>
+#include <optional>
+#include <utility>
+
+enum class QueueError : uint8_t { Full, Closed };
 
 template <typename Tag, typename Body, size_t Capacity> class Queue {
-private:
+public:
   struct Message {
     Tag tag;
     Body body;
   };
 
-  QueueHandle_t queueHandle;
+private:
+  QueueHandle_t handle;
+
+  explicit Queue(QueueHandle_t h) : handle(h) {}
 
 public:
-  Queue() : queueHandle(xQueueCreate(Capacity, sizeof(Message))) {
-    if (queueHandle == nullptr) {
-      ESP_LOGE("queue", "Unable to create queue");
-      abort();
+  [[nodiscard]] static std::optional<Queue> create() {
+    QueueHandle_t h = xQueueCreate(Capacity, sizeof(Message));
+
+    if (h == nullptr) {
+      return std::nullopt;
     }
+
+    return Queue{h};
   }
 
   ~Queue() {
-    if (queueHandle != nullptr) {
-      vQueueDelete(queueHandle);
+    if (handle != nullptr) {
+      vQueueDelete(handle);
     }
   }
 
   Queue(const Queue &) = delete;
   Queue &operator=(const Queue &) = delete;
 
-  Queue(Queue &&other) noexcept : queueHandle(other.queueHandle) {
-    other.queueHandle = nullptr;
+  Queue(Queue &&other) noexcept : handle(std::exchange(other.handle, nullptr)) {}
+
+  Queue &operator=(Queue &&other) noexcept {
+    if (this != &other) {
+      if (handle != nullptr) {
+        vQueueDelete(handle);
+      }
+      handle = std::exchange(other.handle, nullptr);
+    }
+    return *this;
   }
 
-  Queue &operator=(Queue &&) = delete;
+  [[nodiscard]] std::expected<void, QueueError>
+  push(Tag tag, Body body, TickType_t timeout = portMAX_DELAY) {
+    if (handle == nullptr) {
+      return std::unexpected{QueueError::Closed};
+    }
 
-  void push(Tag tag, Body body) {
     // xQueueSend copies the message into the queue's own storage, so a local
     // is enough -- and std::move would leave the copied-from bytes behind
     const Message msg{.tag = tag, .body = body};
 
-    if (xQueueSend(queueHandle, &msg, portMAX_DELAY) != pdPASS) {
-      ESP_LOGE("queue", "Unable to send to queue");
-      abort();
+    if (xQueueSend(handle, &msg, timeout) != pdPASS) {
+      return std::unexpected{QueueError::Full};
     }
+
+    return {};
   }
 
-  void pop(Tag &tag, Body &body) {
+  [[nodiscard]] std::optional<Message> pop(TickType_t timeout = portMAX_DELAY) {
     Message msg;
 
-    if (xQueueReceive(queueHandle, &msg, portMAX_DELAY) != pdPASS) {
-      ESP_LOGE("queue", "Unable to read from queue");
-      abort();
+    if (handle == nullptr || xQueueReceive(handle, &msg, timeout) != pdPASS) {
+      return std::nullopt;
     }
 
-    tag = msg.tag;
-    body = msg.body;
+    return msg;
   }
 };
 
