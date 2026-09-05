@@ -29,7 +29,7 @@ using QueueType = Queue<MessageTag, MessageBody, CONSUMER_QUEUE_SIZE>;
 template <HAL::MotorDriverTrait MotorDriver>
 void spin(MotorDriver &driver, QueueType &queue) {
   // TODO: set some sort of frequency for this to be called
-  while (1) {
+  while (true) {
     std::optional<QueueType::Message> msg = queue.pop();
 
     if (!msg) {
