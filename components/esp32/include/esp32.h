@@ -11,7 +11,6 @@
 #include "freertos/task.h"
 
 #include "driver/gpio.h"
-#include "log.h"
 #include "swarm_hal.h"
 
 namespace ESP32 {

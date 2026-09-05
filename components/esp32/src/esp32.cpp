@@ -1,12 +1,14 @@
 #include "esp32.h"
 
-#include "log.h"
+#include "esp_log.h"
 
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "driver/uart.h"
 
 #include <algorithm>
+
+static const char *TAG = "esp32";
 
 #define WHEELBASE 0.5 // dist between wheels (m) (we're gonna fake it)
 
@@ -124,7 +126,7 @@ void ESP32::L298NMotorDriver::run(const Motor::Command &cmd) {
     break;
 
   default:
-    log("Unable to run motor command: unknown channel name");
+    ESP_LOGE(TAG, "Unable to run motor command: unknown channel name");
     return;
   }
 
@@ -136,7 +138,7 @@ void ESP32::L298NMotorDriver::run(const Motor::Command &cmd) {
   ESP_ERROR_CHECK(ledc_set_duty(LEDC_LOW_SPEED_MODE, pwm_channel, duty_cycle));
   ESP_ERROR_CHECK(ledc_update_duty(LEDC_LOW_SPEED_MODE, pwm_channel));
 
-  log("ran motor!");
+  ESP_LOGI(TAG, "ran motor!");
 }
 
 // TODO: make # of motors (2) a constant defined in hardware.h

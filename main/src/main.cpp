@@ -1,12 +1,29 @@
 #include "consumer.h"
 #include "dwm.h"
-#include "hardware.h"
-#include "queue.h"
+#include "esp32.h"
 #include "ros.h"
-#include "sensor.h"
+
+#include "esp_log.h"
+
+#include <uros_network_interfaces.h>
 
 #include "freertos/FreeRTOS.h"
-#include <memory>
+#include <optional>
+#include <utility>
+
+static const char *TAG = "main";
+
+namespace HW {
+constexpr size_t MOTOR_COUNT = 2;
+
+using DriveStyle = ESP32::DifferentialDriveController;
+using MotorDriver = ESP32::L298NMotorDriver;
+using SPI = ESP32::SPI;
+using GPIO = ESP32::GPIO;
+
+static_assert(HAL::MotorDriverTrait<MotorDriver>);
+static_assert(HAL::DriveStyleTrait<DriveStyle, MOTOR_COUNT>);
+} // namespace HW
 
 // TODO: make templated and move to consumer.h?
 // TODO: make struct so we can pass multiple parameters
@@ -24,24 +41,31 @@ static void consumerTaskWrapper(void *pvParameters) {
   vTaskDelete(nullptr);
 }
 
+static void onTwist(const geometry_msgs__msg__Twist &twist,
+                    Consumer::QueueType &queue) {
+  std::array<Motor::Command, HW::MOTOR_COUNT> motor_commands =
+      HW::DriveStyle::convert_twist<HW::MOTOR_COUNT>(twist);
+
+  for (Motor::Command cmd : motor_commands) {
+    if (!queue.push(Consumer::MessageTag::MOTOR_COMMAND,
+                    Consumer::MessageBody{.motor_cmd = cmd})) {
+      ESP_LOGE(TAG, "Dropped motor command: consumer queue full");
+    }
+  }
+}
+
 static void rosTaskWrapper(void *pvParameters) {
   Consumer::QueueType *queue =
       reinterpret_cast<Consumer::QueueType *>(pvParameters);
 
-  ROS::spin(*queue);
+  ROS::spin(*queue, onTwist);
 
   vTaskDelete(nullptr);
 }
 
-/*
-Main Function
-Describe the physical layout of the system.
-For example, you could have multiple motor drivers, sensors, etc.
-The types used should only be taken from hardware.h's defintions.
-*/
 extern "C" void app_main(void) {
-  log("Testing UWB");
-  log("FreeRTOS tick: %d Hz", CONFIG_FREERTOS_HZ);
+  ESP_LOGI(TAG, "Testing UWB");
+  ESP_LOGI(TAG, "FreeRTOS tick: %d Hz", CONFIG_FREERTOS_HZ);
 
   HW::SPI spi{GPIO_NUM_4}; // TODO: put pins in a config somewhere
   HW::GPIO gpio{};
@@ -51,28 +75,28 @@ extern "C" void app_main(void) {
   constexpr bool kInitiator = true;
 
   if (auto id = dwm_sensor.get_device_id()) {
-    log("DW1000 id: 0x%08lX", static_cast<unsigned long>(*id));
+    ESP_LOGI(TAG, "DW1000 id: 0x%08lX", static_cast<unsigned long>(*id));
   } else {
-    log("DW1000 id read failed");
+    ESP_LOGE(TAG, "DW1000 id read failed");
   }
 
   if (auto r = dwm_sensor.configure(); r) {
-    log("DW1000 configured");
+    ESP_LOGI(TAG, "DW1000 configured");
   } else {
-    log("DW1000 configure failed");
+    ESP_LOGE(TAG, "DW1000 configure failed");
   }
 
   while (true) {
     if constexpr (kInitiator) {
       if (auto d = dwm_sensor.range()) {
-        log("range: %d cm", static_cast<int>(*d * 100.0));
+        ESP_LOGI(TAG, "range: %d cm", static_cast<int>(*d * 100.0));
       } else {
-        log("range failed");
+        ESP_LOGE(TAG, "range failed");
       }
       vTaskDelay(pdMS_TO_TICKS(200));
     } else {
       auto r = dwm_sensor.respond();
-      log("respond: %s", r ? "ok" : "fail");
+      ESP_LOGI(TAG, "respond: %s", r ? "ok" : "fail");
       vTaskDelay(pdMS_TO_TICKS(10));
     }
   }
@@ -81,12 +105,19 @@ extern "C" void app_main(void) {
   ESP_ERROR_CHECK(uros_network_interface_initialize());
 #endif
 
+  std::optional<Consumer::QueueType> queue = Consumer::QueueType::create();
+
+  if (!queue) {
+    ESP_LOGE(TAG, "Unable to create consumer queue");
+    return;
+  }
+
   // Make the struct static so it lives as long as the program (incase mani()
   // ever terminates)
   static ConsumerTaskData consumerTaskData{HW::MotorDriver{},
-                                           Consumer::QueueType{}};
+                                           std::move(*queue)};
 
-  log("Hello world!");
+  ESP_LOGI(TAG, "Hello world!");
 
   xTaskCreate(
       rosTaskWrapper, "uros_task",
@@ -96,21 +127,4 @@ extern "C" void app_main(void) {
 
   xTaskCreate(consumerTaskWrapper, "consumer_task", 4096,
               (void *)&consumerTaskData, configMAX_PRIORITIES - 1, NULL);
-
-  // Create sensor task and register the task handle for the timers
-  // TODO: wrap this in a function?
-  /*TaskHandle_t sensorTaskHandle;
-  xTaskCreate(
-      Sensor::spin,
-      "sensors_task",
-      4096,
-      NULL,
-      configMAX_PRIORITIES - 1,
-      &sensorTaskHandle
-  );
-  Sensor::registerSensorTaskHandle(sensorTaskHandle);
-  log("Registered handle");
-
-  // TODO: make constant time
-  Sensor uwb(UWB_ID, "uwb_sensor", 1000);*/
 }

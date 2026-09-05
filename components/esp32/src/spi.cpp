@@ -1,12 +1,14 @@
 #include "driver/spi_common.h"
 #include "esp32.h"
 
-#include "log.h"
+#include "esp_log.h"
 #include <algorithm>
 #include <memory>
 #include <ranges>
 #include <utility>
 #include <vector>
+
+static const char *TAG = "spi";
 
 namespace ESP32 {
 constexpr int SPI_SCK = 18;
@@ -69,21 +71,21 @@ SPI::SPI(int cs) : cs_{cs}, owns_spi_line{true} {
 
   // TODO: throw?
   // TODO: dynamically choose host/port?
-  log("SPI init: %d", spi_bus_initialize(SPI2_HOST, &config, SPI_DMA_CH_AUTO));
+  ESP_LOGI(TAG, "SPI init: %d", spi_bus_initialize(SPI2_HOST, &config, SPI_DMA_CH_AUTO));
 
-  log("SPI add device: %d",
+  ESP_LOGI(TAG, "SPI add device: %d",
       spi_bus_add_device(SPI2_HOST, &dev_config, &dev_handle_));
 }
 
 SPI::~SPI() {
   // TODO: throw?
   if (dev_handle_) {
-    log("SPI remove device: %d", spi_bus_remove_device(dev_handle_));
+    ESP_LOGI(TAG, "SPI remove device: %d", spi_bus_remove_device(dev_handle_));
     dev_handle_ = nullptr;
   }
 
   if (owns_spi_line) {
-    log("SPI deinit: %d", spi_bus_free(SPI2_HOST));
+    ESP_LOGI(TAG, "SPI deinit: %d", spi_bus_free(SPI2_HOST));
   }
 }
 
@@ -122,7 +124,7 @@ SPI::transfer_halfduplex(std::span<const std::byte> tx,
 
   esp_err_t res = spi_device_transmit(dev_handle_, &transaction);
   if (unlikely(res != ESP_OK)) {
-    log("SPI transfer failed: %d", res);
+    ESP_LOGE(TAG, "SPI transfer failed: %d", res);
     return std::unexpected(from_esp_err(res));
   }
 
