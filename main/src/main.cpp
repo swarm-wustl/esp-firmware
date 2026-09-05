@@ -3,10 +3,14 @@
 #include "esp32.h"
 #include "ros.h"
 
+#include "esp_log.h"
+
 #include <uros_network_interfaces.h>
 
 #include "freertos/FreeRTOS.h"
 #include <memory>
+
+static const char *TAG = "main";
 
 namespace HW {
 constexpr size_t MOTOR_COUNT = 2;
@@ -42,7 +46,7 @@ static void onTwist(const geometry_msgs__msg__Twist &twist,
       HW::DriveStyle::convert_twist<HW::MOTOR_COUNT>(twist);
 
   for (Motor::Command cmd : motor_commands) {
-    queue.pushToQueue(Consumer::MessageTag::MOTOR_COMMAND,
+    queue.push(Consumer::MessageTag::MOTOR_COMMAND,
                       Consumer::MessageBody{.motor_cmd = cmd});
   }
 }
@@ -63,8 +67,8 @@ For example, you could have multiple motor drivers, sensors, etc.
 The types used should only be taken from hardware.h's defintions.
 */
 extern "C" void app_main(void) {
-  log("Testing UWB");
-  log("FreeRTOS tick: %d Hz", CONFIG_FREERTOS_HZ);
+  ESP_LOGI(TAG, "Testing UWB");
+  ESP_LOGI(TAG, "FreeRTOS tick: %d Hz", CONFIG_FREERTOS_HZ);
 
   HW::SPI spi{GPIO_NUM_4}; // TODO: put pins in a config somewhere
   HW::GPIO gpio{};
@@ -74,28 +78,28 @@ extern "C" void app_main(void) {
   constexpr bool kInitiator = true;
 
   if (auto id = dwm_sensor.get_device_id()) {
-    log("DW1000 id: 0x%08lX", static_cast<unsigned long>(*id));
+    ESP_LOGI(TAG, "DW1000 id: 0x%08lX", static_cast<unsigned long>(*id));
   } else {
-    log("DW1000 id read failed");
+    ESP_LOGE(TAG, "DW1000 id read failed");
   }
 
   if (auto r = dwm_sensor.configure(); r) {
-    log("DW1000 configured");
+    ESP_LOGI(TAG, "DW1000 configured");
   } else {
-    log("DW1000 configure failed");
+    ESP_LOGE(TAG, "DW1000 configure failed");
   }
 
   while (true) {
     if constexpr (kInitiator) {
       if (auto d = dwm_sensor.range()) {
-        log("range: %d cm", static_cast<int>(*d * 100.0));
+        ESP_LOGI(TAG, "range: %d cm", static_cast<int>(*d * 100.0));
       } else {
-        log("range failed");
+        ESP_LOGE(TAG, "range failed");
       }
       vTaskDelay(pdMS_TO_TICKS(200));
     } else {
       auto r = dwm_sensor.respond();
-      log("respond: %s", r ? "ok" : "fail");
+      ESP_LOGI(TAG, "respond: %s", r ? "ok" : "fail");
       vTaskDelay(pdMS_TO_TICKS(10));
     }
   }
@@ -109,7 +113,7 @@ extern "C" void app_main(void) {
   static ConsumerTaskData consumerTaskData{HW::MotorDriver{},
                                            Consumer::QueueType{}};
 
-  log("Hello world!");
+  ESP_LOGI(TAG, "Hello world!");
 
   xTaskCreate(
       rosTaskWrapper, "uros_task",

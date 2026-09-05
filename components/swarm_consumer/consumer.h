@@ -6,7 +6,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
-#include "log.h"
+#include "esp_log.h"
 #include "motor.h"
 #include "queue.h"
 #include "swarm_hal.h"
@@ -25,11 +25,6 @@ union MessageBody {
 
 using QueueType = Queue<MessageTag, MessageBody, CONSUMER_QUEUE_SIZE>;
 
-struct Message {
-  MessageTag tag;
-  MessageBody body;
-};
-
 template <HAL::MotorDriverTrait MotorDriver>
 void spin(MotorDriver &driver, QueueType &queue) {
   // TODO: set some sort of frequency for this to be called
@@ -37,9 +32,7 @@ void spin(MotorDriver &driver, QueueType &queue) {
     MessageTag tag;
     MessageBody body;
 
-    if (queue.popFromQueue(tag, body) != Result::SUCCESS) {
-      continue;
-    }
+    queue.pop(tag, body);
 
     switch (tag) {
     case MessageTag::MOTOR_COMMAND: {
@@ -49,8 +42,9 @@ void spin(MotorDriver &driver, QueueType &queue) {
     }
 
     default: {
-      fatal("Unhandled message type: tag=%d", tag);
-      break;
+      ESP_LOGE("consumer", "Unhandled message type: tag=%d",
+               static_cast<int>(tag));
+      abort();
     }
     }
   }
