@@ -1,15 +1,26 @@
-vim.lsp.config("clangd", {
-	cmd = {
-		"/Users/prestonmeek/.espressif/tools/esp-clang/16.0.1-fe4f10a809/esp-clang/bin/clangd",
-		"--query-driver=/Users/prestonmeek/.espressif/tools/xtensa-esp-elf/**/bin/xtensa-esp-elf-*",
-	},
-})
+-- Project-local Neovim config for swarm.
+--
+-- Points clangd at scripts/clangd.sh, which runs the language server inside the
+-- dev container so it reads the native ESP-IDF v5.5 headers (the host needs no
+-- IDF install or symlinks). Scoped to THIS project only.
+--
+-- Requires exrc to be enabled in your global config (one-time, opt-in):
+--     vim.o.exrc = true
+-- Neovim will prompt once to trust this file (vim.secure). Open Neovim from the
+-- repo root so exrc picks it up.
 
-vim.api.nvim_create_user_command("MergeCompileCommands", function()
-	vim.fn.system("jq -s add **/compile_commands.json > compile_commands.json")
-	vim.lsp.stop_client(vim.lsp.get_clients({ name = "clangd" }))
-	vim.notify("compile_commands.json merged, clangd restarted", vim.log.levels.INFO)
-end, {})
+local root = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h")
+local cmd = { root .. "/scripts/clangd.sh" }
 
--- Restart the client so it picks up the new config
-vim.lsp.stop_client(vim.lsp.get_clients({ name = "clangd" }))
+if vim.lsp.config then
+  -- Neovim 0.11+: extend the clangd config shared by vim.lsp.enable and
+  -- nvim-lspconfig so only the launch command changes.
+  vim.lsp.config("clangd", { cmd = cmd })
+  vim.lsp.enable("clangd")
+else
+  -- Older setups using nvim-lspconfig directly.
+  local ok, lspconfig = pcall(require, "lspconfig")
+  if ok then
+    lspconfig.clangd.setup({ cmd = cmd })
+  end
+end

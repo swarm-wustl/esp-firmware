@@ -14,5 +14,12 @@ set(EXTRA_COMPONENT_DIRS "../components")
 #
 set(TEST_COMPONENTS "dwm" CACHE STRING "List of components to test")
 
+# On the host (linux) target, build only the closure the pure/mock tests need.
+# The default "build every discovered component" pulls in micro-ROS, which
+# requires esp_wifi/lwip and can't build for linux.
+if("${IDF_TARGET}" STREQUAL "linux")
+    set(COMPONENTS main dwm)
+endif()
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(unit_test)

@@ -1,74 +1,124 @@
 #ifndef DWM_H
 #define DWM_H
 
-#include "swarm_hal.h"
+#include "dwm_data.h"
+#include "dwm_regs.h"
+#include "peripheral_hal.h"
+#include <algorithm>
+#include <array>
 #include <bit>
 #include <chrono>
 #include <cstring>
-#include <string>
+#include <expected>
+#include <span>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 // TODO: add noexcept to classes
 
-// Allows for static_assert<false, ..> - like behavior
-// Without this weird hack, the static_assert is evaluated every time
-// instead of conditionally based on the branching
-// (always returns an error even when it shouldn't).
-// Should be properly fixed in C++26, but this is a workaround
-// https://en.cppreference.com/w/cpp/language/static_assert.html
-template <auto V> constexpr bool dependent_false = false;
-
-static constexpr uint8_t DWM_REG_DEV_ID = 0x00;
-static constexpr uint8_t DWM_REG_SYSTEM_EVENT_STATUS = 0x0F;
-static constexpr uint8_t DWM_REG_SYS_TIME = 0x06;
-static constexpr uint8_t DWM_REG_RX_TIME = 0x15;
-static constexpr uint8_t DWM_REG_TX_TIME = 0x17;
-static constexpr uint8_t DWM_REG_TX_FCTRL = 0x08;
+enum class DWMRegisterID : uint8_t {
+  DEV_ID = 0x00,
+  TX_FCTRL = 0x08,
+  SYS_TIME = 0x06,
+  SYSTEM_EVENT_STATUS = 0x0F,
+  RX_TIME = 0x15,
+  TX_TIME = 0x17,
+  TX_BUFFER = 0x09,
+};
 
 class DWMTimestamp {
-  // Keeps bits [39:9], clears bits [63:40] and [8:0]
+  // full 40-bit counter. do NOT drop the low bits: the sub-nanosecond flight
+  // time that ranging measures lives in them (1 m ~= 213 of these ~15.65 ps
+  // ticks, and the low 9 bits span ~8 ns). masking them zeroes the measurement.
   static constexpr uint64_t DW1000_40BIT_MASK = 0xFF'FF'FF'FF'FFULL;
-  static constexpr uint64_t DW1000_LOW_9BITS_MASK = 0x1FFULL;
-  static constexpr uint64_t DW1000_TIMESTAMP_MASK =
-      DW1000_40BIT_MASK & ~DW1000_LOW_9BITS_MASK;
 
 public:
   using Duration = std::chrono::duration<
       uint64_t, std::ratio<1, 63'897'600'000>>; // each bit = ~15.65 ps
 
   DWMTimestamp() = default;
-  DWMTimestamp(uint64_t raw_time)
-      : raw_time_{raw_time & DW1000_TIMESTAMP_MASK} {}
+  DWMTimestamp(uint64_t raw_time) : raw_time_{raw_time & DW1000_40BIT_MASK} {}
 
   Duration operator-(const DWMTimestamp &other) const {
-    return Duration{(raw_time_ - other.raw_time_) & DW1000_TIMESTAMP_MASK};
+    return Duration{(raw_time_ - other.raw_time_) & DW1000_40BIT_MASK};
   }
 
 private:
   uint64_t raw_time_{};
 };
 
-template <uint8_t ID>
+// TODO: consider moving this into RegisterInfo
+template <DWMRegisterID ID>
 concept IsTimestampRegister =
-    ID == DWM_REG_SYS_TIME || ID == DWM_REG_TX_TIME || ID == DWM_REG_RX_TIME;
+    ID == DWMRegisterID::SYS_TIME || ID == DWMRegisterID::TX_TIME ||
+    ID == DWMRegisterID::RX_TIME;
 
-template <HAL::GenericSPIController SPI, uint8_t ID> class DWMRegisterView {
-  static constexpr size_t size_ = []() constexpr {
-    if constexpr (ID == DWM_REG_DEV_ID)
-      return 4;
-    else if constexpr (ID == DWM_REG_SYSTEM_EVENT_STATUS)
-      return 5;
-    else if constexpr (ID == DWM_REG_SYS_TIME)
-      return 5;
-    else if constexpr (ID == DWM_REG_TX_FCTRL)
-      return 5;
-    else
-      static_assert(dependent_false<ID>, "Register size unspecified");
-  }();
+enum class RegAccess : uint8_t { ReadOnly, ReadWrite, WriteOneClear };
+
+template <DWMRegisterID ID> struct RegisterInfo;
+template <> struct RegisterInfo<DWMRegisterID::DEV_ID> {
+  static constexpr size_t size = 4;
+  static constexpr RegAccess access = RegAccess::ReadOnly;
+};
+template <> struct RegisterInfo<DWMRegisterID::SYSTEM_EVENT_STATUS> {
+  static constexpr size_t size = 5;
+  static constexpr RegAccess access = RegAccess::WriteOneClear;
+};
+template <> struct RegisterInfo<DWMRegisterID::SYS_TIME> {
+  static constexpr size_t size = 5;
+  static constexpr RegAccess access = RegAccess::ReadOnly;
+};
+template <> struct RegisterInfo<DWMRegisterID::RX_TIME> {
+  // 5 = the RX_STAMP subfield at offset 0, not the full 14-octet register
+  static constexpr size_t size = 5;
+  static constexpr RegAccess access = RegAccess::ReadOnly;
+};
+template <> struct RegisterInfo<DWMRegisterID::TX_TIME> {
+  // 5 = the TX_STAMP subfield at offset 0, not the full 10-octet register
+  static constexpr size_t size = 5;
+  static constexpr RegAccess access = RegAccess::ReadOnly;
+};
+template <> struct RegisterInfo<DWMRegisterID::TX_FCTRL> {
+  static constexpr size_t size = 5;
+  static constexpr RegAccess access = RegAccess::ReadWrite;
+};
+template <> struct RegisterInfo<DWMRegisterID::TX_BUFFER> {
+  static constexpr size_t size = 1024;
+  static constexpr RegAccess access = RegAccess::ReadWrite;
+};
+
+template <DWMRegisterID ID>
+concept IsWritable = RegisterInfo<ID>::access != RegAccess::ReadOnly;
+template <DWMRegisterID ID>
+concept IsReadWrite = RegisterInfo<ID>::access == RegAccess::ReadWrite;
+template <DWMRegisterID ID>
+concept IsWriteOneClear = RegisterInfo<ID>::access == RegAccess::WriteOneClear;
+
+template <HAL::GenericSPIController SPI, DWMRegisterID ID>
+class DWMRegisterView {
+  static constexpr size_t size_ = RegisterInfo<ID>::size;
+
+  // static so ValueType can decltype the result before the class is complete
+  static auto interpret(const DWMData<size_> &data) {
+    if constexpr (size_ <= sizeof(uint64_t)) {
+      if constexpr (IsTimestampRegister<ID>) {
+        return DWMTimestamp{data.to_uint()};
+      } else {
+        return data.to_uint();
+      }
+    } else {
+      return data.span();
+    }
+  }
 
 public:
-  explicit DWMRegisterView(SPI &spi) : spi_{spi} { read_data(); }
+  // return type of an object returned from read(), derived from interpret()
+  // based on regtype, fully known at comptime
+  using ValueType = decltype(interpret(std::declval<const DWMData<size_> &>()));
 
   // TODO: constructor that takes in data?
+  explicit DWMRegisterView(SPI &spi) : spi_{spi} {}
 
   ~DWMRegisterView() = default;
 
@@ -78,214 +128,111 @@ public:
   DWMRegisterView(DWMRegisterView &&) = delete;
   void operator=(DWMRegisterView &&) = delete;
 
-  /*
-   * Clear register values by writing flags.
-   * This is for registers that have status bits/bytes that are cleared by
-   * writing 1 to them.
-   */
-  DWMRegisterView &clear_flags(uint64_t flags)
-    requires(size_ <= sizeof(uint64_t))
+  [[nodiscard]] std::expected<ValueType, HAL::SpiError> read() {
+    return read_into_cache().transform([this] { return interpret(data_); });
+  }
+
+  [[nodiscard]] std::expected<void, HAL::SpiError> operator|=(uint64_t flags)
+    requires IsWritable<ID> && (size_ <= sizeof(uint64_t))
   {
-    // For the DW1000 in particular, when we write flags, we are CLEARING
-    // values. Thus, we don't OR the flags with the original value, we just
-    // write the flags directly.
-    write_data(flags);
-
-    return *this;
-  }
-
-  /*
-   * OR: used to OR values to a register.
-   * This is primarily for configuring registers.
-   */
-  DWMRegisterView &operator|=(uint64_t flags)
-    requires(size_ <= sizeof(uint64_t))
-  {
-    // Copy the current data and OR the flags onto it
-    uint64_t new_value = flatten_data(data_) | flags;
-    write_data(new_value);
-
-    return *this;
-  }
-
-  /*
-   * AND: used to AND values to a register.
-   * This is primarily for configuring registers.
-   */
-  DWMRegisterView &operator&=(uint64_t flags)
-    requires(size_ <= sizeof(uint64_t))
-  {
-    // Copy the current data and AND the flags onto it
-    uint64_t new_value = flatten_data(data_) & flags;
-    write_data(new_value);
-
-    return *this;
-  }
-
-  /*
-   * Equals: used to assign a value to a register.
-   */
-  DWMRegisterView &operator=(std::integral auto new_value)
-    requires(size_ <= sizeof(uint64_t))
-  {
-    write_data(new_value);
-
-    return *this;
-  }
-
-  // TODO
-  DWMRegisterView &operator+=(uint64_t)
-    requires IsTimestampRegister<ID>
-  {
-    return *this;
-  }
-
-  /*
-   * Get the specified byte from data
-   */
-  std::byte byte(size_t byte_index) const {
-    // TODO: some sort of oob check?
-    return data_[byte_index];
-  }
-
-  // TODO: once supported, switch to multi-dimension operator[]
-  // Supposed to be in C++23 but I guess ESP-IDF is a bit behind on features
-  /*
-   * Get the specified bit from data, given a byte and bit offset
-   */
-  uint8_t bit(size_t byte_index, size_t bit_offset) const {
-    return static_cast<uint8_t>((data_[byte_index] >> bit_offset)) & 1;
-  }
-
-  /*
-   * Get the specified bit from data, given a bit number
-   */
-  uint8_t bit(size_t bit_number) const {
-    return bit(bit_number / 8, bit_number % 8);
-  }
-
-  /*
-   * Get the specified data from a bit range
-   * Inspired by Verilog syntax, e.g., x[15:12]
-   */
-  uint64_t bit_range(uint8_t hi, uint8_t lo) const
-    requires(size_ <= sizeof(uint64_t))
-  {
-    uint64_t raw_data = flatten_data(data_) >> lo;
-    uint64_t mask = (1ULL << (1 + hi - lo)) - 1;
-    return raw_data & mask;
-  }
-
-  DWMRegisterView &write_bit_range(uint8_t hi, uint8_t lo, uint64_t value)
-    requires(size_ <= sizeof(uint64_t))
-  {
-    // First, clear the bits in the given bit range
-    uint64_t raw_data = flatten_data(data_);
-    uint64_t mask = (1ULL << (1 + hi - lo)) - 1;
-    raw_data &= ~(mask << lo);
-
-    // Then, write the new data in
-    raw_data |= (value & mask) << lo;
-    write_data(raw_data);
-
-    return *this;
-  }
-
-  auto value()
-    requires(size_ <= sizeof(uint64_t))
-  {
-    read_data();
-
-    auto res = flatten_data(data_);
-
-    if constexpr (IsTimestampRegister<ID>) {
-      return DWMTimestamp{res};
+    if constexpr (IsWriteOneClear<ID>) {
+      // writing a 1 clears the bit, so write flags directly with no read-back
+      return write_data(flags);
     } else {
-      return res;
+      return read_into_cache().and_then(
+          [&] { return write_data(data_.to_uint() | flags); });
     }
   }
 
-  constexpr size_t size() const { return size_; }
-
-private:
-  void read_data() {
-    // Lower 6 bits store actual register
-    // MSbit = 0 represents read
-    uint8_t reg = 0x00 | (ID & 0x3F);
-
-    // Store in single-value array to be compatible with SPI controller API
-    std::array<const std::byte, 1> tx{std::byte{reg}};
-
-    // Initiate SPI transfer
-    // TODO: error handle
-    spi_.transfer_halfduplex(tx, data_);
+  [[nodiscard]] std::expected<void, HAL::SpiError> operator&=(uint64_t flags)
+    requires IsReadWrite<ID> && (size_ <= sizeof(uint64_t))
+  {
+    return read_into_cache().and_then(
+        [&] { return write_data(data_.to_uint() & flags); });
   }
+
+  // TODO
+  [[nodiscard]] std::expected<void, HAL::SpiError> operator+=(uint64_t)
+    requires IsTimestampRegister<ID>
+  {
+    return {};
+  }
+
+  [[nodiscard]] std::expected<void, HAL::SpiError>
+  write_bit_range(uint8_t hi, uint8_t lo, uint64_t value)
+    requires IsReadWrite<ID> && (size_ <= sizeof(uint64_t))
+  {
+    return read_into_cache().and_then([&] {
+      DWMData<size_> new_data{data_};
+      new_data.write_bit_range(hi, lo, value);
+      return write_data(new_data.span());
+    });
+  }
+
+  consteval size_t size() const { return size_; }
 
   // TODO: consider removing this and other cases of std::integral auto
   // It might just be adding complexity for no reason (ig bit_cast
   // optimization..?)
-  void write_data(std::integral auto new_value) {
-    write_data(pack_data(new_value));
-  }
-
-  void write_data(std::array<std::byte, size_> new_data) {
-    // Lower 6 bits store actual register
-    // MSbit = 1 represents write
-    uint8_t reg = 0x80 | (ID & 0x3F);
-
-    // Create a std::array one larger than our data
-    // This is because the first byte in the transfer needs to be the register
-    std::array<std::byte, size_ + 1> tx{};
-
-    // Store the register in byte 0, then copy the rest of the data
-    auto it = tx.begin();
-    *it = std::byte{reg};
-    std::copy(new_data.begin(), new_data.end(), ++it);
-
-    // Initiate SPI transfer
-    // TODO: error handle
-    spi_.transfer_halfduplex(tx, {});
-
-    // Lastly, read data to get updated register value
-    // This is for a few reasons:
-    // 1) some registers are read-only, and writes should do nothing
-    // 2) some registers clear values by writing 1 to them (so the local array's
-    // state would be inverted) 3) we want the most updated register state after
-    // writing!
-    read_data();
-  }
-
-  static auto flatten_data(std::array<std::byte, size_> data)
-    requires(size_ <= sizeof(uint64_t))
+  [[nodiscard]] std::expected<void, HAL::SpiError>
+  write_data(std::integral auto new_value)
+    requires IsWritable<ID> && (size_ <= sizeof(uint64_t))
   {
-    if constexpr (size_ == sizeof(uint16_t)) {
-      return std::bit_cast<uint16_t>(data);
-    } else if constexpr (size_ == sizeof(uint32_t)) {
-      return std::bit_cast<uint32_t>(data);
-    } else {
-      // std::bit_cast requires an exact size-match
-      // Therefore, std::memcpy is necessary since many DW1000 regs are 5 bytes
-      // in size (rather than uint64_t's 8 bytes)
-      uint64_t res{};
-      std::memcpy(&res, data.data(), size_);
-      return res;
-    }
+    return write_data(DWMData<size_>{new_value}.span());
   }
 
-  static std::array<std::byte, size_> pack_data(std::integral auto val) {
-    // std::bit_cast optimization
-    if constexpr (sizeof(val) == size_) {
-      return std::bit_cast<std::array<std::byte, size_>>(val);
-    } else {
-      std::array<std::byte, size_> new_data{};
-      std::memcpy(new_data.data(), &val, size_);
-      return new_data;
-    }
+  // TODO: maybe make the span have a dynamic_extent, and allow writes <= size_?
+  [[nodiscard]] std::expected<void, HAL::SpiError>
+  write_data(std::span<const std::byte, size_> new_data)
+    requires IsWritable<ID>
+  {
+    // header: MSbit = 1 for write, lower 6 bits = register id
+    uint8_t reg = 0x80 | (static_cast<uint8_t>(ID) & 0x3F);
+
+    std::array<std::byte, size_ + 1> tx{};
+    tx[0] = std::byte{reg};
+    std::ranges::copy(new_data, tx.begin() + 1);
+
+    return spi_.transfer_halfduplex(tx, {}).transform([&] {
+      // WOC registers must be re-read instead of trusting the written value
+      if constexpr (IsReadWrite<ID>) {
+        std::ranges::copy(new_data, data_.span().begin());
+      }
+    });
   }
 
-  SPI &spi_{};
-  std::array<std::byte, size_> data_{};
+private:
+  SPI &spi_;
+  DWMData<size_> data_{};
+
+  std::expected<void, HAL::SpiError> read_into_cache() {
+    // header: MSbit = 0 for read, lower 6 bits = register id
+    uint8_t reg = 0x00 | (static_cast<uint8_t>(ID) & 0x3F);
+
+    std::array<const std::byte, 1> tx{std::byte{reg}};
+    return spi_.transfer_halfduplex(tx, data_.span());
+  }
 };
+
+// TODO: add this, and other related classes, to some sort of DWM namespace
+enum class PRF : uint8_t { MHZ_4 = 0b00, MHZ_16 = 0b01, MHZ_64 = 0b10 };
+
+constexpr std::string_view PRFToString(PRF prf) noexcept {
+  using namespace std::string_view_literals;
+
+  switch (prf) {
+  case PRF::MHZ_4:
+    return "4 MHz"sv;
+  case PRF::MHZ_16:
+    return "16 MHz"sv;
+  case PRF::MHZ_64:
+    return "64 MHz"sv;
+  default:
+    __builtin_unreachable();
+  }
+
+  return "UNKNOWN PRF"sv;
+}
 
 template <HAL::GenericSPIController SPI, HAL::GenericGPIOController GPIO>
 class DWM {
@@ -293,64 +240,11 @@ class DWM {
                 "DWM1000 requires little-endian architecture");
 
 public:
+  // TODO: make GPIO rvalue ref?
   DWM(SPI &&spi, GPIO gpio, uint8_t rst_pin, uint8_t irq_pin)
       : spi_{std::move(spi)}, gpio_{std::move(gpio)}, rst_pin_{rst_pin},
         irq_pin_{irq_pin} {
     hard_reset();
-
-    // std::array<std::byte, DWM_LEN_DEV_ID> rx{};
-    // read_reg(DWM_REG_DEV_ID, rx);
-    // log("ID received: %X", std::bit_cast<uint32_t>(rx));
-
-    auto id_reg = get_reg_view<DWM_REG_DEV_ID>();
-    // log("Reg size: %u", id_reg.size());
-    // log("Reg value: %X", id_reg.value());
-    id_reg |= 0xFFFFFF;
-    // log("Reg value (should be same): %X", id_reg.value());
-
-    auto sys_status_reg = get_reg_view<DWM_REG_SYSTEM_EVENT_STATUS>();
-    // log("Value before: %llX", sys_status_reg.value());
-    sys_status_reg.clear_flags(0xFF);
-    // log("Value after: %llX", sys_status_reg.value());
-
-    auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
-
-    // log("Current transmit bit rate: %X %X", ((tx_fctrl.bit(14) << 1) |
-    // tx_fctrl.bit(13)), tx_fctrl.bit_range(14, 13)); logf("Bit rate, PRF,
-    // preamble length (but nice!):", tx_bit_rate(), tx_prf(),
-    // tx_preamble_length());
-
-    set_tx_bit_rate(BitRate::KBPS_100);
-    set_tx_prf(PRF::MHZ_4);
-    set_tx_preamble_length(PreambleLength::LEN_2048);
-
-    // logf("New bit rate, PRF, preamble length:", tx_bit_rate(), "--",
-    // tx_prf(), "--", tx_preamble_length());
-    hard_reset();
-    // logf("Reset bit rate, PRF, preamble length:", tx_bit_rate(), "--",
-    // tx_prf(), "--", tx_preamble_length());
-
-    /* *** */
-
-    auto sys_time_reg = get_reg_view<DWM_REG_SYS_TIME>();
-
-    // Use the DW1000's own timestamp for precise intervals
-    auto start = sys_time_reg.value();
-    auto target_duration = std::chrono::milliseconds{300};
-
-    while (true) {
-      auto current = sys_time_reg.value();
-      auto elapsed = current - start;
-
-      if (elapsed >= target_duration) {
-        auto us = std::chrono::duration_cast<std::chrono::microseconds>(elapsed)
-                      .count();
-        // logf("DELTA SYS TIME:", us, "microseconds");
-        start = current; // Reset for next interval
-      }
-
-      gpio_.delay_ms(50); // Small delay to not busy-wait
-    }
   }
 
   ~DWM() = default;
@@ -380,25 +274,6 @@ public:
     }
 
     return "UNKNOWN BITRATE"sv;
-  }
-
-  enum class PRF : uint8_t { MHZ_4 = 0b00, MHZ_16 = 0b01, MHZ_64 = 0b10 };
-
-  static constexpr std::string_view PRFToString(PRF prf) noexcept {
-    using namespace std::string_view_literals;
-
-    switch (prf) {
-    case PRF::MHZ_4:
-      return "4 MHz"sv;
-    case PRF::MHZ_16:
-      return "16 MHz"sv;
-    case PRF::MHZ_64:
-      return "64 MHz"sv;
-    default:
-      __builtin_unreachable();
-    }
-
-    return "UNKNOWN PRF"sv;
   }
 
   enum class PreambleLength : uint8_t {
@@ -437,68 +312,361 @@ public:
     return 0;
   }
 
-private:
-  template <uint8_t ID> using Register = DWMRegisterView<SPI, ID>;
-
-  template <uint8_t ID> Register<ID> get_reg_view() const {
-    return Register<ID>{const_cast<SPI &>(spi_)};
-  }
-
-  void hard_reset() {
-    gpio_num_t rst = static_cast<gpio_num_t>(rst_pin_);
-
-    gpio_.set_direction(rst, GPIO_MODE_OUTPUT);
-    gpio_.set_level(rst, HAL::Voltage::LOW);
-    gpio_.delay_ms(10);
-    gpio_.set_level(rst, HAL::Voltage::HIGH);
-    gpio_.delay_ms(10);
-  }
-
-  std::string_view tx_bit_rate() const {
-    auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
-    uint8_t raw_bit_rate = tx_fctrl.bit_range(14, 13); // TODO: constants?
-
-    return BitRateToString(static_cast<BitRate>(raw_bit_rate));
-  }
-
-  void set_tx_bit_rate(BitRate br) {
-    auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
-    tx_fctrl.write_bit_range(14, 13, static_cast<uint64_t>(br));
+  std::expected<uint32_t, HAL::SpiError> get_device_id() {
+    return get_reg_view<DWMRegisterID::DEV_ID>().read().transform(
+        [](uint64_t raw) { return static_cast<uint32_t>(raw); });
   }
 
   /*
    * Pulse Repetition Frequency
    */
-  std::string_view tx_prf() const {
-    auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
-    uint8_t raw_prf = tx_fctrl.bit_range(17, 16); // TODO: constants?
-
-    return PRFToString(static_cast<PRF>(raw_prf));
+  std::expected<PRF, HAL::SpiError> get_tx_prf() {
+    return get_reg_view<DWMRegisterID::TX_FCTRL>().read().transform(
+        [](uint64_t raw) {
+          return static_cast<PRF>((raw >> 16) & 0b11); // TODO: constants?
+        });
   }
 
-  void set_tx_prf(PRF prf) {
-    auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
-    tx_fctrl.write_bit_range(17, 16, static_cast<uint64_t>(prf));
+  std::expected<void, HAL::SpiError> set_tx_prf(PRF prf) {
+    return get_reg_view<DWMRegisterID::TX_FCTRL>().write_bit_range(
+        17, 16, static_cast<uint64_t>(prf));
   }
 
-  uint16_t tx_preamble_length() const {
-    auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
-
-    uint8_t raw_psr = tx_fctrl.bit_range(19, 18); // TODO: constants?
-    uint8_t raw_pe = tx_fctrl.bit_range(21, 20);  // TODO: constants?
-    uint8_t psr_pe_combined = (raw_psr << 2) | raw_pe;
-
-    return PreambleLengthToUInt(static_cast<PreambleLength>(psr_pe_combined));
+  // valid only once LDEDONE is set for the corresponding reception
+  std::expected<DWMTimestamp, HAL::SpiError> get_rx_timestamp() {
+    return get_reg_view<DWMRegisterID::RX_TIME>().read();
   }
 
-  void set_tx_preamble_length(PreambleLength pl) {
+  std::expected<DWMTimestamp, HAL::SpiError> get_tx_timestamp() {
+    return get_reg_view<DWMRegisterID::TX_TIME>().read();
+  }
+
+  /*
+   * Full device init for the default mode (channel 5, 16 MHz PRF, preamble 128,
+   * 6.8 Mbps). Order matters: LDE microcode must be loaded from OTP before the
+   * receiver is used, or RX timestamps are garbage (manual 2.5.5.10).
+   */
+  std::expected<void, HAL::SpiError> configure() {
+    hard_reset();
+    return load_lde()
+        .and_then([this] { return write_config_table(); })
+        .and_then([this] {
+          return write_sub_value(dw1000::CHAN_CTRL, 0, dw1000::CHAN_CTRL_VALUE,
+                                 4);
+        })
+        .and_then([this] {
+          return write_sub_value(dw1000::TX_ANTD, 0, dw1000::ANTENNA_DELAY, 2);
+        })
+        .and_then([this] {
+          // RX antenna delay (LDE_RXANTD, 0x2E:1804) -- balances TX_ANTD, else
+          // ~half the antenna delay stays uncompensated as a fixed offset
+          return write_sub_value(0x2E, 0x1804, dw1000::ANTENNA_DELAY, 2);
+        })
+        .and_then([this] { return set_tx_prf(PRF::MHZ_16); })
+        .and_then([this] { return set_tx_bit_rate(BitRate::MBPS_68); })
+        .and_then(
+            [this] { return set_tx_preamble_length(PreambleLength::LEN_128); });
+  }
+
+  // Write payload to TX_BUFFER, set the frame length, start TX, wait for TXFRS.
+  std::expected<void, HAL::SpiError>
+  transmit(std::span<const std::byte> payload) {
+    uint16_t frame_len = static_cast<uint16_t>(payload.size() + 2); // +2 FCS
+    auto tx_fctrl = get_reg_view<DWMRegisterID::TX_FCTRL>();
+    // abort any in-progress RX/TX first, else a stuck transceiver ignores
+    // TXSTRT
+    return force_idle()
+        .and_then([&] { return write_sub(dw1000::TX_BUFFER, 0, payload); })
+        .and_then([&] { return tx_fctrl.write_bit_range(6, 0, frame_len); })
+        .and_then([this] {
+          return write_sub_value(dw1000::SYS_CTRL, 0, dw1000::TXSTRT, 1);
+        })
+        .and_then([this] { return poll_status(dw1000::TXFRS, 10); })
+        .and_then([this] { return clear_status(dw1000::TXFRS); });
+  }
+
+  std::expected<void, HAL::SpiError> start_receive() {
+    return force_idle().and_then([this] {
+      return write_sub_value(dw1000::SYS_CTRL, 0, dw1000::RXENAB, 2);
+    });
+  }
+
+  // Enable RX, wait for a good frame, read it into `out`. Returns payload
+  // length (FCS stripped), capped to out.size(). raw SYS_STATUS, for bring-up
+  // diagnostics
+  std::expected<uint64_t, HAL::SpiError> read_sys_status() {
+    return read_status();
+  }
+
+  std::expected<size_t, HAL::SpiError> receive(std::span<std::byte> out,
+                                               int timeout_ms = 100) {
+    // clear any stale RX event bits first, else a leftover RXFCG makes
+    // poll_status return immediately with no real frame
+    return clear_status(dw1000::RXFCG | dw1000::RXDFR | dw1000::RX_ERROR)
+        .and_then([this] { return start_receive(); })
+        .and_then([&]() -> std::expected<size_t, HAL::SpiError> {
+          if (auto r = poll_status(dw1000::RXFCG, timeout_ms); !r) {
+            return std::unexpected(r.error());
+          }
+
+          std::array<std::byte, 4> finfo{};
+          if (auto f = read_sub(dw1000::RX_FINFO, 0, finfo); !f) {
+            return std::unexpected(f.error());
+          }
+          uint16_t len = static_cast<uint16_t>(
+              ((std::to_integer<uint16_t>(finfo[1]) << 8) |
+               std::to_integer<uint16_t>(finfo[0])) &
+              0x03FF);
+
+          size_t payload = len >= 2 ? len - 2u : 0;
+          size_t n = std::min(payload, out.size());
+          if (auto d = read_sub(dw1000::RX_BUFFER, 0, out.first(n)); !d) {
+            return std::unexpected(d.error());
+          }
+          if (auto c = clear_status(dw1000::RXFCG | dw1000::RXDFR); !c) {
+            return std::unexpected(c.error());
+          }
+          return n;
+        });
+  }
+
+  /*
+   * Single-sided two-way ranging, initiator side. Sends a poll, receives the
+   * responder's reply-time, and returns distance in meters.
+   *   t_round = rx(reply) - tx(poll)          [measured here]
+   *   t_reply = tx(reply) - rx(poll)          [measured by responder, sent
+   * back] tof     = (t_round - t_reply) / 2
+   */
+  std::expected<double, HAL::SpiError> range() {
+    std::array<std::byte, 1> poll{RANGE_POLL};
+    if (auto r = transmit(poll); !r) {
+      return std::unexpected(r.error());
+    }
+    auto t_poll_tx = get_tx_timestamp();
+    if (!t_poll_tx) {
+      return std::unexpected(t_poll_tx.error());
+    }
+
+    // timing reply: its rx timestamp is t_round's end
+    std::array<std::byte, 1> reply{};
+    if (auto n = receive(reply, 20); !n) {
+      return std::unexpected(n.error());
+    }
+    auto t_reply_rx = get_rx_timestamp();
+    if (!t_reply_rx) {
+      return std::unexpected(t_reply_rx.error());
+    }
+
+    // final frame carries the responder's t_reply (8 LE bytes after the type)
+    std::array<std::byte, 9> final_frame{};
+    if (auto n = receive(final_frame, 20); !n) {
+      return std::unexpected(n.error());
+    }
+    uint64_t t_reply = 0;
+    for (int i = 0; i < 8; ++i) {
+      t_reply |=
+          static_cast<uint64_t>(std::to_integer<uint8_t>(final_frame[1 + i]))
+          << (8 * i);
+    }
+
+    uint64_t t_round = (*t_reply_rx - *t_poll_tx).count();
+    double tof =
+        (static_cast<double>(t_round) - static_cast<double>(t_reply)) / 2.0;
+    return tof * SECONDS_PER_TICK * SPEED_OF_LIGHT;
+  }
+
+  // Responder side: wait for a poll, send a timing reply, then a final frame
+  // carrying t_reply = tx(reply) - rx(poll).
+  std::expected<void, HAL::SpiError> respond(int timeout_ms = 1000) {
+    std::array<std::byte, 1> poll{};
+    if (auto n = receive(poll, timeout_ms); !n) {
+      return std::unexpected(n.error());
+    }
+    auto t_poll_rx = get_rx_timestamp();
+    if (!t_poll_rx) {
+      return std::unexpected(t_poll_rx.error());
+    }
+
+    std::array<std::byte, 1> reply{RANGE_REPLY};
+    if (auto r = transmit(reply); !r) {
+      return std::unexpected(r.error());
+    }
+    auto t_reply_tx = get_tx_timestamp();
+    if (!t_reply_tx) {
+      return std::unexpected(t_reply_tx.error());
+    }
+
+    uint64_t t_reply = (*t_reply_tx - *t_poll_rx).count();
+    std::array<std::byte, 9> final_frame{RANGE_REPLY};
+    for (int i = 0; i < 8; ++i) {
+      final_frame[1 + i] = std::byte((t_reply >> (8 * i)) & 0xFF);
+    }
+    return transmit(final_frame);
+  }
+
+private:
+  template <DWMRegisterID ID> using Register = DWMRegisterView<SPI, ID>;
+
+  template <DWMRegisterID ID> Register<ID> get_reg_view() {
+    return Register<ID>{spi_};
+  }
+
+  static constexpr double SECONDS_PER_TICK = 1.0 / 63'897'600'000.0;
+  static constexpr double SPEED_OF_LIGHT = 299'792'458.0;
+  static constexpr std::byte RANGE_POLL{0x01};
+  static constexpr std::byte RANGE_REPLY{0x02};
+
+  // sub-addressed SPI header (manual 2.2.1.2): 1 octet non-indexed, 2 for an
+  // offset <= 0x7F, 3 with the extended-address flag for larger offsets
+  static uint8_t make_header(std::array<std::byte, 3> &hdr, bool write,
+                             uint8_t reg, uint16_t offset) {
+    uint8_t b0 = (write ? 0x80 : 0x00) | (reg & 0x3F) | (offset ? 0x40 : 0x00);
+    hdr[0] = std::byte{b0};
+    if (offset == 0) {
+      return 1;
+    }
+    if (offset <= 0x7F) {
+      hdr[1] = std::byte(offset & 0x7F);
+      return 2;
+    }
+    hdr[1] = std::byte(0x80 | (offset & 0x7F));
+    hdr[2] = std::byte((offset >> 7) & 0xFF);
+    return 3;
+  }
+
+  std::expected<void, HAL::SpiError>
+  write_sub(uint8_t reg, uint16_t offset, std::span<const std::byte> data) {
+    std::array<std::byte, 3> hdr{};
+    uint8_t hlen = make_header(hdr, true, reg, offset);
+    std::vector<std::byte> tx(hlen + data.size());
+    std::copy_n(hdr.begin(), hlen, tx.begin());
+    std::ranges::copy(data, tx.begin() + hlen);
+    return spi_.transfer_halfduplex(tx, {});
+  }
+
+  std::expected<void, HAL::SpiError> read_sub(uint8_t reg, uint16_t offset,
+                                              std::span<std::byte> out) {
+    std::array<std::byte, 3> hdr{};
+    uint8_t hlen = make_header(hdr, false, reg, offset);
+    return spi_.transfer_halfduplex(
+        std::span<const std::byte>{hdr.data(), hlen}, out);
+  }
+
+  std::expected<void, HAL::SpiError>
+  write_sub_value(uint8_t reg, uint16_t offset, uint32_t value, uint8_t size) {
+    std::array<std::byte, 4> bytes{};
+    for (uint8_t i = 0; i < size; ++i) {
+      bytes[i] = std::byte((value >> (8 * i)) & 0xFF);
+    }
+    return write_sub(reg, offset,
+                     std::span<const std::byte>{bytes.data(), size});
+  }
+
+  std::expected<uint64_t, HAL::SpiError> read_status() {
+    std::array<std::byte, 5> b{};
+    return read_sub(dw1000::SYS_STATUS, 0, b).transform([&] {
+      uint64_t v = 0;
+      for (int i = 0; i < 5; ++i) {
+        v |= static_cast<uint64_t>(std::to_integer<uint8_t>(b[i])) << (8 * i);
+      }
+      return v;
+    });
+  }
+
+  // SYS_STATUS is write-1-to-clear; our event bits live in the low 4 octets
+  std::expected<void, HAL::SpiError> clear_status(uint32_t bits) {
+    return write_sub_value(dw1000::SYS_STATUS, 0, bits, 4);
+  }
+
+  // abort any in-progress TX/RX and return the transceiver to IDLE
+  std::expected<void, HAL::SpiError> force_idle() {
+    return write_sub_value(dw1000::SYS_CTRL, 0, dw1000::TRXOFF, 1);
+  }
+
+  // poll SYS_STATUS until `mask` is set, an RX error appears, or we time out
+  // TODO: distinct DWMError for timeout / rx-error vs a genuine SPI failure
+  std::expected<void, HAL::SpiError> poll_status(uint32_t mask,
+                                                 int timeout_ms) {
+    for (int i = 0; i < timeout_ms; ++i) {
+      auto s = read_status();
+      if (!s) {
+        return std::unexpected(s.error());
+      }
+      if (*s & mask) {
+        return {};
+      }
+      if (*s & dw1000::RX_ERROR) {
+        return std::unexpected(HAL::SpiError::TransferFailed);
+      }
+      gpio_.delay_ms(1);
+    }
+    return std::unexpected(HAL::SpiError::Timeout);
+  }
+
+  // manual 2.5.5.10 Table 4: force sys clock, kick OTP->LDE, restore clock
+  std::expected<void, HAL::SpiError> load_lde() {
+    return write_sub_value(dw1000::PMSC, 0x00, 0x0301, 2)
+        .and_then(
+            [this] { return write_sub_value(dw1000::OTP_IF, 0x06, 0x8000, 2); })
+        .and_then([this]() -> std::expected<void, HAL::SpiError> {
+          gpio_.delay_ms(1); // >= 150 us
+          return {};
+        })
+        .and_then(
+            [this] { return write_sub_value(dw1000::PMSC, 0x00, 0x0200, 2); });
+  }
+
+  std::expected<void, HAL::SpiError> write_config_table() {
+    for (const auto &w : dw1000::DEFAULT_CONFIG) {
+      if (auto r = write_sub_value(w.reg, w.offset, w.value, w.size); !r) {
+        return r;
+      }
+    }
+    return {};
+  }
+
+  void hard_reset() {
+    gpio_.set_direction(rst_pin_, HAL::PinMode::Output);
+    gpio_.set_level(rst_pin_, HAL::Voltage::LOW);
+    gpio_.delay_ms(10);
+    gpio_.set_level(rst_pin_, HAL::Voltage::HIGH);
+    gpio_.delay_ms(10);
+  }
+
+  std::expected<std::string_view, HAL::SpiError> get_tx_bit_rate() {
+    return get_reg_view<DWMRegisterID::TX_FCTRL>().read().transform(
+        [](uint64_t raw) {
+          return BitRateToString(
+              static_cast<BitRate>((raw >> 13) & 0b11)); // TODO: constants?
+        });
+  }
+
+  std::expected<void, HAL::SpiError> set_tx_bit_rate(BitRate br) {
+    return get_reg_view<DWMRegisterID::TX_FCTRL>().write_bit_range(
+        14, 13, static_cast<uint64_t>(br));
+  }
+
+  std::expected<uint16_t, HAL::SpiError> get_tx_preamble_length() {
+    return get_reg_view<DWMRegisterID::TX_FCTRL>().read().transform(
+        [](uint64_t raw) {
+          uint8_t raw_psr = (raw >> 18) & 0b11; // TODO: constants?
+          uint8_t raw_pe = (raw >> 20) & 0b11;  // TODO: constants?
+          uint8_t psr_pe_combined = (raw_psr << 2) | raw_pe;
+
+          return PreambleLengthToUInt(
+              static_cast<PreambleLength>(psr_pe_combined));
+        });
+  }
+
+  std::expected<void, HAL::SpiError> set_tx_preamble_length(PreambleLength pl) {
     uint8_t psr_pe_combined = static_cast<uint8_t>(pl);
     uint8_t raw_psr = (psr_pe_combined >> 2) & 0b11;
     uint8_t raw_pe = psr_pe_combined & 0b11;
 
-    auto tx_fctrl = get_reg_view<DWM_REG_TX_FCTRL>();
-    tx_fctrl.write_bit_range(19, 18, raw_psr);
-    tx_fctrl.write_bit_range(21, 20, raw_pe);
+    auto tx_fctrl = get_reg_view<DWMRegisterID::TX_FCTRL>();
+    return tx_fctrl.write_bit_range(19, 18, raw_psr).and_then([&] {
+      return tx_fctrl.write_bit_range(21, 20, raw_pe);
+    });
   }
 
   SPI spi_;

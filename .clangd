@@ -1,2 +1,21 @@
+# Written with Claude
+
+# clangd runs inside the dev container (see scripts/clangd.sh) and reads the
+# ESP-IDF compile_commands.json. Those commands carry xtensa-gcc codegen flags
+# that clangd's embedded clang rejects outright -- strip them so parsing works.
+# Non-test files use clangd's auto-discovered root build/ DB.
 CompileFlags:
-  Remove: [-f*, -m*]
+  Remove:
+    - -mlongcalls
+    - -fstrict-volatile-bitfields
+    - -fno-tree-switch-conversion
+    - -fno-shrink-wrap
+
+---
+# Test sources exist only in the test project's build DB, not the root app build
+# that clangd auto-discovers -- so point them at the device test build (produced
+# by `test/run.sh device`), which carries their real include paths.
+If:
+  PathMatch: ".*test/.*"
+CompileFlags:
+  CompilationDatabase: test/build_device
