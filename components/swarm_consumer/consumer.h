@@ -6,7 +6,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
-#include "hardware.h"
 #include "log.h"
 #include "motor.h"
 #include "queue.h"
@@ -31,13 +30,8 @@ struct Message {
   MessageBody body;
 };
 
-// The default values for the templated types come from the specific hardware
-// being used
-template <size_t MotorCount = HW::MOTOR_COUNT,
-          HAL::MotorDriverTrait MotorDriver = HW::MotorDriver,
-          HAL::DriveStyleTrait<MotorCount> DriveStyle = HW::DriveStyle>
-void spin(MotorDriver &driver,
-          Queue<MessageTag, MessageBody, CONSUMER_QUEUE_SIZE> &queue) {
+template <HAL::MotorDriverTrait MotorDriver>
+void spin(MotorDriver &driver, QueueType &queue) {
   // TODO: set some sort of frequency for this to be called
   while (1) {
     MessageTag tag;

@@ -6,12 +6,23 @@
 
 #include <geometry_msgs/msg/twist.h>
 
+#include <uros_network_interfaces.h>
+#include <rcl/error_handling.h>
+#include <rcl/rcl.h>
+#include <rclc/executor.h>
+#include <rclc/rclc.h>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "log.h"
 #include "queue.h"
 
-static const uint32_t MSG_SIZE = 512;
+namespace {
+struct CallbackContext {
+  Consumer::QueueType &queue;
+  ROS::TwistHandler on_twist;
+};
+} // namespace
 
 #define RCCHECK(fn)                                                            \
   {                                                                            \
@@ -24,25 +35,14 @@ static const uint32_t MSG_SIZE = 512;
   }
 
 static void callback(const void *msgin, void *context) {
-  printf("Received message!\n");
-
-  // Cast void pointer parameters
-  const geometry_msgs__msg__Twist twist_msg =
+  const geometry_msgs__msg__Twist &twist_msg =
       *reinterpret_cast<const geometry_msgs__msg__Twist *>(msgin);
-  Consumer::QueueType &queue =
-      *reinterpret_cast<Consumer::QueueType *>(context);
+  CallbackContext &ctx = *reinterpret_cast<CallbackContext *>(context);
 
-  std::array<Motor::Command, HW::MOTOR_COUNT> motor_commands =
-      HW::DriveStyle::convert_twist<HW::MOTOR_COUNT>(twist_msg);
-
-  // Send a message to the queue for each motor command in the array
-  for (Motor::Command cmd : motor_commands) {
-    queue.pushToQueue(Consumer::MessageTag::MOTOR_COMMAND,
-                      Consumer::MessageBody{.motor_cmd = cmd});
-  }
+  ctx.on_twist(twist_msg, ctx.queue);
 }
 
-void ROS::spin(Consumer::QueueType &queue) {
+void ROS::spin(Consumer::QueueType &queue, TwistHandler on_twist) {
   // Create memory allocator
   rcl_allocator_t allocator = rcl_get_default_allocator();
   rclc_support_t support;
@@ -80,8 +80,9 @@ void ROS::spin(Consumer::QueueType &queue) {
 
   // Add subscriber to executor
   geometry_msgs__msg__Twist msgin;
+  CallbackContext ctx{queue, on_twist};
   RCCHECK(rclc_executor_add_subscription_with_context(
-      &executor, &subscriber, &msgin, &callback, (void *)&queue, ON_NEW_DATA));
+      &executor, &subscriber, &msgin, &callback, &ctx, ON_NEW_DATA));
 
   rclc_executor_spin(&executor);
 

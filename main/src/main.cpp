@@ -1,11 +1,24 @@
 #include "consumer.h"
 #include "dwm.h"
-#include "hardware.h"
-#include "queue.h"
+#include "esp32.h"
 #include "ros.h"
+
+#include <uros_network_interfaces.h>
 
 #include "freertos/FreeRTOS.h"
 #include <memory>
+
+namespace HW {
+constexpr size_t MOTOR_COUNT = 2;
+
+using DriveStyle = ESP32::DifferentialDriveController;
+using MotorDriver = ESP32::L298NMotorDriver;
+using SPI = ESP32::SPI;
+using GPIO = ESP32::GPIO;
+
+static_assert(HAL::MotorDriverTrait<MotorDriver>);
+static_assert(HAL::DriveStyleTrait<DriveStyle, MOTOR_COUNT>);
+} // namespace HW
 
 // TODO: make templated and move to consumer.h?
 // TODO: make struct so we can pass multiple parameters
@@ -23,11 +36,22 @@ static void consumerTaskWrapper(void *pvParameters) {
   vTaskDelete(nullptr);
 }
 
+static void onTwist(const geometry_msgs__msg__Twist &twist,
+                    Consumer::QueueType &queue) {
+  std::array<Motor::Command, HW::MOTOR_COUNT> motor_commands =
+      HW::DriveStyle::convert_twist<HW::MOTOR_COUNT>(twist);
+
+  for (Motor::Command cmd : motor_commands) {
+    queue.pushToQueue(Consumer::MessageTag::MOTOR_COMMAND,
+                      Consumer::MessageBody{.motor_cmd = cmd});
+  }
+}
+
 static void rosTaskWrapper(void *pvParameters) {
   Consumer::QueueType *queue =
       reinterpret_cast<Consumer::QueueType *>(pvParameters);
 
-  ROS::spin(*queue);
+  ROS::spin(*queue, onTwist);
 
   vTaskDelete(nullptr);
 }
