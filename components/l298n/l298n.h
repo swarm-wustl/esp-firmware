@@ -44,13 +44,8 @@ public:
 
   template <auto FrameNames>
   void run(const Drive::Frame<FrameNames> &frame) {
-    static_assert(MotorCount == FrameNames.size(),
-                  "pin table and drive style disagree on motor count");
-    static_assert(slots_are_bijective<FrameNames>(),
-                  "each motor in the pin table must match exactly one the "
-                  "drive style commands");
-
-    constexpr std::array<size_t, MotorCount> slots = make_slots<FrameNames>();
+    constexpr std::array<size_t, MotorCount> slots =
+        HAL::slot_map<FrameNames, pin_names()>();
 
     for (size_t i = 0; i < MotorCount; ++i) {
       apply(Pins[i], frame.commands[slots[i]]);
@@ -68,28 +63,14 @@ public:
   }
 
 private:
-  template <auto FrameNames> static constexpr auto make_slots() {
-    std::array<size_t, MotorCount> found{};
+  static constexpr std::array<Motor::Name, MotorCount> pin_names() {
+    std::array<Motor::Name, MotorCount> names{};
 
     for (size_t i = 0; i < MotorCount; ++i) {
-      auto it = std::ranges::find(FrameNames, Pins[i].name);
-      found[i] = static_cast<size_t>(it - FrameNames.begin());
+      names[i] = Pins[i].name;
     }
 
-    return found;
-  }
-
-  template <auto FrameNames> static constexpr bool slots_are_bijective() {
-    std::array<size_t, MotorCount> sorted = make_slots<FrameNames>();
-    std::ranges::sort(sorted);
-
-    for (size_t i = 0; i < MotorCount; ++i) {
-      if (sorted[i] != i) {
-        return false;
-      }
-    }
-
-    return true;
+    return names;
   }
 
   GPIO gpio_;
