@@ -25,11 +25,15 @@ constexpr size_t motor_count(Style style) {
   return 0;
 }
 
+template <auto Names> struct Frame {
+  std::array<Motor::Command, Names.size()> commands;
+};
+
 template <Style S>
 constexpr std::array<Motor::Name, motor_count(S)> motor_names() = delete;
 
 template <Style S>
-std::array<Motor::Command, motor_count(S)>
+Frame<motor_names<S>()>
 convert_twist(const geometry_msgs__msg__Twist &msg) = delete;
 } // namespace Drive
 

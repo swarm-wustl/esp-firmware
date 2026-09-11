@@ -1,52 +1,41 @@
 #ifndef CONSUMER_H
 #define CONSUMER_H
 
-#include <type_traits>
+#include <optional>
 
-#include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
-#include "freertos/task.h"
-#include "esp_log.h"
-#include "motor.h"
+#include "drive.h"
 #include "queue.h"
 #include "swarm_hal.h"
-#include <optional>
 
 namespace Consumer {
 constexpr size_t CONSUMER_QUEUE_SIZE = 25;
 
 enum class MessageTag {
-  MOTOR_COMMAND,
+  MOTOR_FRAME,
   // TODO: IMU read, send data to ROS server, etc.
 };
 
-union MessageBody {
-  Motor::Command motor_cmd;
+template <auto Names> union MessageBody {
+  Drive::Frame<Names> motor_frame;
 };
 
-using QueueType = Queue<MessageTag, MessageBody, CONSUMER_QUEUE_SIZE>;
+template <auto Names>
+using QueueType = Queue<MessageTag, MessageBody<Names>, CONSUMER_QUEUE_SIZE>;
 
-template <HAL::MotorDriverTrait MotorDriver>
-void spin(MotorDriver &driver, QueueType &queue) {
+template <auto Names, HAL::MotorDriverTrait<Names> MotorDriver>
+void spin(MotorDriver &driver, QueueType<Names> &queue) {
   // TODO: set some sort of frequency for this to be called
-  while (true) {
-    std::optional<QueueType::Message> msg = queue.pop();
+  while (1) {
+    std::optional<typename QueueType<Names>::Message> msg = queue.pop();
 
     if (!msg) {
       continue;
     }
 
     switch (msg->tag) {
-    case MessageTag::MOTOR_COMMAND: {
-      driver.run(msg->body.motor_cmd);
+    case MessageTag::MOTOR_FRAME:
+      driver.run(msg->body.motor_frame);
       break;
-    }
-
-    default: {
-      ESP_LOGE("consumer", "Unhandled message type: tag=%d",
-               static_cast<int>(msg->tag));
-      break;
-    }
     }
   }
 }

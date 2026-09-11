@@ -15,13 +15,12 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
-#include "queue.h"
 
 static const char *TAG = "ros";
 
 namespace {
 struct CallbackContext {
-  Consumer::QueueType &queue;
+  void *user;
   ROS::TwistHandler on_twist;
 };
 } // namespace
@@ -41,10 +40,10 @@ static void callback(const void *msgin, void *context) {
       *reinterpret_cast<const geometry_msgs__msg__Twist *>(msgin);
   CallbackContext &ctx = *reinterpret_cast<CallbackContext *>(context);
 
-  ctx.on_twist(twist_msg, ctx.queue);
+  ctx.on_twist(twist_msg, ctx.user);
 }
 
-void ROS::spin(Consumer::QueueType &queue, TwistHandler on_twist) {
+void ROS::spin(void *context, TwistHandler on_twist) {
   rcl_allocator_t allocator = rcl_get_default_allocator();
   rclc_support_t support;
 
@@ -75,7 +74,7 @@ void ROS::spin(Consumer::QueueType &queue, TwistHandler on_twist) {
   RCCHECK(rclc_executor_init(&executor, &support.context, 1, &allocator));
 
   geometry_msgs__msg__Twist msgin;
-  CallbackContext ctx{queue, on_twist};
+  CallbackContext ctx{context, on_twist};
   RCCHECK(rclc_executor_add_subscription_with_context(
       &executor, &subscriber, &msgin, &callback, &ctx, ON_NEW_DATA));
 

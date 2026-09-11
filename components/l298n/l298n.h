@@ -20,16 +20,16 @@ struct MotorPins {
 };
 
 template <HAL::GenericGPIOController GPIO, HAL::GenericPWMController PWM,
-          size_t MotorCount>
+          auto Pins>
 class MotorDriver {
 public:
-  MotorDriver(GPIO gpio, PWM pwm, std::array<MotorPins, MotorCount> motors,
-              int standby)
-      : gpio_(std::move(gpio)), pwm_(std::move(pwm)), motors_(motors),
-        standby_(standby) {
+  static constexpr size_t MotorCount = Pins.size();
+
+  MotorDriver(GPIO gpio, PWM pwm, int standby)
+      : gpio_(std::move(gpio)), pwm_(std::move(pwm)), standby_(standby) {
     gpio_.set_direction(standby_, HAL::PinMode::Output);
 
-    for (const MotorPins &motor : motors_) {
+    for (const MotorPins &motor : Pins) {
       gpio_.set_direction(motor.in_a, HAL::PinMode::Output);
       gpio_.set_direction(motor.in_b, HAL::PinMode::Output);
       pwm_.configure_channel(motor.pwm_channel, motor.enable);
@@ -42,13 +42,61 @@ public:
   MotorDriver(MotorDriver &&) = default;
   MotorDriver &operator=(MotorDriver &&) = default;
 
-  void run(const Motor::Command &cmd) {
-    const MotorPins *motor = find(cmd.name);
+  template <auto FrameNames>
+  void run(const Drive::Frame<FrameNames> &frame) {
+    static_assert(MotorCount == FrameNames.size(),
+                  "pin table and drive style disagree on motor count");
+    static_assert(slots_are_bijective<FrameNames>(),
+                  "each motor in the pin table must match exactly one the "
+                  "drive style commands");
 
-    if (motor == nullptr) {
-      return;
+    constexpr std::array<size_t, MotorCount> slots = make_slots<FrameNames>();
+
+    for (size_t i = 0; i < MotorCount; ++i) {
+      apply(Pins[i], frame.commands[slots[i]]);
     }
 
+    gpio_.set_level(standby_, HAL::Voltage::HIGH);
+  }
+
+  void stop() {
+    for (const MotorPins &motor : Pins) {
+      apply(motor, Motor::Command{Motor::Direction::STOP, 0.0});
+    }
+
+    gpio_.set_level(standby_, HAL::Voltage::LOW);
+  }
+
+private:
+  template <auto FrameNames> static constexpr auto make_slots() {
+    std::array<size_t, MotorCount> found{};
+
+    for (size_t i = 0; i < MotorCount; ++i) {
+      auto it = std::ranges::find(FrameNames, Pins[i].name);
+      found[i] = static_cast<size_t>(it - FrameNames.begin());
+    }
+
+    return found;
+  }
+
+  template <auto FrameNames> static constexpr bool slots_are_bijective() {
+    std::array<size_t, MotorCount> sorted = make_slots<FrameNames>();
+    std::ranges::sort(sorted);
+
+    for (size_t i = 0; i < MotorCount; ++i) {
+      if (sorted[i] != i) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  GPIO gpio_;
+  PWM pwm_;
+  int standby_;
+
+  void apply(const MotorPins &pins, const Motor::Command &cmd) {
     HAL::Voltage level_a = HAL::Voltage::LOW;
     HAL::Voltage level_b = HAL::Voltage::LOW;
 
@@ -65,32 +113,9 @@ public:
       break;
     }
 
-    gpio_.set_level(motor->in_a, level_a);
-    gpio_.set_level(motor->in_b, level_b);
-    gpio_.set_level(standby_, HAL::Voltage::HIGH);
-
-    pwm_.set_duty_ratio(motor->pwm_channel, std::clamp(cmd.pwm_ratio, 0.0, 1.0));
-  }
-
-  void stop() {
-    for (const MotorPins &motor : motors_) {
-      gpio_.set_level(motor.in_a, HAL::Voltage::LOW);
-      gpio_.set_level(motor.in_b, HAL::Voltage::LOW);
-      pwm_.set_duty_ratio(motor.pwm_channel, 0.0);
-    }
-
-    gpio_.set_level(standby_, HAL::Voltage::LOW);
-  }
-
-private:
-  GPIO gpio_;
-  PWM pwm_;
-  std::array<MotorPins, MotorCount> motors_;
-  int standby_;
-
-  const MotorPins *find(Motor::Name name) const {
-    auto it = std::ranges::find(motors_, name, &MotorPins::name);
-    return it == motors_.end() ? nullptr : &*it;
+    gpio_.set_level(pins.in_a, level_a);
+    gpio_.set_level(pins.in_b, level_b);
+    pwm_.set_duty_ratio(pins.pwm_channel, std::clamp(cmd.pwm_ratio, 0.0, 1.0));
   }
 };
 } // namespace L298N

@@ -4,14 +4,16 @@
 
 #include <concepts>
 
+#include "drive.h"
 #include "motor.h"
 
 namespace HAL {
-template <typename MotorDriver>
-concept MotorDriverTrait = requires(MotorDriver driver, Motor::Command cmd) {
-  { driver.run(cmd) } -> std::same_as<void>;
-  { driver.stop() } -> std::same_as<void>;
-};
+template <typename MotorDriver, auto Names>
+concept MotorDriverTrait =
+    requires(MotorDriver driver, Drive::Frame<Names> frame) {
+      { driver.run(frame) } -> std::same_as<void>;
+      { driver.stop() } -> std::same_as<void>;
+    };
 } // namespace HAL
 
 #endif
