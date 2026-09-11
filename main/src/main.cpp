@@ -10,15 +10,24 @@
 #include <uros_network_interfaces.h>
 
 #include "freertos/FreeRTOS.h"
+#include <algorithm>
 #include <optional>
 #include <utility>
 
 static const char *TAG = "main";
 
-namespace HW {
-constexpr size_t MOTOR_COUNT = 2;
+template <size_t N>
+static constexpr bool covers(const std::array<L298N::MotorPins, N> &pins,
+                             const std::array<Motor::Name, N> &names) {
+  return std::ranges::all_of(names, [&pins](Motor::Name name) {
+    return std::ranges::find(pins, name, &L298N::MotorPins::name) != pins.end();
+  });
+}
 
-using DriveStyle = Drive::Differential;
+namespace HW {
+constexpr Drive::Style DRIVE_STYLE = Drive::Style::DIFFERENTIAL;
+constexpr size_t MOTOR_COUNT = Drive::motor_count(DRIVE_STYLE);
+
 using SPI = ESP32::SPI;
 using GPIO = ESP32::GPIO;
 using PWM = ESP32::PWM;
@@ -32,7 +41,7 @@ constexpr std::array<L298N::MotorPins, MOTOR_COUNT> MOTOR_PINS{
 };
 
 static_assert(HAL::MotorDriverTrait<MotorDriver>);
-static_assert(HAL::DriveStyleTrait<DriveStyle, MOTOR_COUNT>);
+static_assert(covers(MOTOR_PINS, Drive::motor_names<DRIVE_STYLE>()));
 } // namespace HW
 
 // TODO: make templated and move to consumer.h?
@@ -54,7 +63,7 @@ static void consumerTaskWrapper(void *pvParameters) {
 static void onTwist(const geometry_msgs__msg__Twist &twist,
                     Consumer::QueueType &queue) {
   std::array<Motor::Command, HW::MOTOR_COUNT> motor_commands =
-      HW::DriveStyle::convert_twist<HW::MOTOR_COUNT>(twist);
+      Drive::convert_twist<HW::DRIVE_STYLE>(twist);
 
   for (Motor::Command cmd : motor_commands) {
     if (!queue.push(Consumer::MessageTag::MOTOR_COMMAND,

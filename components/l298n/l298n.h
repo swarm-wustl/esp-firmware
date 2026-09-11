@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
-#include <expected>
 #include <utility>
 
 #include "motor.h"
@@ -43,12 +42,11 @@ public:
   MotorDriver(MotorDriver &&) = default;
   MotorDriver &operator=(MotorDriver &&) = default;
 
-  [[nodiscard]] std::expected<void, HAL::MotorError>
-  run(const Motor::Command &cmd) {
+  void run(const Motor::Command &cmd) {
     const MotorPins *motor = find(cmd.name);
 
     if (motor == nullptr) {
-      return std::unexpected{HAL::MotorError::UnknownMotor};
+      return;
     }
 
     HAL::Voltage level_a = HAL::Voltage::LOW;
@@ -72,8 +70,6 @@ public:
     gpio_.set_level(standby_, HAL::Voltage::HIGH);
 
     pwm_.set_duty_ratio(motor->pwm_channel, std::clamp(cmd.pwm_ratio, 0.0, 1.0));
-
-    return {};
   }
 
   void stop() {
