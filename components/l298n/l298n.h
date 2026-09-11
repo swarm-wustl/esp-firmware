@@ -44,11 +44,12 @@ public:
 
   template <auto FrameNames>
   void run(const Drive::Frame<FrameNames> &frame) {
-    constexpr std::array<size_t, MotorCount> slots =
-        HAL::slot_map<FrameNames, pin_names()>();
+    static_assert(std::ranges::equal(FrameNames, Pins, {}, {}, &MotorPins::name),
+                  "pin table must list the same motors, in the same order, as "
+                  "the drive style commands");
 
     for (size_t i = 0; i < MotorCount; ++i) {
-      apply(Pins[i], frame.commands[slots[i]]);
+      apply(Pins[i], frame.commands[i]);
     }
 
     gpio_.set_level(standby_, HAL::Voltage::HIGH);
@@ -63,16 +64,6 @@ public:
   }
 
 private:
-  static constexpr std::array<Motor::Name, MotorCount> pin_names() {
-    std::array<Motor::Name, MotorCount> names{};
-
-    for (size_t i = 0; i < MotorCount; ++i) {
-      names[i] = Pins[i].name;
-    }
-
-    return names;
-  }
-
   GPIO gpio_;
   PWM pwm_;
   int standby_;
