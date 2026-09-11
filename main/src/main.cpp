@@ -1,6 +1,8 @@
 #include "consumer.h"
 #include "dwm.h"
+#include "differential_drive.h"
 #include "esp32.h"
+#include "l298n.h"
 #include "ros.h"
 
 #include "esp_log.h"
@@ -16,10 +18,18 @@ static const char *TAG = "main";
 namespace HW {
 constexpr size_t MOTOR_COUNT = 2;
 
-using DriveStyle = ESP32::DifferentialDriveController;
-using MotorDriver = ESP32::L298NMotorDriver;
+using DriveStyle = Drive::Differential;
 using SPI = ESP32::SPI;
 using GPIO = ESP32::GPIO;
+using PWM = ESP32::PWM;
+using MotorDriver = L298N::MotorDriver<GPIO, PWM, MOTOR_COUNT>;
+
+constexpr int STANDBY_PIN = GPIO_NUM_0;
+
+constexpr std::array<L298N::MotorPins, MOTOR_COUNT> MOTOR_PINS{
+    L298N::MotorPins{Motor::Name::LEFT, GPIO_NUM_16, GPIO_NUM_17, GPIO_NUM_4, 0},
+    L298N::MotorPins{Motor::Name::RIGHT, GPIO_NUM_18, GPIO_NUM_19, GPIO_NUM_5, 1},
+};
 
 static_assert(HAL::MotorDriverTrait<MotorDriver>);
 static_assert(HAL::DriveStyleTrait<DriveStyle, MOTOR_COUNT>);
@@ -114,8 +124,9 @@ extern "C" void app_main(void) {
 
   // Make the struct static so it lives as long as the program (incase mani()
   // ever terminates)
-  static ConsumerTaskData consumerTaskData{HW::MotorDriver{},
-                                           std::move(*queue)};
+  static ConsumerTaskData consumerTaskData{
+      HW::MotorDriver{HW::GPIO{}, HW::PWM{}, HW::MOTOR_PINS, HW::STANDBY_PIN},
+      std::move(*queue)};
 
   ESP_LOGI(TAG, "Hello world!");
 

@@ -38,7 +38,10 @@ void spin(MotorDriver &driver, QueueType &queue) {
 
     switch (msg->tag) {
     case MessageTag::MOTOR_COMMAND: {
-      driver.run(msg->body.motor_cmd);
+      if (!driver.run(msg->body.motor_cmd)) {
+        ESP_LOGE("consumer", "Unable to run command for motor %d",
+                 static_cast<int>(msg->body.motor_cmd.name));
+      }
       break;
     }
 

@@ -27,6 +27,13 @@ concept GenericSPIController =
       } -> std::same_as<std::expected<void, SpiError>>;
     };
 
+template <typename PWM>
+concept GenericPWMController =
+    requires(PWM pwm, int channel, int pin, double ratio) {
+      { pwm.configure_channel(channel, pin) } -> std::same_as<void>;
+      { pwm.set_duty_ratio(channel, ratio) } -> std::same_as<void>;
+    };
+
 template <typename GPIO>
 concept GenericGPIOController =
     requires(GPIO gpio, int pin, PinMode mode, Voltage voltage, int ms) {

@@ -5,6 +5,8 @@
 #include <array>
 #include <concepts>
 #include <cstddef>
+#include <cstdint>
+#include <expected>
 
 #include <geometry_msgs/msg/twist.h>
 
@@ -21,9 +23,11 @@ The design philosophy implemented here is as follows:
 */
 
 namespace HAL {
+enum class MotorError : uint8_t { UnknownMotor };
+
 template <typename MotorDriver>
 concept MotorDriverTrait = requires(MotorDriver driver, Motor::Command cmd) {
-  { driver.run(cmd) } -> std::same_as<void>;
+  { driver.run(cmd) } -> std::same_as<std::expected<void, MotorError>>;
   { driver.stop() } -> std::same_as<void>;
 };
 
