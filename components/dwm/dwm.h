@@ -368,6 +368,30 @@ public:
             [this] { return set_tx_preamble_length(PreambleLength::LEN_128); });
   }
 
+ 
+ 
+  //Configure device and Network:
+  std::expected<void, HAL::SpiError> configure_network(uint16_t device_address, uint16_t network_id) {
+    // Pack network_id into high 16 bits and device_address into low 16 bits
+    uint32_t panadr_val = (static_cast<uint32_t>(network_id) << 16) | device_address;
+
+    // Write the 32-bit value to PAN_ADR at sub-register offset 0x00
+    return write_sub_value(dw1000::PAN_ADR, 0x00, panadr_val, 4);
+}
+  //Read PAN_ADR
+  std::expected<uint32_t, HAL::SpiError> read_network() {
+    std::array<std::byte, 4> b{};
+    return read_sub(dw1000::PAN_ADR, 0, b).transform([&] {
+        uint32_t v = 0;
+        for (size_t i = 0; i < b.size(); ++i) {
+            v |= static_cast<uint32_t>(std::to_integer<uint8_t>(b[i])) << (8 * i);
+        }
+        return v;
+    });
+}
+
+
+
   // Write payload to TX_BUFFER, set the frame length, start TX, wait for TXFRS.
   std::expected<void, HAL::SpiError>
   transmit(std::span<const std::byte> payload) {
@@ -669,6 +693,12 @@ private:
     });
   }
 
+  enum class DeviceRole {
+    TAG,
+    ANCHOR
+};
+
+  DeviceRole m_role;
   SPI spi_;
   GPIO gpio_;
   uint8_t rst_pin_{};
