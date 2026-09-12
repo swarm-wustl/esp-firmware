@@ -10,3 +10,6 @@ sdkconfig.*.old
 .cache
 .DS_Store
 __pycache__/
+
+# regenerated per target by the IDF component manager
+dependencies.lock

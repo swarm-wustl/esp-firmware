@@ -86,28 +86,8 @@ clone_pinned() {
     done < "$LOCKFILE"
 }
 
-# scripts/libmicroros.patch explains what and why. Applied rather than grepped so
-# that a submodule bump which moves those lines fails loudly instead of silently
-# doing nothing.
-patch_makefile() {
-    local patch="$REPO/scripts/libmicroros.patch"
-
-    [ -f "$patch" ] || die "missing $patch"
-
-    if git -C "$COMPONENT" apply --reverse --check "$patch" >/dev/null 2>&1; then
-        return 0
-    fi
-
-    git -C "$COMPONENT" apply "$patch" \
-        || die "could not apply $patch -- did the submodule move? see CLAUDE.md"
-
-    echo "microros-pin.sh: patched libmicroros.mk (IDF 5.5 response-file flags)" >&2
-}
-
 cmd_seed() {
     [ -f "$LOCKFILE" ] || die "no $LOCKFILE -- run 'microros-pin.sh lock' first"
-
-    patch_makefile
 
     if [ -d "$COMPONENT/micro_ros_src/src" ]; then
         echo "microros-pin.sh: micro_ros_src already seeded" >&2
