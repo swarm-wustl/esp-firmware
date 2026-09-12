@@ -1,6 +1,8 @@
 #include "consumer.h"
 #include "dwm.h"
+#include "differential_drive.h"
 #include "esp32.h"
+#include "l298n.h"
 #include "ros.h"
 
 #include "esp_log.h"
@@ -8,21 +10,30 @@
 #include <uros_network_interfaces.h>
 
 #include "freertos/FreeRTOS.h"
+#include <algorithm>
 #include <optional>
 #include <utility>
 
 static const char *TAG = "main";
 
 namespace HW {
-constexpr size_t MOTOR_COUNT = 2;
+constexpr Drive::Style DRIVE_STYLE = Drive::Style::DIFFERENTIAL;
+constexpr auto MOTOR_NAMES = Drive::motor_names<DRIVE_STYLE>();
 
-using DriveStyle = ESP32::DifferentialDriveController;
-using MotorDriver = ESP32::L298NMotorDriver;
+constexpr int STANDBY_PIN = GPIO_NUM_0;
+
+constexpr std::array MOTOR_PINS{
+    L298N::MotorPins{Motor::Name::LEFT, GPIO_NUM_16, GPIO_NUM_17, GPIO_NUM_4, 0},
+    L298N::MotorPins{Motor::Name::RIGHT, GPIO_NUM_18, GPIO_NUM_19, GPIO_NUM_5, 1},
+};
+
 using SPI = ESP32::SPI;
 using GPIO = ESP32::GPIO;
+using PWM = ESP32::PWM;
+using MotorDriver = L298N::MotorDriver<GPIO, PWM, MOTOR_PINS>;
+using QueueType = Consumer::QueueType<MOTOR_NAMES>;
 
-static_assert(HAL::MotorDriverTrait<MotorDriver>);
-static_assert(HAL::DriveStyleTrait<DriveStyle, MOTOR_COUNT>);
+static_assert(HAL::MotorDriverTrait<MotorDriver, MOTOR_NAMES>);
 } // namespace HW
 
 // TODO: make templated and move to consumer.h?
@@ -30,7 +41,7 @@ static_assert(HAL::DriveStyleTrait<DriveStyle, MOTOR_COUNT>);
 
 struct ConsumerTaskData {
   HW::MotorDriver motorDriver;
-  Consumer::QueueType queue;
+  HW::QueueType queue;
 };
 
 static void consumerTaskWrapper(void *pvParameters) {
@@ -41,24 +52,18 @@ static void consumerTaskWrapper(void *pvParameters) {
   vTaskDelete(nullptr);
 }
 
-static void onTwist(const geometry_msgs__msg__Twist &twist,
-                    Consumer::QueueType &queue) {
-  std::array<Motor::Command, HW::MOTOR_COUNT> motor_commands =
-      HW::DriveStyle::convert_twist<HW::MOTOR_COUNT>(twist);
+static void onTwist(const geometry_msgs__msg__Twist &twist, void *context) {
+  HW::QueueType &queue = *reinterpret_cast<HW::QueueType *>(context);
 
-  for (Motor::Command cmd : motor_commands) {
-    if (!queue.push(Consumer::MessageTag::MOTOR_COMMAND,
-                    Consumer::MessageBody{.motor_cmd = cmd})) {
-      ESP_LOGE(TAG, "Dropped motor command: consumer queue full");
-    }
+  if (!queue.push(Consumer::MessageTag::MOTOR_FRAME,
+                  Consumer::MessageBody<HW::MOTOR_NAMES>{
+                      .motor_frame = Drive::convert_twist<HW::DRIVE_STYLE>(twist)})) {
+    ESP_LOGE(TAG, "Dropped motor frame: consumer queue full");
   }
 }
 
 static void rosTaskWrapper(void *pvParameters) {
-  Consumer::QueueType *queue =
-      reinterpret_cast<Consumer::QueueType *>(pvParameters);
-
-  ROS::spin(*queue, onTwist);
+  ROS::spin(pvParameters, onTwist);
 
   vTaskDelete(nullptr);
 }
@@ -105,7 +110,7 @@ extern "C" void app_main(void) {
   ESP_ERROR_CHECK(uros_network_interface_initialize());
 #endif
 
-  std::optional<Consumer::QueueType> queue = Consumer::QueueType::create();
+  std::optional<HW::QueueType> queue = HW::QueueType::create();
 
   if (!queue) {
     ESP_LOGE(TAG, "Unable to create consumer queue");
@@ -114,8 +119,9 @@ extern "C" void app_main(void) {
 
   // Make the struct static so it lives as long as the program (incase mani()
   // ever terminates)
-  static ConsumerTaskData consumerTaskData{HW::MotorDriver{},
-                                           std::move(*queue)};
+  static ConsumerTaskData consumerTaskData{
+      HW::MotorDriver{HW::GPIO{}, HW::PWM{}, HW::STANDBY_PIN},
+      std::move(*queue)};
 
   ESP_LOGI(TAG, "Hello world!");
 

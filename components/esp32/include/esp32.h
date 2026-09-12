@@ -5,7 +5,6 @@
 
 #include <driver/spi_common.h>
 #include <driver/spi_master.h>
-#include <geometry_msgs/msg/twist.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -14,33 +13,6 @@
 #include "swarm_hal.h"
 
 namespace ESP32 {
-// TODO: move this outside of ESP32
-class L298NMotorDriver {
-public:
-  L298NMotorDriver();
-
-  L298NMotorDriver(const L298NMotorDriver &) = delete;
-  L298NMotorDriver &operator=(const L298NMotorDriver &) = delete;
-
-  L298NMotorDriver(L298NMotorDriver &&) = default;
-  L298NMotorDriver &operator=(L298NMotorDriver &&) = default;
-
-  void run(const Motor::Command &cmd);
-  void stop();
-};
-
-// TODO: move this outside of ESP32
-class DifferentialDriveController {
-public:
-  DifferentialDriveController() = delete;
-
-  static Drive::Type type() { return Drive::Type::DIFFERENTIAL; }
-
-  template <size_t MotorCount>
-  static std::array<Motor::Command, MotorCount>
-  convert_twist(geometry_msgs__msg__Twist msg);
-};
-
 class SPI {
 public:
   SPI(int cs);
@@ -61,6 +33,20 @@ private:
   spi_device_handle_t dev_handle_{};
 
   void swap(SPI &other);
+};
+
+class PWM {
+public:
+  PWM();
+
+  PWM(const PWM &) = delete;
+  void operator=(const PWM &) = delete;
+
+  PWM(PWM &&) = default;
+  PWM &operator=(PWM &&) = default;
+
+  void configure_channel(int channel, int pin);
+  void set_duty_ratio(int channel, double ratio);
 };
 
 class GPIO {

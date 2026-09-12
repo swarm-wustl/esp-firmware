@@ -25,7 +25,6 @@ namespace Motor {
     };
 
     struct Command {
-        Name name;
         Direction dir;
         double pwm_ratio;
     };
