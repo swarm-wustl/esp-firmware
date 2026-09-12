@@ -25,14 +25,40 @@ When answering questions about the DW1000 / register behavior, consult `docs/ref
 
 Builds run inside the `swarm-idf` Docker container, not against host ESP-IDF (the host toolchain version drifts from the container's `release-v5.5` + micro-ROS deps). `scripts/shell.sh` builds the image on first use and drops you into a container shell where `idf.py build` works.
 
+A fresh clone needs the micro-ROS submodule before anything will build:
+
+```sh
+git submodule update --init --recursive
+```
+
 - interactive: `scripts/shell.sh`, then `idf.py build`
 - one-shot (non-interactive, e.g. an agent verifying a change):
   ```sh
   docker run --rm -v "$PWD:/workspace" -w /workspace swarm-idf:latest \
-    bash -lc '. $IDF_PATH/export.sh && idf.py build'
+    bash -lc '. $IDF_PATH/export.sh && scripts/microros-pin.sh seed && idf.py build'
   ```
 
 Never build with the host's `idf.py` directly.
+
+`scripts/shell.sh` seeds micro-ROS on the way in, so anything run from that shell
+(including `test/run.py`) is already covered. The one-shot command above bypasses
+it, hence the explicit `seed`.
+
+## micro-ROS pinning
+
+`libmicroros.mk` clones ~29 repos from moving branches, so a cold build is not
+reproducible and eventually stops compiling. `microros.lock` pins every commit
+and `scripts/microros-pin.sh seed` clones them into place; it also strips two
+`@CFLAGS@`/`@CXXFLAGS@` sed stages from `libmicroros.mk` that IDF 5.5 breaks
+(its response-file flags contain `@` and quotes, which produce an empty
+`esp32_toolchain.cmake` and a micro-XRCE-DDS built for POSIX instead of LwIP).
+
+That patch is applied in the submodule's working tree, so
+`components/micro_ros_espidf_component` shows dirty. Expected -- do not commit it.
+
+`scripts/microros-pin.sh lock` re-resolves every branch to its current tip and
+rewrites the lockfile. Pin tips, not dates: these forks alternate upstream syncs
+with their own patch commits, so an arbitrary date can land on an unpatched sync.
 
 ## Testing
 
