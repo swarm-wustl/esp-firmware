@@ -18,6 +18,9 @@
 #include <chrono>
 #include <thread>
 
+#define LSBSENS_GYRO 131 //LSB sensitivity for the gyroscope
+#define LSBSENS_ACCEL 16384 //LSB sensitivity for the accelerometer
+
 static const char *TAG = "main";
 
 namespace HW {
@@ -109,7 +112,7 @@ extern "C" void app_main(void) {
 //       vTaskDelay(pdMS_TO_TICKS(10));
 //     }
 //   }
-// #if defined(CONFIG_MICRO_ROS_ESP_NETIF_WLAN) ||                                \
+// #if defined(CONFIG_MICRO_ROS_ESP_NETIF_WLAN) ||                                
 //     defined(CONFIG_MICRO_ROS_ESP_NETIF_ENET)
 //   ESP_ERROR_CHECK(uros_network_interface_initialize());
 // #endif
@@ -138,7 +141,8 @@ extern "C" void app_main(void) {
 //   xTaskCreate(consumerTaskWrapper, "consumer_task", 4096,
 //               (void *)&consumerTaskData, configMAX_PRIORITIES - 1, NULL);
 
-log("Testing I2C");
+
+   ESP_LOGI(TAG, "Testing I2C");
    uint8_t data[2];
    ESP_ERROR_CHECK(i2c_master_init());
 
@@ -160,7 +164,7 @@ log("Testing I2C");
    ESP_ERROR_CHECK(mpu6050_register_read(IMU_WHO_AM_I_ADDR , data, 1));
    ESP_LOGI(TAG, "WHO_AM_I = %X", data[0]);
 
-
+   int16_t gyroX;
    int16_t gyroY;
    int16_t gyroZ;
 
