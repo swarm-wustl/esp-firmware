@@ -86,24 +86,22 @@ clone_pinned() {
     done < "$LOCKFILE"
 }
 
-# IDF 5.5 passes compiler flags via a response file (@"/path/to/cflags"). The
-# makefile builds its sed expressions with $(subst /,\/,...), which escapes the
-# slashes but not the @ or the quotes -- sed then reads the remainder as a
-# filename, the pipeline dies and esp32_toolchain.cmake is written empty. An
-# empty toolchain means CMAKE_SYSTEM_NAME is never Generic, so micro-XRCE-DDS
-# picks its POSIX transport and fails on sys/socket.h.
-# esp32_toolchain.cmake.in has no @CFLAGS@/@CXXFLAGS@ placeholders, so these two
-# stages only ever broke the pipe.
+# scripts/libmicroros.patch explains what and why. Applied rather than grepped so
+# that a submodule bump which moves those lines fails loudly instead of silently
+# doing nothing.
 patch_makefile() {
-    local mk="$COMPONENT/libmicroros.mk"
+    local patch="$REPO/scripts/libmicroros.patch"
 
-    if ! grep -q '@CFLAGS@' "$mk"; then
+    [ -f "$patch" ] || die "missing $patch"
+
+    if git -C "$COMPONENT" apply --reverse --check "$patch" >/dev/null 2>&1; then
         return 0
     fi
 
-    echo "microros-pin.sh: dropping broken @CFLAGS@/@CXXFLAGS@ sed stages" >&2
-    grep -v -e '@CFLAGS@' -e '@CXXFLAGS@' "$mk" > "$mk.patched"
-    mv "$mk.patched" "$mk"
+    git -C "$COMPONENT" apply "$patch" \
+        || die "could not apply $patch -- did the submodule move? see CLAUDE.md"
+
+    echo "microros-pin.sh: patched libmicroros.mk (IDF 5.5 response-file flags)" >&2
 }
 
 cmd_seed() {

@@ -1,0 +1,26 @@
+Drop the @CFLAGS@/@CXXFLAGS@ sed stages from the esp32_toolchain.cmake rule.
+
+IDF 5.5 passes compiler flags via a response file, so CFLAGS_INTERNAL expands to
+@"/workspace/build/toolchain/cflags". The rule builds its sed expressions with
+$(subst /,\/,...), which escapes the slashes but not the @ or the quotes -- sed
+then reads the remainder as a filename, exits non-zero, and the pipeline writes
+an empty esp32_toolchain.cmake. With no toolchain, CMAKE_SYSTEM_NAME is never
+Generic, so Micro-XRCE-DDS-Client selects its POSIX transport and fails on
+sys/socket.h when cross-compiling for xtensa.
+
+esp32_toolchain.cmake.in contains no @CFLAGS@ or @CXXFLAGS@ placeholders, so
+these two stages substitute nothing and only ever broke the pipe.
+
+diff --git a/libmicroros.mk b/libmicroros.mk
+index e5d22e2..fc0ad8d 100644
+--- a/libmicroros.mk
++++ b/libmicroros.mk
+@@ -27,8 +27,6 @@ $(EXTENSIONS_DIR)/esp32_toolchain.cmake: $(EXTENSIONS_DIR)/esp32_toolchain.cmake
+ 	cat $(EXTENSIONS_DIR)/esp32_toolchain.cmake.in | \
+ 		sed "s/@CMAKE_C_COMPILER@/$(subst /,\/,$(X_CC))/g" | \
+ 		sed "s/@CMAKE_CXX_COMPILER@/$(subst /,\/,$(X_CXX))/g" | \
+-		sed "s/@CFLAGS@/$(subst /,\/,$(CFLAGS_INTERNAL))/g" | \
+-		sed "s/@CXXFLAGS@/$(subst /,\/,$(CXXFLAGS_INTERNAL))/g" | \
+ 		sed "s/@IDF_TARGET@/$(subst /,\/,$(IDF_TARGET))/g" | \
+ 		sed "s/@IDF_PATH@/$(subst /,\/,$(IDF_PATH))/g" | \
+ 		sed "s/@BUILD_CONFIG_DIR@/$(subst /,\/,$(BUILD_DIR)/config)/g" \

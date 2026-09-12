@@ -48,10 +48,12 @@ it, hence the explicit `seed`.
 
 `libmicroros.mk` clones ~29 repos from moving branches, so a cold build is not
 reproducible and eventually stops compiling. `microros.lock` pins every commit
-and `scripts/microros-pin.sh seed` clones them into place; it also strips two
-`@CFLAGS@`/`@CXXFLAGS@` sed stages from `libmicroros.mk` that IDF 5.5 breaks
-(its response-file flags contain `@` and quotes, which produce an empty
-`esp32_toolchain.cmake` and a micro-XRCE-DDS built for POSIX instead of LwIP).
+and `scripts/microros-pin.sh seed` clones them into place; it also applies
+`scripts/libmicroros.patch`, which drops two `@CFLAGS@`/`@CXXFLAGS@` sed stages
+that IDF 5.5 breaks (its response-file flags contain `@` and quotes, which
+produce an empty `esp32_toolchain.cmake` and a micro-XRCE-DDS built for POSIX
+instead of LwIP). The patch header explains it in full. If a submodule bump moves
+those lines the apply fails loudly rather than silently doing nothing.
 
 That patch is applied in the submodule's working tree, so
 `components/micro_ros_espidf_component` shows dirty. Expected -- do not commit it.
@@ -74,7 +76,7 @@ The app (`test/main/main.cpp`) is `unity_run_menu()`. `test/pytest_dwm.py` branc
 
 Each target keeps its own `sdkconfig.host`/`sdkconfig.device` + `build_host`/`build_device` dir.
 
-The `--flash_*` esptool deprecation warnings on device runs are expected and can't be fixed here: `pytest-embedded-serial-esp` requires esptool v5 (which renamed those options), while IDF 5.5 still emits the old form. Can't downgrade esptool (v5 is required) or upgrade IDF past 5.5 (micro-ROS's tested ceiling). Harmless — leave them. The host tier works because the DWM/HAL path is hardware-agnostic: no IDF or micro-ROS headers, only the `HAL::` concepts. Keep it that way — a hardware-only test belongs behind `if(NOT IDF_TARGET STREQUAL "linux")` in `components/dwm/test/CMakeLists.txt`, and `swarm_hal.h`'s micro-ROS half must not leak onto the `peripheral_hal.h` path.
+The `--flash_*` esptool deprecation warnings on device runs are expected and can't be fixed here: `pytest-embedded-serial-esp` requires esptool v5 (which renamed those options), while IDF 5.5 still emits the old form. Can't downgrade esptool (v5 is required) or upgrade IDF past 5.5: micro-ROS upstream only tests ESP-IDF v4.4 and v5.2 (see the component README and its CI matrix), so 5.5 is already three minor versions past its tested range -- that gap is what `scripts/libmicroros.patch` exists to bridge, and moving further widens it. Harmless — leave them. The host tier works because the DWM/HAL path is hardware-agnostic: no IDF or micro-ROS headers, only the `HAL::` concepts. Keep it that way — a hardware-only test belongs behind `if(NOT IDF_TARGET STREQUAL "linux")` in `components/dwm/test/CMakeLists.txt`, and `swarm_hal.h`'s micro-ROS half must not leak onto the `peripheral_hal.h` path.
 
 
 When invoked:
