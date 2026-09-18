@@ -75,6 +75,12 @@ seed_microros
 device_args=()
 if [ "$skip_device" -eq 1 ]; then
   echo "shell.sh: nodevice -- skipping board forwarding (build/host-test only)" >&2
+elif [ -e "$DEVICE" ]; then
+  # Native Linux (and WSL2 with the device already attached via usbipd) has
+  # direct host access to /dev/ttyUSB0 -- no USB/IP tunneling needed. The
+  # pyusbip/devmgr dance in usbip-host.sh only exists to work around Docker
+  # Desktop's VM on macOS/Windows, where this path never exists on the host.
+  device_args=(--device "$DEVICE")
 elif bash "$REPO/scripts/usbip-host.sh"; then
   device_args=(--device "$DEVICE")
 else
