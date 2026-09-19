@@ -62,9 +62,12 @@ only. The ones that actually move are eProsima's `Micro-XRCE-DDS-Client` and
 against.
 
 `scripts/microros-pin.sh lock` re-resolves every branch to its current tip and
-rewrites the lockfile. Pin tips, not dates: these forks alternate upstream syncs
-with their own patch commits, so an arbitrary date can land on a sync that has not
-had the micro-ROS patch applied yet. Re-lock after bumping the submodule.
+rewrites the lockfile. Only do that when you actually want newer dependencies, or
+when a submodule bump changes the set of repos `libmicroros.mk` clones -- a bump
+alone is not a reason, and re-locking trades verified pins for unverified ones.
+Pin tips, not dates: these forks alternate upstream syncs with their own patch
+commits, so an arbitrary date can land on a sync that has not had the micro-ROS
+patch applied yet.
 
 ## Testing
 
