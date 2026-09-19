@@ -13,7 +13,8 @@
 
 set -euo pipefail
 
-PYUSBIP_DIR="${PYUSBIP_DIR:-$HOME/pyusbip}"
+PYUSBIP_LOG="${PYUSBIP_LOG:-/tmp/pyusbip.log}"
+REPO_PARENT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 CP210X="10c4:ea60"
 REMOTE="host.docker.internal"
 DEVMGR_IMAGE="jonathanberi/devmgr"
@@ -25,17 +26,61 @@ vm() { docker exec devmgr nsenter -t 1 -m "$@"; }
 # esptool -- so a fresh pyusbip means we must detach and re-attach.
 pyusbip_fresh=0
 
+pyusbip_candidates() {
+  if [ -n "${PYUSBIP_DIR:-}" ]; then
+    printf '%s\n' "$PYUSBIP_DIR"
+  fi
+  printf '%s\n' \
+    "$HOME/pyusbip" \
+    "$HOME/src/pyusbip" \
+    "$HOME/Developer/pyusbip" \
+    "$REPO_PARENT/pyusbip"
+}
+
+find_pyusbip() {
+  local dir
+  while read -r dir; do
+    if [ -f "$dir/pyusbip.py" ]; then
+      printf '%s\n' "$dir"
+      return 0
+    fi
+  done < <(pyusbip_candidates)
+  return 1
+}
+
+# pyusbip needs pyusb + libusb, which a checkout normally keeps in its own venv;
+# activating it is pointless when invoking the interpreter by path
+pyusbip_python() {
+  local dir=$1 py
+  for py in "$dir/.venv/bin/python" "$dir/venv/bin/python"; do
+    if [ -x "$py" ]; then
+      printf '%s\n' "$py"
+      return 0
+    fi
+  done
+  command -v python3
+}
+
 start_pyusbip() {
   if lsof -nP -iTCP:3240 -sTCP:LISTEN >/dev/null 2>&1; then
     return
   fi
-  echo "[usbip] starting pyusbip"
-  (cd "$PYUSBIP_DIR" && source .venv/bin/activate &&
-    nohup python pyusbip.py >/tmp/pyusbip.log 2>&1 &)
+  local dir py
+  dir=$(find_pyusbip) || {
+    echo "[usbip] pyusbip.py not found; set PYUSBIP_DIR to its checkout. Looked in:" >&2
+    pyusbip_candidates | sed 's/^/[usbip]   /' >&2
+    exit 1
+  }
+  py=$(pyusbip_python "$dir") || {
+    echo "[usbip] no python found for $dir" >&2
+    exit 1
+  }
+  echo "[usbip] starting pyusbip from $dir ($py)"
+  (cd "$dir" && nohup "$py" pyusbip.py >"$PYUSBIP_LOG" 2>&1 &)
   sleep 2
   lsof -nP -iTCP:3240 -sTCP:LISTEN >/dev/null 2>&1 ||
     {
-      echo "[usbip] pyusbip failed to start; see /tmp/pyusbip.log" >&2
+      echo "[usbip] pyusbip failed to start; see $PYUSBIP_LOG" >&2
       exit 1
     }
   pyusbip_fresh=1
