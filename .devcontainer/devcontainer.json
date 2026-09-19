@@ -8,6 +8,10 @@
   "mounts": [
     "source=/dev,target=/dev,type=bind"
   ],
+  "runArgs": [
+    "--device-cgroup-rule=c 188:* rmw",
+    "--device-cgroup-rule=c 166:* rmw"
+  ],
   "initializeCommand": "bash ${localWorkspaceFolder}/scripts/usbip-host.sh || true",
   "containerEnv": {
     "LC_ALL": "C.UTF-8",
