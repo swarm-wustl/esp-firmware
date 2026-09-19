@@ -22,5 +22,12 @@ RUN IDF_PATH_FORCE=1 . $IDF_PATH/export.sh && \
     ln -sf "$(ls /opt/esp/tools/esp-clang/*/esp-clang/bin/clangd | head -1)" \
         /usr/local/bin/clangd
 
+# the dev container extension replaces the image entrypoint (/opt/esp/entrypoint.sh,
+# the only thing that sources export.sh), so shells start with no idf.py on PATH.
+# profile.d covers login shells and the extension's userEnvProbe; bashrc covers
+# plain interactive terminals, which read neither /etc/profile nor .bash_profile
+RUN printf '%s\n' '. "$IDF_PATH/export.sh" >/dev/null 2>&1' > /etc/profile.d/10-esp-idf.sh && \
+    printf '%s\n' '. /etc/profile.d/10-esp-idf.sh' >> /root/.bashrc
+
 ENV LC_ALL=C.UTF-8
 ENV LANG=C.UTF-8
