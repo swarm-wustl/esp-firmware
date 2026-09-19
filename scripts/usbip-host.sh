@@ -37,6 +37,19 @@ pyusbip_candidates() {
     "$REPO_PARENT/pyusbip"
 }
 
+# pipx installs a console script rather than a checkout; its shim dir is often
+# missing from PATH in a non-login shell, hence the explicit ~/.local/bin probe
+find_pyusbip_bin() {
+  local bin
+  for bin in "${PYUSBIP_BIN:-}" "$HOME/.local/bin/pyusbip"; do
+    if [ -n "$bin" ] && [ -x "$bin" ]; then
+      printf '%s\n' "$bin"
+      return 0
+    fi
+  done
+  command -v pyusbip 2>/dev/null
+}
+
 find_pyusbip() {
   local dir
   while read -r dir; do
@@ -65,18 +78,25 @@ start_pyusbip() {
   if lsof -nP -iTCP:3240 -sTCP:LISTEN >/dev/null 2>&1; then
     return
   fi
-  local dir py
-  dir=$(find_pyusbip) || {
-    echo "[usbip] pyusbip.py not found; set PYUSBIP_DIR to its checkout. Looked in:" >&2
-    pyusbip_candidates | sed 's/^/[usbip]   /' >&2
-    exit 1
-  }
-  py=$(pyusbip_python "$dir") || {
-    echo "[usbip] no python found for $dir" >&2
-    exit 1
-  }
-  echo "[usbip] starting pyusbip from $dir ($py)"
-  (cd "$dir" && nohup "$py" pyusbip.py >"$PYUSBIP_LOG" 2>&1 &)
+  local bin dir py
+  if bin=$(find_pyusbip_bin); then
+    echo "[usbip] starting pyusbip ($bin)"
+    (nohup "$bin" >"$PYUSBIP_LOG" 2>&1 &)
+  else
+    dir=$(find_pyusbip) || {
+      echo "[usbip] pyusbip not found; set PYUSBIP_BIN to the executable or" >&2
+      echo "[usbip] PYUSBIP_DIR to a checkout. Looked for an executable named" >&2
+      echo "[usbip] pyusbip on PATH and in ~/.local/bin, and for pyusbip.py in:" >&2
+      pyusbip_candidates | sed 's/^/[usbip]   /' >&2
+      exit 1
+    }
+    py=$(pyusbip_python "$dir") || {
+      echo "[usbip] no python found for $dir" >&2
+      exit 1
+    }
+    echo "[usbip] starting pyusbip from $dir ($py)"
+    (cd "$dir" && nohup "$py" pyusbip.py >"$PYUSBIP_LOG" 2>&1 &)
+  fi
   sleep 2
   lsof -nP -iTCP:3240 -sTCP:LISTEN >/dev/null 2>&1 ||
     {
