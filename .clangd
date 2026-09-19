@@ -19,3 +19,24 @@ If:
   PathMatch: ".*test/.*"
 CompileFlags:
   CompilationDatabase: test/build_device
+
+---
+# Header-only components register with `SRCS ""`, so they contribute no entry to
+# compile_commands.json and clangd infers a command from whatever nearby TU it
+# picks. That TU carries only its own component's REQUIRES -- and may be a C
+# source, which parses these as C -- so pin the sibling include dirs and the
+# language rather than leaving both to the guess
+If:
+  PathMatch: 'components/(dwm|l298n|swarm_consumer|swarm_hal|swarm_queue)/.*\.h'
+CompileFlags:
+  Remove:
+    - -std=gnu17
+  Add:
+    - -xc++
+    - -std=gnu++23
+    - -I/workspace/components/swarm_hal
+    - -I/workspace/components/swarm_queue
+    - -I/workspace/components/swarm_consumer
+    - -I/workspace/components/dwm
+    - -I/workspace/components/l298n
+    - -I/workspace/components/esp32/include
