@@ -4,6 +4,7 @@
 #include "dwm_data.h"
 #include "dwm_regs.h"
 #include "peripheral_hal.h"
+#include "assembly.h"
 #include "resources.h"
 #include <algorithm>
 #include <array>
@@ -235,37 +236,30 @@ constexpr std::string_view PRFToString(PRF prf) noexcept {
   return "UNKNOWN PRF"sv;
 }
 
-namespace Ranging {
-struct Pins {
+struct DWMPins {
   int cs;
   int reset;
   int irq;
 };
 
-// declared rather than passed to the constructor so the pins are visible to
-// the system config, which is the only place that can see a collision with
-// another peripheral's claim
-template <Pins P> struct Declaration {
-  static constexpr Pins pins = P;
-
-  static constexpr std::array claims{
-      HAL::Claim{HAL::Resource::Gpio, P.cs, HAL::Use::Exclusive},
-      HAL::Claim{HAL::Resource::Gpio, P.reset, HAL::Use::Exclusive},
-      HAL::Claim{HAL::Resource::Gpio, P.irq, HAL::Use::Exclusive},
-  };
-};
-} // namespace Ranging
-
-template <HAL::GenericSPIController SPI, HAL::GenericGPIOController GPIO>
+template <HAL::GenericSPIController SPI, HAL::GenericGPIOController GPIO,
+          DWMPins Pins>
+  requires HAL::Claiming<SPI>
 class DWM {
   static_assert(std::endian::native == std::endian::little,
                 "DWM1000 requires little-endian architecture");
 
 public:
-  // TODO: make GPIO rvalue ref?
-  DWM(SPI &&spi, GPIO gpio, uint8_t rst_pin, uint8_t irq_pin)
-      : spi_{std::move(spi)}, gpio_{std::move(gpio)}, rst_pin_{rst_pin},
-        irq_pin_{irq_pin} {
+  // the bus lines come from the SPI it owns; cs, reset and irq are its own
+  static constexpr auto claims = HAL::concat(
+      std::array{
+          HAL::Claim{HAL::Resource::Gpio, Pins.cs, HAL::Use::Exclusive},
+          HAL::Claim{HAL::Resource::Gpio, Pins.reset, HAL::Use::Exclusive},
+          HAL::Claim{HAL::Resource::Gpio, Pins.irq, HAL::Use::Exclusive},
+      },
+      SPI::claims);
+
+  explicit DWM(Swarm::Assembly assembly) : spi_{assembly, Pins.cs} {
     hard_reset();
   }
 
@@ -648,10 +642,10 @@ private:
   }
 
   void hard_reset() {
-    gpio_.set_direction(rst_pin_, HAL::PinMode::Output);
-    gpio_.set_level(rst_pin_, HAL::Voltage::LOW);
+    gpio_.set_direction(Pins.reset, HAL::PinMode::Output);
+    gpio_.set_level(Pins.reset, HAL::Voltage::LOW);
     gpio_.delay_ms(10);
-    gpio_.set_level(rst_pin_, HAL::Voltage::HIGH);
+    gpio_.set_level(Pins.reset, HAL::Voltage::HIGH);
     gpio_.delay_ms(10);
   }
 
@@ -692,9 +686,7 @@ private:
   }
 
   SPI spi_;
-  GPIO gpio_;
-  uint8_t rst_pin_{};
-  uint8_t irq_pin_{};
+  GPIO gpio_{};
 };
 
 #endif

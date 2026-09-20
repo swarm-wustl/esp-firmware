@@ -87,7 +87,10 @@ Adding a platform means declaring a `wheels<Style::X>()` specialisation and its
 pin rows -- no algorithm is written or specialised. `Swarm::chassis` pairs a
 geometry with a driver and only exists if they fit; `HAL::Claim` lets every
 peripheral declare the pins and channels it takes, so a collision between two
-unrelated subsystems is a build error rather than a mystery on the bench.
+unrelated subsystems is a build error rather than a mystery on the bench. A
+device owns its sub-devices and folds in their claims (`DWM` holds its SPI,
+`L298N::MotorDriver` its PWM), so the config sees the whole tree from the two
+types it is handed.
 
 ## DW1000 references
 

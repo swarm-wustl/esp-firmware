@@ -11,9 +11,9 @@
 static const char *TAG = "spi";
 
 namespace ESP32 {
-constexpr int SPI_SCK = SpiBus::sck;
-constexpr int SPI_MISO = SpiBus::miso;
-constexpr int SPI_MOSI = SpiBus::mosi;
+constexpr int SPI_SCK = SPI::sck;
+constexpr int SPI_MISO = SPI::miso;
+constexpr int SPI_MOSI = SPI::mosi;
 
 inline constexpr size_t BYTES_TO_BITS(size_t bytes) { return bytes * 8; }
 

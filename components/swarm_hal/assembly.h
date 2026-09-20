@@ -2,25 +2,19 @@
 #ifndef ASSEMBLY_H
 #define ASSEMBLY_H
 
-#include "drive.h"
+#include "resources.h"
 
-// Keep this header bare by forward-declaring chassis_impl
-// We don't need its definition for anything that requires Assembly
-// (which is a lot of things!)
-// Should help keep file sizes/compile times down
 namespace Swarm {
-template <Drive::Style S, typename Driver, typename... Peripherals>
-struct chassis_impl;
+template <HAL::Claiming... Peripherals> struct system_impl;
 
-// Anything that claims pins must take an Assembly in its ctor
-// This way, the only way to construct one of these is through the ::make<T>
-// method so the compile-time type checks cannot be circumvented.
-// Completely type-safe at comptime by construction.
+// peripherals that claim hardware take one of these to be constructed, and
+// only a system can make one -- so nothing that owns a pin can exist outside a
+// config that declared it. A device that builds a sub-device passes its own
+// token down
 class Assembly {
   Assembly() = default;
 
-  template <Drive::Style S, typename Driver, typename... Peripherals>
-  friend struct chassis_impl;
+  template <HAL::Claiming... Peripherals> friend struct system_impl;
 };
 } // namespace Swarm
 

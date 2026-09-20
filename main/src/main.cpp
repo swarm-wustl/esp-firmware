@@ -19,8 +19,6 @@ static const char *TAG = "main";
 
 namespace HW {
 using SPI = ESP32::SPI;
-using SpiBus = ESP32::SpiBus;
-using LedcTimer = ESP32::LedcTimer;
 using GPIO = ESP32::GPIO;
 using PWM = ESP32::PWM;
 
@@ -32,11 +30,11 @@ constexpr auto MOTOR_PINS =
 
 using MotorDriver = L298N::MotorDriver<GPIO, PWM, MOTOR_PINS>;
 
-using RangingPins = Ranging::Declaration<Ranging::Pins{
-    .cs = GPIO_NUM_4, .reset = GPIO_NUM_27, .irq = GPIO_NUM_34}>;
+using Dwm =
+    DWM<SPI, GPIO,
+        DWMPins{.cs = GPIO_NUM_4, .reset = GPIO_NUM_27, .irq = GPIO_NUM_34}>;
 
-using Chassis = Swarm::chassis<Drive::Style::DIFFERENTIAL, MotorDriver,
-                               RangingPins, SpiBus, LedcTimer>;
+using Chassis = Swarm::chassis<Drive::Style::DIFFERENTIAL, MotorDriver, Dwm>;
 
 constexpr Drive::Style DRIVE_STYLE = Chassis::style;
 
@@ -81,10 +79,7 @@ extern "C" void app_main(void) {
   ESP_LOGI(TAG, "Testing UWB");
   ESP_LOGI(TAG, "FreeRTOS tick: %d Hz", CONFIG_FREERTOS_HZ);
 
-  HW::SPI spi = HW::Chassis::make<HW::SPI>(HW::RangingPins::pins.cs);
-  HW::GPIO gpio{};
-  DWM dwm_sensor{std::move(spi), std::move(gpio), HW::RangingPins::pins.reset,
-                 HW::RangingPins::pins.irq};
+  HW::Dwm dwm_sensor = HW::Chassis::make<HW::Dwm>();
 
   // bring-up: flip to false on the responder board
   constexpr bool kInitiator = true;
@@ -127,9 +122,8 @@ extern "C" void app_main(void) {
     return;
   }
 
-  static ConsumerTaskData consumerTaskData{
-      HW::Chassis::motors(HW::GPIO{}, HW::Chassis::make<HW::PWM>()),
-      std::move(*queue)};
+  static ConsumerTaskData consumerTaskData{HW::Chassis::make<HW::MotorDriver>(),
+                                           std::move(*queue)};
 
   ESP_LOGI(TAG, "Hello world!");
 

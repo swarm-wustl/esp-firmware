@@ -66,13 +66,15 @@ template <std::same_as<MotorPins>... Pins> consteval auto motors(Pins... pins) {
 
 template <HAL::GenericGPIOController GPIO, HAL::GenericPWMController PWM,
           auto Pins>
+  requires HAL::Claiming<PWM>
 class MotorDriver {
 public:
   static constexpr auto motors = roster_of(Pins);
-  static constexpr auto claims = claims_of(Pins);
 
-  MotorDriver(Swarm::Assembly, GPIO gpio, PWM pwm)
-      : gpio_(std::move(gpio)), pwm_(std::move(pwm)) {
+  // the LEDC timer belongs to the PWM this driver owns
+  static constexpr auto claims = HAL::concat(claims_of(Pins), PWM::claims);
+
+  explicit MotorDriver(Swarm::Assembly assembly) : pwm_(assembly) {
     for (const MotorPins &motor : Pins) {
       gpio_.set_direction(motor.in_a, HAL::PinMode::Output);
       gpio_.set_direction(motor.in_b, HAL::PinMode::Output);
@@ -104,7 +106,7 @@ public:
   }
 
 private:
-  GPIO gpio_;
+  GPIO gpio_{};
   PWM pwm_;
 
   void set_standby(HAL::Voltage level) {

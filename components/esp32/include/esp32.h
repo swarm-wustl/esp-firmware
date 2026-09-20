@@ -3,6 +3,7 @@
 
 #include <array>
 #include <memory>
+#include <tuple>
 
 #include <driver/spi_common.h>
 #include <driver/spi_master.h>
@@ -15,23 +16,20 @@
 #include "swarm_hal.h"
 
 namespace ESP32 {
-// the bus lines are fixed by spi.cpp's SPI2_HOST setup; declared here so the
-// system config can see them -- a motor wired onto SCK is otherwise invisible
-struct SpiBus {
+class SPI {
+public:
+  // the bus lines are fixed by spi.cpp's SPI2_HOST setup; every device on the
+  // bus drives them, so they are Shared and only the CS is the device's own
   static constexpr int sck = 18;
   static constexpr int miso = 19;
   static constexpr int mosi = 23;
 
-  // Shared: every device on the bus drives these, only the CS lines are theirs
   static constexpr std::array claims{
       HAL::Claim{HAL::Resource::Gpio, sck, HAL::Use::Shared},
       HAL::Claim{HAL::Resource::Gpio, miso, HAL::Use::Shared},
       HAL::Claim{HAL::Resource::Gpio, mosi, HAL::Use::Shared},
   };
-};
 
-class SPI {
-public:
   SPI(Swarm::Assembly, int cs);
   ~SPI();
 
@@ -54,17 +52,17 @@ private:
 
 // the constructor configures one LEDC timer for the whole channel group, so a
 // second PWM wanting a different frequency would silently retune the first
-struct LedcTimer {
+class PWM {
+public:
+  // the constructor configures one LEDC timer for the whole channel group, so
+  // a second PWM wanting a different frequency would silently retune the first
   static constexpr int timer = 0;
   static constexpr uint32_t frequency_hz = 1000;
 
   static constexpr std::array claims{
       HAL::Claim{HAL::Resource::LedcTimer, timer, HAL::Use::Shared},
   };
-};
 
-class PWM {
-public:
   PWM(Swarm::Assembly);
 
   PWM(const PWM &) = delete;
