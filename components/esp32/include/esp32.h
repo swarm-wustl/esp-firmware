@@ -52,9 +52,20 @@ private:
   void swap(SPI &other);
 };
 
+// the constructor configures one LEDC timer for the whole channel group, so a
+// second PWM wanting a different frequency would silently retune the first
+struct LedcTimer {
+  static constexpr int timer = 0;
+  static constexpr uint32_t frequency_hz = 1000;
+
+  static constexpr std::array claims{
+      HAL::Claim{HAL::Resource::LedcTimer, timer, HAL::Use::Shared},
+  };
+};
+
 class PWM {
 public:
-  PWM();
+  PWM(Swarm::Assembly);
 
   PWM(const PWM &) = delete;
   void operator=(const PWM &) = delete;

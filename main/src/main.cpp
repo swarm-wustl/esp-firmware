@@ -20,6 +20,7 @@ static const char *TAG = "main";
 namespace HW {
 using SPI = ESP32::SPI;
 using SpiBus = ESP32::SpiBus;
+using LedcTimer = ESP32::LedcTimer;
 using GPIO = ESP32::GPIO;
 using PWM = ESP32::PWM;
 
@@ -35,7 +36,7 @@ using RangingPins = Ranging::Declaration<Ranging::Pins{
     .cs = GPIO_NUM_4, .reset = GPIO_NUM_27, .irq = GPIO_NUM_34}>;
 
 using Chassis = Swarm::chassis<Drive::Style::DIFFERENTIAL, MotorDriver,
-                               RangingPins, SpiBus>;
+                               RangingPins, SpiBus, LedcTimer>;
 
 constexpr Drive::Style DRIVE_STYLE = Chassis::style;
 
@@ -126,10 +127,9 @@ extern "C" void app_main(void) {
     return;
   }
 
-  // Make the struct static so it lives as long as the program (incase mani()
-  // ever terminates)
   static ConsumerTaskData consumerTaskData{
-      HW::Chassis::motors(HW::GPIO{}, HW::PWM{}), std::move(*queue)};
+      HW::Chassis::motors(HW::GPIO{}, HW::Chassis::make<HW::PWM>()),
+      std::move(*queue)};
 
   ESP_LOGI(TAG, "Hello world!");
 

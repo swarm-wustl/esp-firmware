@@ -68,10 +68,10 @@ TEST_CASE("roster: names must be unique", "[resources]") {
   TEST_ASSERT_TRUE(true);
 }
 
-TEST_CASE("roster: covers the style's roles, extra motors allowed",
-          "[resources]") {
+TEST_CASE("roster: names exactly the motors the style commands", "[resources]") {
   static_assert(Drive::covers<kDifferentialRoster, Drive::Style::DIFFERENTIAL>());
-  static_assert(Drive::covers<kExtraMotor, Drive::Style::DIFFERENTIAL>());
   static_assert(!Drive::covers<kMissingRight, Drive::Style::DIFFERENTIAL>());
+  static_assert(!Drive::covers<kExtraMotor, Drive::Style::DIFFERENTIAL>());
+  static_assert(!Drive::covers<kDuplicated, Drive::Style::DIFFERENTIAL>());
   TEST_ASSERT_TRUE(true);
 }

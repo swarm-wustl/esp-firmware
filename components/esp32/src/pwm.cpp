@@ -6,11 +6,12 @@
 #include <algorithm>
 
 static constexpr ledc_mode_t MODE = LEDC_LOW_SPEED_MODE;
-static constexpr ledc_timer_t TIMER = LEDC_TIMER_0;
+static constexpr ledc_timer_t TIMER =
+    static_cast<ledc_timer_t>(ESP32::LedcTimer::timer);
 static constexpr ledc_timer_bit_t DUTY_RESOLUTION = LEDC_TIMER_10_BIT;
-static constexpr uint32_t FREQUENCY_HZ = 1000;
+static constexpr uint32_t FREQUENCY_HZ = ESP32::LedcTimer::frequency_hz;
 
-ESP32::PWM::PWM() {
+ESP32::PWM::PWM(Swarm::Assembly) {
   ledc_timer_config_t timer = {
       .speed_mode = MODE,
       .duty_resolution = DUTY_RESOLUTION,

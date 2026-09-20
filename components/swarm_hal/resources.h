@@ -8,7 +8,7 @@
 #include <cstdint>
 
 namespace HAL {
-enum class Resource : uint8_t { Gpio, PwmChannel };
+enum class Resource : uint8_t { Gpio, PwmChannel, LedcTimer };
 
 // a pin driven by one peripheral is Exclusive; one deliberately tied together
 // -- a shared standby line, the MOSI/SCLK of a bus -- is Shared. Two Exclusive

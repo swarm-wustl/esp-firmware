@@ -26,10 +26,6 @@ struct chassis_impl {
   using driver_t = Driver;
   using frame_t = Drive::Frame<S>;
 
-  template <typename Decl>
-  static constexpr bool declares =
-      (std::same_as<Decl, Peripherals> || ... || false);
-
   template <typename T, typename... Args> static T make(Args &&...args) {
     return T{Assembly{}, std::forward<Args>(args)...};
   }

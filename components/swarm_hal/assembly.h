@@ -4,13 +4,18 @@
 
 #include "drive.h"
 
+// Keep this header bare by forward-declaring chassis_impl
+// We don't need its definition for anything that requires Assembly
+// (which is a lot of things!)
+// Should help keep file sizes/compile times down
 namespace Swarm {
 template <Drive::Style S, typename Driver, typename... Peripherals>
 struct chassis_impl;
 
-// peripherals that claim pins take one of these to be constructed, and only a
-// chassis can make one -- so nothing that owns hardware can exist outside a
-// config that declared it
+// Anything that claims pins must take an Assembly in its ctor
+// This way, the only way to construct one of these is through the ::make<T>
+// method so the compile-time type checks cannot be circumvented.
+// Completely type-safe at comptime by construction.
 class Assembly {
   Assembly() = default;
 
