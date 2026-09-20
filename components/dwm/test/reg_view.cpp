@@ -8,7 +8,7 @@ constexpr DWMPins DW1000{
     .cs = GPIO_NUM_4, .reset = GPIO_NUM_27, .irq = GPIO_NUM_34};
 
 // these tests drive the register view over a bare SPI, not a whole DW1000
-using TestSystem = Swarm::system<ESP32::SPI>;
+using TestSystem = Swarm::system<ESP32::SpiBus, ESP32::SPI>;
 } // namespace
 
 #include <algorithm>
@@ -30,7 +30,8 @@ void hard_reset() {
 
 TEST_CASE("Test read device ID register view", "[dwm_reg]") {
   hard_reset();
-  auto spi = TestSystem::make<ESP32::SPI>(DW1000.cs);
+  auto bus = TestSystem::make<ESP32::SpiBus>();
+  auto spi = TestSystem::make<ESP32::SPI>(bus, DW1000.cs);
   DWMRegisterView<ESP32::SPI, DWMRegisterID::DEV_ID> dev_id_reg{spi};
 
   TEST_ASSERT_EQUAL(dev_id_reg.size(), 4);
@@ -42,7 +43,8 @@ TEST_CASE("Test read device ID register view", "[dwm_reg]") {
 
 TEST_CASE("Test write and read-back TX buffer", "[dwm_reg]") {
   hard_reset();
-  auto spi = TestSystem::make<ESP32::SPI>(DW1000.cs);
+  auto bus = TestSystem::make<ESP32::SpiBus>();
+  auto spi = TestSystem::make<ESP32::SPI>(bus, DW1000.cs);
   DWMRegisterView<ESP32::SPI, DWMRegisterID::TX_BUFFER> tx_buf_reg{spi};
 
   std::array<std::array<std::byte, 1024>, 2> test_data;

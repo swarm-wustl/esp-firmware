@@ -34,7 +34,10 @@ using Dwm =
     DWM<SPI, GPIO,
         DWMPins{.cs = GPIO_NUM_4, .reset = GPIO_NUM_27, .irq = GPIO_NUM_34}>;
 
-using Chassis = Swarm::chassis<Drive::Style::DIFFERENTIAL, MotorDriver, Dwm>;
+using SpiBus = ESP32::SpiBus;
+
+using Chassis =
+    Swarm::chassis<Drive::Style::DIFFERENTIAL, MotorDriver, SpiBus, Dwm>;
 
 constexpr Drive::Style DRIVE_STYLE = Chassis::style;
 
@@ -79,7 +82,8 @@ extern "C" void app_main(void) {
   ESP_LOGI(TAG, "Testing UWB");
   ESP_LOGI(TAG, "FreeRTOS tick: %d Hz", CONFIG_FREERTOS_HZ);
 
-  HW::Dwm dwm_sensor = HW::Chassis::make<HW::Dwm>();
+  HW::SpiBus spi_bus = HW::Chassis::make<HW::SpiBus>();
+  HW::Dwm dwm_sensor = HW::Chassis::make<HW::Dwm>(spi_bus);
 
   // bring-up: flip to false on the responder board
   constexpr bool kInitiator = true;

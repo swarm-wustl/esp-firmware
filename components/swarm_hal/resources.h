@@ -10,7 +10,7 @@
 #include <ranges>
 
 namespace HAL {
-enum class Resource : uint8_t { Gpio, PwmChannel, LedcTimer };
+enum class Resource : uint8_t { Gpio, PwmChannel, LedcTimer, SpiHost };
 
 // a pin driven by one peripheral is Exclusive; one deliberately tied together
 // -- a shared standby line, the MOSI/SCLK of a bus -- is Shared. Two Exclusive

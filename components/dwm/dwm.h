@@ -244,22 +244,21 @@ struct DWMPins {
 
 template <HAL::GenericSPIController SPI, HAL::GenericGPIOController GPIO,
           DWMPins Pins>
-  requires HAL::Claiming<SPI>
 class DWM {
   static_assert(std::endian::native == std::endian::little,
                 "DWM1000 requires little-endian architecture");
 
 public:
-  // the bus lines come from the SPI it owns; cs, reset and irq are its own
-  static constexpr auto claims = HAL::concat(
-      std::array{
-          HAL::Claim{HAL::Resource::Gpio, Pins.cs, HAL::Use::Exclusive},
-          HAL::Claim{HAL::Resource::Gpio, Pins.reset, HAL::Use::Exclusive},
-          HAL::Claim{HAL::Resource::Gpio, Pins.irq, HAL::Use::Exclusive},
-      },
-      SPI::claims);
+  // the bus is declared separately and shared; these three pins are the
+  // DW1000's own
+  static constexpr std::array claims{
+      HAL::Claim{HAL::Resource::Gpio, Pins.cs, HAL::Use::Exclusive},
+      HAL::Claim{HAL::Resource::Gpio, Pins.reset, HAL::Use::Exclusive},
+      HAL::Claim{HAL::Resource::Gpio, Pins.irq, HAL::Use::Exclusive},
+  };
 
-  explicit DWM(Swarm::Assembly assembly) : spi_{assembly, Pins.cs} {
+  template <typename Bus>
+  DWM(Swarm::Assembly assembly, Bus &bus) : spi_{assembly, bus, Pins.cs} {
     hard_reset();
   }
 

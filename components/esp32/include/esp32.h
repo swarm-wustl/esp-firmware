@@ -11,26 +11,51 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#include "driver/gpio.h"
 #include "assembly.h"
+#include "driver/gpio.h"
 #include "swarm_hal.h"
 
 namespace ESP32 {
-class SPI {
+// the bus owns the peripheral: spi_bus_initialize/free happen once here, and
+// devices attach to it. SPI2_HOST is Exclusive -- a second initialize on the
+// same host fails at runtime and only gets logged
+class SpiBus {
 public:
-  // the bus lines are fixed by spi.cpp's SPI2_HOST setup; every device on the
-  // bus drives them, so they are Shared and only the CS is the device's own
+  static constexpr spi_host_device_t host = SPI2_HOST;
   static constexpr int sck = 18;
   static constexpr int miso = 19;
   static constexpr int mosi = 23;
 
   static constexpr std::array claims{
+      HAL::Claim{HAL::Resource::SpiHost, static_cast<int>(host),
+                 HAL::Use::Exclusive},
       HAL::Claim{HAL::Resource::Gpio, sck, HAL::Use::Shared},
       HAL::Claim{HAL::Resource::Gpio, miso, HAL::Use::Shared},
       HAL::Claim{HAL::Resource::Gpio, mosi, HAL::Use::Shared},
   };
 
-  SPI(Swarm::Assembly, int cs);
+  explicit SpiBus(Swarm::Assembly);
+  ~SpiBus();
+
+  SpiBus(const SpiBus &) = delete;
+  void operator=(const SpiBus &) = delete;
+
+  SpiBus(SpiBus &&other);
+  SpiBus &operator=(SpiBus &&other);
+
+private:
+  bool owns_bus_{};
+
+  void swap(SpiBus &other);
+};
+
+// a device on a bus: it adds itself with its own chip select and claims
+// nothing, since whoever declares the device knows the CS pin
+class SPI {
+public:
+  static constexpr std::array<HAL::Claim, 0> claims{};
+
+  SPI(Swarm::Assembly, SpiBus &bus, int cs);
   ~SPI();
 
   SPI(const SPI &) = delete;
@@ -44,35 +69,9 @@ public:
 
 private:
   int cs_{};
-  bool owns_spi_line{};
   spi_device_handle_t dev_handle_{};
 
   void swap(SPI &other);
-};
-
-// the constructor configures one LEDC timer for the whole channel group, so a
-// second PWM wanting a different frequency would silently retune the first
-class PWM {
-public:
-  // the constructor configures one LEDC timer for the whole channel group, so
-  // a second PWM wanting a different frequency would silently retune the first
-  static constexpr int timer = 0;
-  static constexpr uint32_t frequency_hz = 1000;
-
-  static constexpr std::array claims{
-      HAL::Claim{HAL::Resource::LedcTimer, timer, HAL::Use::Shared},
-  };
-
-  PWM(Swarm::Assembly);
-
-  PWM(const PWM &) = delete;
-  void operator=(const PWM &) = delete;
-
-  PWM(PWM &&) = default;
-  PWM &operator=(PWM &&) = default;
-
-  void configure_channel(int channel, int pin);
-  void set_duty_ratio(int channel, double ratio);
 };
 
 class GPIO {
@@ -103,6 +102,29 @@ public:
     }
     vTaskDelay(ticks);
   }
+};
+
+class PWM {
+public:
+  // the constructor configures one LEDC timer for the whole channel group, so
+  // a second PWM wanting a different frequency would silently retune the first
+  static constexpr int timer = 0;
+  static constexpr uint32_t frequency_hz = 1000;
+
+  static constexpr std::array claims{
+      HAL::Claim{HAL::Resource::LedcTimer, timer, HAL::Use::Shared},
+  };
+
+  PWM(Swarm::Assembly);
+
+  PWM(const PWM &) = delete;
+  void operator=(const PWM &) = delete;
+
+  PWM(PWM &&) = default;
+  PWM &operator=(PWM &&) = default;
+
+  void configure_channel(int channel, int pin);
+  void set_duty_ratio(int channel, double ratio);
 };
 } // namespace ESP32
 
