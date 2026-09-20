@@ -15,6 +15,69 @@ You are a senior C++ developer with deep expertise in modern C++20/23 and system
 - Write comments like a human, not a textbook. No trailing periods, lowercase is fine, e.g. `# micro-ROS build dependencies`
 - Any file you fully generate must start with a `Written with Claude` comment. See `.devcontainer/Dockerfile` and `scripts/usbip-host.sh` for examples
 
+## Declarative embedded style
+
+Prefer description over procedure. The reference points are Intel's
+[groov](https://github.com/intel/generic-register-operation-optimizer),
+[cib](https://github.com/intel/compile-time-init-build) and
+[baremetal senders and receivers](https://github.com/intel/cpp-baremetal-senders-and-receivers),
+plus Michael Caisse's embedded talks ("Modern C++ in Embedded Systems",
+"Message Handling in Embedded: a Declarative, Modern C++ Approach"). What to take
+from them:
+
+- **Hardware and configuration are data, not code.** A register, a pin map, a
+  drive geometry is a `constexpr` description; the code that acts on it is one
+  generic algorithm consuming that description. groov declares
+  `field<"name", uint32_t, 3, 0>` and generates the masking; it does not ask you
+  to write shifts
+- **Derive, never restate.** Counts, masks, orderings and sizes come out of the
+  description. Two declarations that must agree are a bug waiting to happen --
+  make one of them a consequence of the other
+- **Name things, don't position them.** groov addresses `"reg.field"_f`, not bit
+  17 of word 3. Positional correspondence between two arrays is the thing to
+  design out
+- **Compose at compile time.** cib resolves its whole service graph with
+  `constexpr`/`consteval` so there is no runtime registration and dead code drops
+  out. Prefer `consteval` assembly and `static_assert` over runtime setup plus
+  runtime checks
+- **Make illegal states unrepresentable, and illegal operations uncompilable.**
+  A write to a read-only field should fail to build, not fail at runtime
+- **Effects at the edge.** Pure `constexpr` core, thin imperative shell that
+  actually touches the bus. Don't dress hardware writes in functional clothing --
+  keep them visibly sequential and few
+- **Async as declarative pipelines.** Off-chip registers (SPI, I2C) are latency,
+  not memory: model them as senders composed at compile time, no allocation, no
+  exceptions, errors as values
+- **Zero overhead is the price of entry.** The declarative layer must compile to
+  what the hand-written version would emit. When in doubt check `idf.py size` or
+  the disassembly, and say so in the commit
+- **Functional core, imperative shell.** The maths -- kinematics, register
+  encoding, unit conversion -- belongs in pure `constexpr` functions over value
+  types, with no mutable locals threaded through branches. Prefer an expression
+  per output over a procedure that fills one in. The shell that actually writes
+  GPIO or SPI stays small, obviously sequential, and holds all the state
+- **A pure core is a testable core.** Anything expressible as `Twist -> Frame`
+  or `bytes -> value` runs in the `host` tier with no board, so keep those paths
+  free of IDF and micro-ROS headers. If it needs hardware to test, it is
+  probably doing two things
+
+- **Validate in the constructor, not in a rule.** A check that only runs if the
+  caller remembers to write `static_assert` is documentation, not enforcement.
+  Give the description a `consteval` builder that cannot return an invalid
+  value, and have the consumer re-check the invariant at class scope. A type
+  used as a template argument must be structural (public members), so privacy
+  cannot be the guard -- the consumer's `static_assert` is. With
+  `-fno-exceptions`, fail a `consteval` path by calling an undefined `consteval`
+  function whose *name is the error message*
+
+`components/swarm_hal/drive.h` and `components/l298n/l298n.h` are the worked
+example: a drive style is one `constexpr` array of inverse-kinematic
+coefficients, and the motor count, names, frame size, `Frame` type and
+pin-table checks all derive from it. `L298N::with_drive_style<S>(rows...)`
+builds the config and refuses to produce one whose rows don't match the style.
+Adding a platform means declaring a `wheels<Style::X>()` specialisation and its
+pin rows -- no algorithm is written or specialised.
+
 ## DW1000 references
 
 When answering questions about the DW1000 / register behavior, consult `docs/references.md`:
@@ -71,9 +134,9 @@ patch applied yet.
 
 ## Testing
 
-Tests live in `components/dwm/test/` (tagged Unity `TEST_CASE`s) and split into two tiers, launched via `test/run.py` (which builds the app then hands off to `pytest-embedded`). Run from inside the container:
+Tests live in `components/dwm/test/` and `components/swarm_hal/test/` (tagged Unity `TEST_CASE`s) and split into two tiers, launched via `test/run.py` (which builds the app then hands off to `pytest-embedded`). Run from inside the container:
 
-- `./test/run.py host` — pure value-type + mock-SPI unit tests (`[dwm_data]`, `[dwm_mock]`), built for the `linux` target and run natively, no board
+- `./test/run.py host` — pure value-type, mock-SPI and kinematics unit tests (`[dwm_data]`, `[dwm_mock]`, `[drive]`), built for the `linux` target and run natively, no board
 - `./test/run.py device` — on-device integration tests (`[dwm_reg]`, `[dwm]`) needing a real DW1000; pytest flashes and runs over serial
 - extra args pass through to pytest, e.g. `./test/run.py host -s`
 
@@ -83,7 +146,7 @@ The app (`test/main/main.cpp`) is `unity_run_menu()`. `test/pytest_dwm.py` branc
 
 Each target keeps its own `sdkconfig.host`/`sdkconfig.device` + `build_host`/`build_device` dir.
 
-The `--flash_*` esptool deprecation warnings on device runs are expected and can't be fixed here: `pytest-embedded-serial-esp` requires esptool v5 (which renamed those options), while IDF 5.5 still emits the old form. Can't downgrade esptool (v5 is required) or upgrade IDF past 5.5 without also moving the micro-ROS component, which pins the ESP-IDF versions it supports. Harmless — leave them. The host tier works because the DWM/HAL path is hardware-agnostic: no IDF or micro-ROS headers, only the `HAL::` concepts. Keep it that way — a hardware-only test belongs behind `if(NOT IDF_TARGET STREQUAL "linux")` in `components/dwm/test/CMakeLists.txt`, and `swarm_hal.h`'s micro-ROS half must not leak onto the `peripheral_hal.h` path.
+The `--flash_*` esptool deprecation warnings on device runs are expected and can't be fixed here: `pytest-embedded-serial-esp` requires esptool v5 (which renamed those options), while IDF 5.5 still emits the old form. Can't downgrade esptool (v5 is required) or upgrade IDF past 5.5 without also moving the micro-ROS component, which pins the ESP-IDF versions it supports. Harmless — leave them. The host tier works because the DWM/HAL path is hardware-agnostic: no IDF or micro-ROS headers, only the `HAL::` concepts and pure value types. Keep it that way — a hardware-only test belongs behind `if(NOT IDF_TARGET STREQUAL "linux")` in `components/dwm/test/CMakeLists.txt`. `swarm_hal` has no micro-ROS dependency at all: `drive.h` works on a `Drive::Twist`, and `main.cpp` is the only place a `geometry_msgs__msg__Twist` becomes one. Don't reintroduce a ROS header there — it would drag micro-ROS onto the host path and take the kinematics tests (`[drive]`, in `components/swarm_hal/test/`) with it.
 
 
 When invoked:

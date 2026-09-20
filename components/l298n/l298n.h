@@ -4,9 +4,11 @@
 
 #include <algorithm>
 #include <array>
+#include <concepts>
 #include <cstddef>
 #include <utility>
 
+#include "drive.h"
 #include "motor.h"
 #include "swarm_hal.h"
 
@@ -17,21 +19,64 @@ struct MotorPins {
   int in_b;
   int enable;
   int pwm_channel;
+  int standby;
 };
 
+template <Drive::Style S, size_t N>
+consteval bool pins_match_roles(const std::array<MotorPins, N> &pins) {
+  constexpr auto rows = Drive::wheels<S>();
+
+  if (N != rows.size()) {
+    return false;
+  }
+
+  return std::ranges::all_of(rows, [&pins](const Drive::Wheel &wheel) {
+    return std::ranges::count(pins, wheel.name, &MotorPins::name) == 1;
+  });
+}
+
+// a Config used as a template argument has to be structural, so its members
+// stay public and the driver re-checks the invariant rather than trusting that
+// this was the only way one got built
+template <Drive::Style S, size_t N> struct Config {
+  static constexpr Drive::Style style = S;
+
+  std::array<MotorPins, N> pins;
+};
+
+// -fno-exceptions rules out `throw`, and the condition isn't constant in this
+// context so `static_assert` can't see it either. An undefined consteval call
+// fails the constant evaluation and names itself in the diagnostic
+consteval void pin_table_does_not_match_drive_style();
+
+template <Drive::Style S, std::same_as<MotorPins>... Pins>
+consteval auto with_drive_style(Pins... pins) {
+  const std::array table{pins...};
+
+  if (!pins_match_roles<S>(table)) {
+    pin_table_does_not_match_drive_style();
+  }
+
+  return Config<S, sizeof...(Pins)>{table};
+}
+
 template <HAL::GenericGPIOController GPIO, HAL::GenericPWMController PWM,
-          auto Pins>
+          auto Cfg>
 class MotorDriver {
+  static constexpr Drive::Style Style = decltype(Cfg)::style;
+  static constexpr auto Pins = Cfg.pins;
+
+  static_assert(pins_match_roles<Style>(Pins),
+                "pin table and drive style must name the same motors, one row "
+                "each");
+
 public:
-  static constexpr size_t MotorCount = Pins.size();
-
-  MotorDriver(GPIO gpio, PWM pwm, int standby)
-      : gpio_(std::move(gpio)), pwm_(std::move(pwm)), standby_(standby) {
-    gpio_.set_direction(standby_, HAL::PinMode::Output);
-
+  MotorDriver(GPIO gpio, PWM pwm)
+      : gpio_(std::move(gpio)), pwm_(std::move(pwm)) {
     for (const MotorPins &motor : Pins) {
       gpio_.set_direction(motor.in_a, HAL::PinMode::Output);
       gpio_.set_direction(motor.in_b, HAL::PinMode::Output);
+      gpio_.set_direction(motor.standby, HAL::PinMode::Output);
       pwm_.configure_channel(motor.pwm_channel, motor.enable);
     }
   }
@@ -42,31 +87,31 @@ public:
   MotorDriver(MotorDriver &&) = default;
   MotorDriver &operator=(MotorDriver &&) = default;
 
-  template <auto FrameNames>
-  void run(const Drive::Frame<FrameNames> &frame) {
-    static_assert(std::ranges::equal(FrameNames, Pins, {}, {}, &MotorPins::name),
-                  "pin table must list the same motors, in the same order, as "
-                  "the drive style commands");
-
-    for (size_t i = 0; i < MotorCount; ++i) {
-      apply(Pins[i], frame.commands[i]);
+  void run(const Drive::Frame<Style> &frame) {
+    for (const Motor::Command &cmd : frame.commands) {
+      apply(*std::ranges::find(Pins, cmd.name, &MotorPins::name), cmd);
     }
 
-    gpio_.set_level(standby_, HAL::Voltage::HIGH);
+    set_standby(HAL::Voltage::HIGH);
   }
 
   void stop() {
     for (const MotorPins &motor : Pins) {
-      apply(motor, Motor::Command{Motor::Direction::STOP, 0.0});
+      apply(motor, Motor::Command{motor.name, Motor::Direction::STOP, 0.0});
     }
 
-    gpio_.set_level(standby_, HAL::Voltage::LOW);
+    set_standby(HAL::Voltage::LOW);
   }
 
 private:
   GPIO gpio_;
   PWM pwm_;
-  int standby_;
+
+  void set_standby(HAL::Voltage level) {
+    for (const MotorPins &motor : Pins) {
+      gpio_.set_level(motor.standby, level);
+    }
+  }
 
   void apply(const MotorPins &pins, const Motor::Command &cmd) {
     HAL::Voltage level_a = HAL::Voltage::LOW;

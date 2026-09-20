@@ -17,23 +17,21 @@
 static const char *TAG = "main";
 
 namespace HW {
-constexpr Drive::Style DRIVE_STYLE = Drive::Style::DIFFERENTIAL;
-constexpr auto MOTOR_NAMES = Drive::motor_names<DRIVE_STYLE>();
+constexpr auto DRIVE = L298N::with_drive_style<Drive::Style::DIFFERENTIAL>(
+    L298N::MotorPins{Motor::Name::LEFT, GPIO_NUM_16, GPIO_NUM_17, GPIO_NUM_4, 0,
+                     GPIO_NUM_0},
+    L298N::MotorPins{Motor::Name::RIGHT, GPIO_NUM_18, GPIO_NUM_19, GPIO_NUM_5,
+                     1, GPIO_NUM_0});
 
-constexpr int STANDBY_PIN = GPIO_NUM_0;
-
-constexpr std::array MOTOR_PINS{
-    L298N::MotorPins{Motor::Name::LEFT, GPIO_NUM_16, GPIO_NUM_17, GPIO_NUM_4, 0},
-    L298N::MotorPins{Motor::Name::RIGHT, GPIO_NUM_18, GPIO_NUM_19, GPIO_NUM_5, 1},
-};
+constexpr Drive::Style DRIVE_STYLE = decltype(DRIVE)::style;
 
 using SPI = ESP32::SPI;
 using GPIO = ESP32::GPIO;
 using PWM = ESP32::PWM;
-using MotorDriver = L298N::MotorDriver<GPIO, PWM, MOTOR_PINS>;
-using QueueType = Consumer::QueueType<MOTOR_NAMES>;
+using MotorDriver = L298N::MotorDriver<GPIO, PWM, DRIVE>;
+using QueueType = Consumer::QueueType<DRIVE_STYLE>;
 
-static_assert(HAL::MotorDriverTrait<MotorDriver, MOTOR_NAMES>);
+static_assert(HAL::MotorDriverTrait<MotorDriver, DRIVE_STYLE>);
 } // namespace HW
 
 // TODO: make templated and move to consumer.h?
@@ -55,9 +53,13 @@ static void consumerTaskWrapper(void *pvParameters) {
 static void onTwist(const geometry_msgs__msg__Twist &twist, void *context) {
   HW::QueueType &queue = *reinterpret_cast<HW::QueueType *>(context);
 
+  const Drive::Twist body_twist{twist.linear.x, twist.linear.y,
+                                twist.angular.z};
+
   if (!queue.push(Consumer::MessageTag::MOTOR_FRAME,
-                  Consumer::MessageBody<HW::MOTOR_NAMES>{
-                      .motor_frame = Drive::convert_twist<HW::DRIVE_STYLE>(twist)})) {
+                  Consumer::MessageBody<HW::DRIVE_STYLE>{
+                      .motor_frame = Drive::inverse_kinematics<HW::DRIVE_STYLE>(
+                          body_twist)})) {
     ESP_LOGE(TAG, "Dropped motor frame: consumer queue full");
   }
 }
@@ -120,7 +122,7 @@ extern "C" void app_main(void) {
   // Make the struct static so it lives as long as the program (incase mani()
   // ever terminates)
   static ConsumerTaskData consumerTaskData{
-      HW::MotorDriver{HW::GPIO{}, HW::PWM{}, HW::STANDBY_PIN},
+      HW::MotorDriver{HW::GPIO{}, HW::PWM{}},
       std::move(*queue)};
 
   ESP_LOGI(TAG, "Hello world!");

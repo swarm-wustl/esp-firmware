@@ -2,8 +2,6 @@
 #define MOTOR_H
 
 #include <cstddef>
-#include <type_traits>
-#include <list>
 
 /*
 Motor Namespace
@@ -25,6 +23,7 @@ namespace Motor {
     };
 
     struct Command {
+        Name name;
         Direction dir;
         double pwm_ratio;
     };
