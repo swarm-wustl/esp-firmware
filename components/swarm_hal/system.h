@@ -17,7 +17,8 @@ concept drives =
     HAL::MotorDriverTrait<Driver, S> && Drive::covered_by<Driver::motors, S>;
 
 template <typename... Decls>
-concept no_resource_conflicts = HAL::no_conflicts(HAL::claims_of<Decls...>());
+concept no_resource_conflicts =
+    (HAL::Claiming<Decls> && ...) && HAL::no_conflicts(HAL::claims_of<Decls...>());
 
 template <Drive::Style S, typename Driver, typename... Peripherals>
 struct chassis_impl {

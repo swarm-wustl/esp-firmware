@@ -35,6 +35,20 @@ constexpr std::array kSameIdDifferentKind{
     Claim{Resource::PwmChannel, 1, Use::Exclusive},
 };
 
+struct GoodDeclaration {
+  static constexpr std::array claims{Claim{Resource::Gpio, 5, Use::Exclusive}};
+};
+
+struct ClaimsNothing {
+  static constexpr std::array<Claim, 0> claims{};
+};
+
+struct NotADeclaration {};
+
+struct WrongElementType {
+  static constexpr std::array claims{1, 2, 3};
+};
+
 constexpr std::array kDifferentialRoster{Motor::Name::LEFT,
                                          Motor::Name::RIGHT};
 constexpr std::array kMissingRight{Motor::Name::LEFT, Motor::Name::UPPER_LEFT};
@@ -42,6 +56,14 @@ constexpr std::array kExtraMotor{Motor::Name::LEFT, Motor::Name::RIGHT,
                                  Motor::Name::UPPER_LEFT};
 constexpr std::array kDuplicated{Motor::Name::LEFT, Motor::Name::LEFT};
 } // namespace
+
+TEST_CASE("declarations must say what hardware they take", "[resources]") {
+  static_assert(HAL::Claiming<GoodDeclaration>);
+  static_assert(HAL::Claiming<ClaimsNothing>);
+  static_assert(!HAL::Claiming<NotADeclaration>);
+  static_assert(!HAL::Claiming<WrongElementType>);
+  TEST_ASSERT_TRUE(true);
+}
 
 TEST_CASE("claims: distinct resources never conflict", "[resources]") {
   static_assert(HAL::no_conflicts(kDistinct));

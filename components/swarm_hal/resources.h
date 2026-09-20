@@ -4,8 +4,10 @@
 
 #include <algorithm>
 #include <array>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <ranges>
 
 namespace HAL {
 enum class Resource : uint8_t { Gpio, PwmChannel, LedcTimer };
@@ -42,7 +44,15 @@ consteval bool no_conflicts(const std::array<Claim, N> &claims) {
   return true;
 }
 
-template <typename... Decls> consteval auto claims_of() {
+// anything the system config is handed must say what hardware it takes, even
+// if that is nothing
+template <typename T>
+concept Claiming = requires {
+  { T::claims } -> std::ranges::range;
+  requires std::same_as<std::ranges::range_value_t<decltype(T::claims)>, Claim>;
+};
+
+template <Claiming... Decls> consteval auto claims_of() {
   constexpr size_t total = (0 + ... + Decls::claims.size());
 
   std::array<Claim, total> all{};
