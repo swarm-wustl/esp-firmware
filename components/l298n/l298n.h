@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <utility>
 
+#include "assembly.h"
 #include "drive.h"
 #include "motor.h"
 #include "swarm_hal.h"
@@ -22,56 +23,55 @@ struct MotorPins {
   int standby;
 };
 
-template <Drive::Style S, size_t N>
-consteval bool pins_match_roles(const std::array<MotorPins, N> &pins) {
-  constexpr auto rows = Drive::wheels<S>();
+template <size_t N>
+consteval auto roster_of(const std::array<MotorPins, N> &pins) {
+  std::array<Motor::Name, N> names{};
 
-  if (N != rows.size()) {
-    return false;
+  for (size_t i = 0; i < N; ++i) {
+    names[i] = pins[i].name;
   }
 
-  return std::ranges::all_of(rows, [&pins](const Drive::Wheel &wheel) {
-    return std::ranges::count(pins, wheel.name, &MotorPins::name) == 1;
-  });
+  return names;
 }
 
-// a Config used as a template argument has to be structural, so its members
-// stay public and the driver re-checks the invariant rather than trusting that
-// this was the only way one got built
-template <Drive::Style S, size_t N> struct Config {
-  static constexpr Drive::Style style = S;
+template <size_t N>
+consteval auto claims_of(const std::array<MotorPins, N> &pins) {
+  std::array<HAL::Claim, N * 5> claims{};
+  size_t next = 0;
 
-  std::array<MotorPins, N> pins;
-};
-
-// -fno-exceptions rules out `throw`, and the condition isn't constant in this
-// context so `static_assert` can't see it either. An undefined consteval call
-// fails the constant evaluation and names itself in the diagnostic
-consteval void pin_table_does_not_match_drive_style();
-
-template <Drive::Style S, std::same_as<MotorPins>... Pins>
-consteval auto with_drive_style(Pins... pins) {
-  const std::array table{pins...};
-
-  if (!pins_match_roles<S>(table)) {
-    pin_table_does_not_match_drive_style();
+  for (const MotorPins &motor : pins) {
+    claims[next++] = {HAL::Resource::Gpio, motor.in_a, HAL::Use::Exclusive};
+    claims[next++] = {HAL::Resource::Gpio, motor.in_b, HAL::Use::Exclusive};
+    claims[next++] = {HAL::Resource::Gpio, motor.enable, HAL::Use::Exclusive};
+    claims[next++] = {HAL::Resource::PwmChannel, motor.pwm_channel,
+                      HAL::Use::Exclusive};
+    // one STBY drives both halves of an L298N, so motors are expected to share
+    claims[next++] = {HAL::Resource::Gpio, motor.standby, HAL::Use::Shared};
   }
 
-  return Config<S, sizeof...(Pins)>{table};
+  return claims;
+}
+
+consteval void two_motors_share_a_name();
+
+template <std::same_as<MotorPins>... Pins> consteval auto motors(Pins... pins) {
+  const std::array table{pins...};
+
+  if (!HAL::unique_names(roster_of(table))) {
+    two_motors_share_a_name();
+  }
+
+  return table;
 }
 
 template <HAL::GenericGPIOController GPIO, HAL::GenericPWMController PWM,
-          auto Cfg>
+          auto Pins>
 class MotorDriver {
-  static constexpr Drive::Style Style = decltype(Cfg)::style;
-  static constexpr auto Pins = Cfg.pins;
-
-  static_assert(pins_match_roles<Style>(Pins),
-                "pin table and drive style must name the same motors, one row "
-                "each");
-
 public:
-  MotorDriver(GPIO gpio, PWM pwm)
+  static constexpr auto motors = roster_of(Pins);
+  static constexpr auto claims = claims_of(Pins);
+
+  MotorDriver(Swarm::Assembly, GPIO gpio, PWM pwm)
       : gpio_(std::move(gpio)), pwm_(std::move(pwm)) {
     for (const MotorPins &motor : Pins) {
       gpio_.set_direction(motor.in_a, HAL::PinMode::Output);
@@ -87,7 +87,7 @@ public:
   MotorDriver(MotorDriver &&) = default;
   MotorDriver &operator=(MotorDriver &&) = default;
 
-  void run(const Drive::Frame<Style> &frame) {
+  template <Drive::Style S> void run(const Drive::Frame<S> &frame) {
     for (const Motor::Command &cmd : frame.commands) {
       apply(*std::ranges::find(Pins, cmd.name, &MotorPins::name), cmd);
     }

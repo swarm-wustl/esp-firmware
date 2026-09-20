@@ -2,6 +2,7 @@
 #ifndef DRIVE_H
 #define DRIVE_H
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -32,6 +33,19 @@ struct Wheel {
 template <Style S> constexpr auto wheels();
 
 template <Style S> inline constexpr size_t motor_count = wheels<S>().size();
+
+// every role the style commands appears exactly once in the roster. Extra
+// motors are fine: a chassis may carry more than the geometry drives
+template <auto Names, Style S> consteval bool covers() {
+  constexpr auto rows = wheels<S>();
+
+  return std::ranges::all_of(rows, [](const Wheel &wheel) {
+    return std::ranges::count(Names, wheel.name) == 1;
+  });
+}
+
+template <auto Names, Style S>
+concept covered_by = covers<Names, S>();
 
 template <Style S> struct Frame {
   std::array<Motor::Command, motor_count<S>> commands;

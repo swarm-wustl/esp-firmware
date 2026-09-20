@@ -22,6 +22,7 @@ template <Drive::Style S> union MessageBody {
 template <Drive::Style S>
 using QueueType = Queue<MessageTag, MessageBody<S>, CONSUMER_QUEUE_SIZE>;
 
+
 template <Drive::Style S, HAL::MotorDriverTrait<S> MotorDriver>
 void spin(MotorDriver &driver, QueueType<S> &queue) {
   // TODO: set some sort of frequency for this to be called
@@ -32,6 +33,7 @@ void spin(MotorDriver &driver, QueueType<S> &queue) {
       continue;
     }
 
+    // TODO: use std::variant instead of union + switch?
     switch (msg->tag) {
     case MessageTag::MOTOR_FRAME:
       driver.run(msg->body.motor_frame);

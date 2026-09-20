@@ -1,9 +1,10 @@
 #include "consumer.h"
-#include "dwm.h"
 #include "differential_drive.h"
+#include "dwm.h"
 #include "esp32.h"
 #include "l298n.h"
 #include "ros.h"
+#include "system.h"
 
 #include "esp_log.h"
 
@@ -17,26 +18,31 @@
 static const char *TAG = "main";
 
 namespace HW {
-constexpr auto DRIVE = L298N::with_drive_style<Drive::Style::DIFFERENTIAL>(
-    L298N::MotorPins{Motor::Name::LEFT, GPIO_NUM_16, GPIO_NUM_17, GPIO_NUM_4, 0,
-                     GPIO_NUM_0},
-    L298N::MotorPins{Motor::Name::RIGHT, GPIO_NUM_18, GPIO_NUM_19, GPIO_NUM_5,
-                     1, GPIO_NUM_0});
-
-constexpr Drive::Style DRIVE_STYLE = decltype(DRIVE)::style;
-
 using SPI = ESP32::SPI;
+using SpiBus = ESP32::SpiBus;
 using GPIO = ESP32::GPIO;
 using PWM = ESP32::PWM;
-using MotorDriver = L298N::MotorDriver<GPIO, PWM, DRIVE>;
-using QueueType = Consumer::QueueType<DRIVE_STYLE>;
 
-static_assert(HAL::MotorDriverTrait<MotorDriver, DRIVE_STYLE>);
+constexpr auto MOTOR_PINS =
+    L298N::motors(L298N::MotorPins{Motor::Name::LEFT, GPIO_NUM_16, GPIO_NUM_17,
+                                   GPIO_NUM_25, 0, GPIO_NUM_0},
+                  L298N::MotorPins{Motor::Name::RIGHT, GPIO_NUM_32, GPIO_NUM_33,
+                                   GPIO_NUM_5, 1, GPIO_NUM_0});
+
+using MotorDriver = L298N::MotorDriver<GPIO, PWM, MOTOR_PINS>;
+
+using RangingPins = Ranging::Declaration<Ranging::Pins{
+    .cs = GPIO_NUM_4, .reset = GPIO_NUM_27, .irq = GPIO_NUM_34}>;
+
+using Chassis = Swarm::chassis<Drive::Style::DIFFERENTIAL, MotorDriver,
+                               RangingPins, SpiBus>;
+
+constexpr Drive::Style DRIVE_STYLE = Chassis::style;
+
+using QueueType = Consumer::QueueType<DRIVE_STYLE>;
 } // namespace HW
 
 // TODO: make templated and move to consumer.h?
-// TODO: make struct so we can pass multiple parameters
-
 struct ConsumerTaskData {
   HW::MotorDriver motorDriver;
   HW::QueueType queue;
@@ -74,9 +80,10 @@ extern "C" void app_main(void) {
   ESP_LOGI(TAG, "Testing UWB");
   ESP_LOGI(TAG, "FreeRTOS tick: %d Hz", CONFIG_FREERTOS_HZ);
 
-  HW::SPI spi{GPIO_NUM_4}; // TODO: put pins in a config somewhere
+  HW::SPI spi = HW::Chassis::make<HW::SPI>(HW::RangingPins::pins.cs);
   HW::GPIO gpio{};
-  DWM dwm_sensor{std::move(spi), std::move(gpio), GPIO_NUM_27, GPIO_NUM_34};
+  DWM dwm_sensor{std::move(spi), std::move(gpio), HW::RangingPins::pins.reset,
+                 HW::RangingPins::pins.irq};
 
   // bring-up: flip to false on the responder board
   constexpr bool kInitiator = true;
@@ -122,8 +129,7 @@ extern "C" void app_main(void) {
   // Make the struct static so it lives as long as the program (incase mani()
   // ever terminates)
   static ConsumerTaskData consumerTaskData{
-      HW::MotorDriver{HW::GPIO{}, HW::PWM{}},
-      std::move(*queue)};
+      HW::Chassis::motors(HW::GPIO{}, HW::PWM{}), std::move(*queue)};
 
   ESP_LOGI(TAG, "Hello world!");
 

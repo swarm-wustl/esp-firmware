@@ -11,9 +11,9 @@
 static const char *TAG = "spi";
 
 namespace ESP32 {
-constexpr int SPI_SCK = 18;
-constexpr int SPI_MISO = 19;
-constexpr int SPI_MOSI = 23;
+constexpr int SPI_SCK = SpiBus::sck;
+constexpr int SPI_MISO = SpiBus::miso;
+constexpr int SPI_MOSI = SpiBus::mosi;
 
 inline constexpr size_t BYTES_TO_BITS(size_t bytes) { return bytes * 8; }
 
@@ -26,7 +26,7 @@ static HAL::SpiError from_esp_err(esp_err_t err) {
   }
 }
 
-SPI::SPI(int cs) : cs_{cs}, owns_spi_line{true} {
+SPI::SPI(Swarm::Assembly, int cs) : cs_{cs}, owns_spi_line{true} {
   spi_bus_config_t config{
       .mosi_io_num = SPI_MOSI,
       .miso_io_num = SPI_MISO,

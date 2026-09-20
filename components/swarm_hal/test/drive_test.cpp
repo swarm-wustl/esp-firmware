@@ -3,11 +3,17 @@
 #include "drive.h"
 #include "unity.h"
 
+#include <type_traits>
+
 namespace {
 constexpr auto kFrame = Drive::inverse_kinematics<Drive::Style::DIFFERENTIAL>(
     Drive::Twist{1.0, 0.0, 0.0});
 
 static_assert(Drive::motor_count<Drive::Style::DIFFERENTIAL> == 2);
+
+// the consumer queue memcpys its items, so a frame has to survive that
+static_assert(std::is_trivially_copyable_v<Drive::Frame<Drive::Style::DIFFERENTIAL>>);
+static_assert(std::is_trivially_copyable_v<Motor::Command>);
 static_assert(kFrame.commands[0].name == Motor::Name::LEFT);
 static_assert(kFrame.commands[0].dir == Motor::Direction::FORWARD);
 

@@ -70,13 +70,24 @@ from them:
   `-fno-exceptions`, fail a `consteval` path by calling an undefined `consteval`
   function whose *name is the error message*
 
-`components/swarm_hal/drive.h` and `components/l298n/l298n.h` are the worked
-example: a drive style is one `constexpr` array of inverse-kinematic
+- **Publish facts, relate centrally.** A declaration exposes what it is and
+  what it claims (`Driver::motors`, `Driver::claims`, `Ranging::Declaration::claims`)
+  and never judges its neighbours. Relations between declarations -- does this
+  driver serve this geometry, do these peripherals collide -- belong to the
+  composite that sees them all, as a `requires`-clause rather than a
+  `static_assert` buried in one of them. groov's `group` does exactly this with
+  `requires(... and bus_for<Bus, Registers>)`
+
+`components/swarm_hal/drive.h`, `components/swarm_hal/system.h` and
+`components/l298n/l298n.h` are the worked example: a drive style is one `constexpr` array of inverse-kinematic
 coefficients, and the motor count, names, frame size, `Frame` type and
 pin-table checks all derive from it. `L298N::with_drive_style<S>(rows...)`
 builds the config and refuses to produce one whose rows don't match the style.
 Adding a platform means declaring a `wheels<Style::X>()` specialisation and its
-pin rows -- no algorithm is written or specialised.
+pin rows -- no algorithm is written or specialised. `Swarm::chassis` pairs a
+geometry with a driver and only exists if they fit; `HAL::Claim` lets every
+peripheral declare the pins and channels it takes, so a collision between two
+unrelated subsystems is a build error rather than a mystery on the bench.
 
 ## DW1000 references
 

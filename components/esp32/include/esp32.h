@@ -1,6 +1,7 @@
 #ifndef ESP32_H
 #define ESP32_H
 
+#include <array>
 #include <memory>
 
 #include <driver/spi_common.h>
@@ -10,12 +11,28 @@
 #include "freertos/task.h"
 
 #include "driver/gpio.h"
+#include "assembly.h"
 #include "swarm_hal.h"
 
 namespace ESP32 {
+// the bus lines are fixed by spi.cpp's SPI2_HOST setup; declared here so the
+// system config can see them -- a motor wired onto SCK is otherwise invisible
+struct SpiBus {
+  static constexpr int sck = 18;
+  static constexpr int miso = 19;
+  static constexpr int mosi = 23;
+
+  // Shared: every device on the bus drives these, only the CS lines are theirs
+  static constexpr std::array claims{
+      HAL::Claim{HAL::Resource::Gpio, sck, HAL::Use::Shared},
+      HAL::Claim{HAL::Resource::Gpio, miso, HAL::Use::Shared},
+      HAL::Claim{HAL::Resource::Gpio, mosi, HAL::Use::Shared},
+  };
+};
+
 class SPI {
 public:
-  SPI(int cs);
+  SPI(Swarm::Assembly, int cs);
   ~SPI();
 
   SPI(const SPI &) = delete;

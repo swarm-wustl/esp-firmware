@@ -4,6 +4,7 @@
 #include "dwm_data.h"
 #include "dwm_regs.h"
 #include "peripheral_hal.h"
+#include "resources.h"
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -233,6 +234,27 @@ constexpr std::string_view PRFToString(PRF prf) noexcept {
 
   return "UNKNOWN PRF"sv;
 }
+
+namespace Ranging {
+struct Pins {
+  int cs;
+  int reset;
+  int irq;
+};
+
+// declared rather than passed to the constructor so the pins are visible to
+// the system config, which is the only place that can see a collision with
+// another peripheral's claim
+template <Pins P> struct Declaration {
+  static constexpr Pins pins = P;
+
+  static constexpr std::array claims{
+      HAL::Claim{HAL::Resource::Gpio, P.cs, HAL::Use::Exclusive},
+      HAL::Claim{HAL::Resource::Gpio, P.reset, HAL::Use::Exclusive},
+      HAL::Claim{HAL::Resource::Gpio, P.irq, HAL::Use::Exclusive},
+  };
+};
+} // namespace Ranging
 
 template <HAL::GenericSPIController SPI, HAL::GenericGPIOController GPIO>
 class DWM {
