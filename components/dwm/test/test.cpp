@@ -4,10 +4,12 @@
 #include "unity.h"
 
 namespace {
-constexpr DWMPins DW1000{
-    .cs = GPIO_NUM_4, .reset = GPIO_NUM_27, .irq = GPIO_NUM_34};
+constexpr auto DWM_PINS = HAL::pins(HAL::NamedPin{"reset", GPIO_NUM_27},
+                                    HAL::NamedPin{"irq", GPIO_NUM_34});
 
-using Dwm = DWM<ESP32::SPI, ESP32::GPIO, DW1000>;
+using DWM_SPI = ESP32::SPI<GPIO_NUM_4>;
+
+using Dwm = DWM<DWM_SPI, ESP32::GPIO, DWM_PINS>;
 using TestSystem = Swarm::system<ESP32::SpiBus, Dwm>;
 } // namespace
 

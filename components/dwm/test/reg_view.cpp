@@ -4,35 +4,44 @@
 #include "unity.h"
 
 namespace {
-constexpr DWMPins DW1000{
-    .cs = GPIO_NUM_4, .reset = GPIO_NUM_27, .irq = GPIO_NUM_34};
+using HAL::operator""_p;
+
+constexpr auto DWM_PINS = HAL::pins(HAL::NamedPin{"reset", GPIO_NUM_27},
+                                    HAL::NamedPin{"irq", GPIO_NUM_34});
+
+using DWM_SPI = ESP32::SPI<GPIO_NUM_4>;
+
+// resetting the DW1000 without a DWM means driving its reset line directly,
+// which needs an Assembly -- so it is a declared peripheral like anything else
+struct HardReset {
+  // only the reset line: the chip select belongs to the SPI device type
+  static constexpr std::array claims{
+      HAL::Claim{HAL::Resource::Gpio, DWM_PINS["reset"_p].number(),
+                 HAL::Use::Exclusive}};
+
+  explicit HardReset(Swarm::Assembly assembly) {
+    ESP32::GPIO gpio{assembly};
+    constexpr HAL::Pin reset = DWM_PINS["reset"_p];
+
+    gpio.set_direction(reset, HAL::PinMode::Output);
+    gpio.set_level(reset, HAL::Voltage::LOW);
+    gpio.delay_ms(10);
+
+    // Release -- set to input, let internal pull-up take over
+    gpio.set_direction(reset, HAL::PinMode::Input);
+    gpio.delay_ms(10);
+  }
+};
 
 // these tests drive the register view over a bare SPI, not a whole DW1000
-using TestSystem = Swarm::system<ESP32::SpiBus, ESP32::SPI>;
+using TestSystem = Swarm::system<ESP32::SpiBus, DWM_SPI, HardReset>;
 } // namespace
 
-#include <algorithm>
-#include <ranges>
-
-// TODO: figure out a much better way to do this
-void hard_reset() {
-  ESP32::GPIO gpio_{};
-  int rst_pin = DW1000.reset;
-
-  gpio_.set_direction(rst_pin, HAL::PinMode::Output);
-  gpio_.set_level(rst_pin, HAL::Voltage::LOW);
-  gpio_.delay_ms(10);
-
-  // Release — set to input, let internal pull-up take over
-  gpio_.set_direction(rst_pin, HAL::PinMode::Input);
-  gpio_.delay_ms(10);
-}
-
 TEST_CASE("Test read device ID register view", "[dwm_reg]") {
-  hard_reset();
+  TestSystem::make<HardReset>();
   auto bus = TestSystem::make<ESP32::SpiBus>();
-  auto spi = TestSystem::make<ESP32::SPI>(bus, DW1000.cs);
-  DWMRegisterView<ESP32::SPI, DWMRegisterID::DEV_ID> dev_id_reg{spi};
+  auto spi = TestSystem::make<DWM_SPI>(bus);
+  DWMRegisterView<DWM_SPI, DWMRegisterID::DEV_ID> dev_id_reg{spi};
 
   TEST_ASSERT_EQUAL(dev_id_reg.size(), 4);
 
@@ -42,10 +51,10 @@ TEST_CASE("Test read device ID register view", "[dwm_reg]") {
 }
 
 TEST_CASE("Test write and read-back TX buffer", "[dwm_reg]") {
-  hard_reset();
+  TestSystem::make<HardReset>();
   auto bus = TestSystem::make<ESP32::SpiBus>();
-  auto spi = TestSystem::make<ESP32::SPI>(bus, DW1000.cs);
-  DWMRegisterView<ESP32::SPI, DWMRegisterID::TX_BUFFER> tx_buf_reg{spi};
+  auto spi = TestSystem::make<DWM_SPI>(bus);
+  DWMRegisterView<DWM_SPI, DWMRegisterID::TX_BUFFER> tx_buf_reg{spi};
 
   std::array<std::array<std::byte, 1024>, 2> test_data;
 

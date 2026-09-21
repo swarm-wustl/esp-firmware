@@ -84,6 +84,8 @@ constexpr Motor::Command command_for(Motor::Name name, double velocity) {
           magnitude(velocity)};
 }
 
+// TODO: actually have this be inverse kinematics...
+// then have a separate stage that converts vel -> duty cycles for motors
 template <Style S> constexpr Frame<S> inverse_kinematics(const Twist &twist) {
   constexpr auto rows = wheels<S>();
 

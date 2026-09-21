@@ -6,6 +6,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+
+#include "pins.h"
 #include <span>
 
 namespace HAL {
@@ -29,14 +31,14 @@ concept GenericSPIController =
 
 template <typename PWM>
 concept GenericPWMController =
-    requires(PWM pwm, int channel, int pin, double ratio) {
+    requires(PWM pwm, int channel, Pin pin, double ratio) {
       { pwm.configure_channel(channel, pin) } -> std::same_as<void>;
       { pwm.set_duty_ratio(channel, ratio) } -> std::same_as<void>;
     };
 
 template <typename GPIO>
 concept GenericGPIOController =
-    requires(GPIO gpio, int pin, PinMode mode, Voltage voltage, int ms) {
+    requires(GPIO gpio, Pin pin, PinMode mode, Voltage voltage, int ms) {
       { gpio.set_direction(pin, mode) } -> std::same_as<void>;
       { gpio.set_level(pin, voltage) } -> std::same_as<void>;
       { gpio.delay_ms(ms) } -> std::same_as<void>;

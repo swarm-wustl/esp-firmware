@@ -236,29 +236,22 @@ constexpr std::string_view PRFToString(PRF prf) noexcept {
   return "UNKNOWN PRF"sv;
 }
 
-struct DWMPins {
-  int cs;
-  int reset;
-  int irq;
-};
+using HAL::operator""_p;
 
 template <HAL::GenericSPIController SPI, HAL::GenericGPIOController GPIO,
-          DWMPins Pins>
+          auto Pins>
 class DWM {
   static_assert(std::endian::native == std::endian::little,
                 "DWM1000 requires little-endian architecture");
 
 public:
-  // the bus is declared separately and shared; these three pins are the
-  // DW1000's own
-  static constexpr std::array claims{
-      HAL::Claim{HAL::Resource::Gpio, Pins.cs, HAL::Use::Exclusive},
-      HAL::Claim{HAL::Resource::Gpio, Pins.reset, HAL::Use::Exclusive},
-      HAL::Claim{HAL::Resource::Gpio, Pins.irq, HAL::Use::Exclusive},
-  };
+  // its own pins, plus whatever the SPI device it owns claims -- the chip
+  // select lives there, not here
+  static constexpr auto claims = HAL::concat(Pins.claims(), SPI::claims);
 
   template <typename Bus>
-  DWM(Swarm::Assembly assembly, Bus &bus) : spi_{assembly, bus, Pins.cs} {
+  DWM(Swarm::Assembly assembly, Bus &bus)
+      : spi_{assembly, bus}, gpio_{assembly} {
     hard_reset();
   }
 
@@ -641,10 +634,12 @@ private:
   }
 
   void hard_reset() {
-    gpio_.set_direction(Pins.reset, HAL::PinMode::Output);
-    gpio_.set_level(Pins.reset, HAL::Voltage::LOW);
+    constexpr HAL::Pin reset = Pins["reset"_p];
+
+    gpio_.set_direction(reset, HAL::PinMode::Output);
+    gpio_.set_level(reset, HAL::Voltage::LOW);
     gpio_.delay_ms(10);
-    gpio_.set_level(Pins.reset, HAL::Voltage::HIGH);
+    gpio_.set_level(reset, HAL::Voltage::HIGH);
     gpio_.delay_ms(10);
   }
 
@@ -685,7 +680,7 @@ private:
   }
 
   SPI spi_;
-  GPIO gpio_{};
+  GPIO gpio_;
 };
 
 #endif

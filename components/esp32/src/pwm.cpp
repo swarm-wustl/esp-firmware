@@ -23,9 +23,9 @@ ESP32::PWM::PWM(Swarm::Assembly) {
   ESP_ERROR_CHECK(ledc_timer_config(&timer));
 }
 
-void ESP32::PWM::configure_channel(int channel, int pin) {
+void ESP32::PWM::configure_channel(int channel, HAL::Pin pin) {
   ledc_channel_config_t config = {
-      .gpio_num = pin,
+      .gpio_num = pin.number(),
       .speed_mode = MODE,
       .channel = static_cast<ledc_channel_t>(channel),
       .intr_type = LEDC_INTR_DISABLE,

@@ -49,20 +49,17 @@ private:
   void swap(SpiBus &other);
 };
 
-// a device on a bus: it adds itself with its own chip select and claims
-// nothing, since whoever declares the device knows the CS pin
-class SPI {
+// the untemplated half, so the IDF calls stay in spi.cpp
+class SpiDevice {
 public:
-  static constexpr std::array<HAL::Claim, 0> claims{};
+  SpiDevice(Swarm::Assembly, SpiBus &bus, int cs);
+  ~SpiDevice();
 
-  SPI(Swarm::Assembly, SpiBus &bus, int cs);
-  ~SPI();
+  SpiDevice(const SpiDevice &) = delete;
+  void operator=(const SpiDevice &) = delete;
 
-  SPI(const SPI &) = delete;
-  void operator=(const SPI &) = delete;
-
-  SPI(SPI &&other);
-  SPI &operator=(SPI &&other);
+  SpiDevice(SpiDevice &&other);
+  SpiDevice &operator=(SpiDevice &&other);
 
   std::expected<void, HAL::SpiError>
   transfer_halfduplex(std::span<const std::byte> tx, std::span<std::byte> rx);
@@ -71,12 +68,35 @@ private:
   int cs_{};
   spi_device_handle_t dev_handle_{};
 
-  void swap(SPI &other);
+  void swap(SpiDevice &other);
+};
+
+// a device on a bus. The chip select is part of the type, so the device claims
+// it rather than leaving it to whoever happens to construct one
+template <int Cs> class SPI {
+public:
+  static constexpr std::array claims{
+      HAL::Claim{HAL::Resource::Gpio, Cs, HAL::Use::Exclusive},
+  };
+
+  SPI(Swarm::Assembly assembly, SpiBus &bus) : device_{assembly, bus, Cs} {}
+
+  std::expected<void, HAL::SpiError>
+  transfer_halfduplex(std::span<const std::byte> tx, std::span<std::byte> rx) {
+    return device_.transfer_halfduplex(tx, rx);
+  }
+
+private:
+  SpiDevice device_;
 };
 
 class GPIO {
 public:
-  GPIO() = default;
+  // an accessor, not an owner: it takes no hardware of its own, but it is
+  // built through the config like every other peripheral
+  static constexpr std::array<HAL::Claim, 0> claims{};
+
+  explicit GPIO(Swarm::Assembly) {}
   ~GPIO() = default;
 
   GPIO(const GPIO &) = delete;
@@ -85,13 +105,13 @@ public:
   GPIO(GPIO &&) = default;
   GPIO &operator=(GPIO &&) = default;
 
-  void set_direction(int pin, HAL::PinMode mode) {
-    gpio_set_direction(static_cast<gpio_num_t>(pin),
+  void set_direction(HAL::Pin pin, HAL::PinMode mode) {
+    gpio_set_direction(static_cast<gpio_num_t>(pin.number()),
                        mode == HAL::PinMode::Output ? GPIO_MODE_OUTPUT
                                                     : GPIO_MODE_INPUT);
   }
-  void set_level(int pin, HAL::Voltage level) {
-    gpio_set_level(static_cast<gpio_num_t>(pin), HAL::to_level(level));
+  void set_level(HAL::Pin pin, HAL::Voltage level) {
+    gpio_set_level(static_cast<gpio_num_t>(pin.number()), HAL::to_level(level));
   }
   void delay_ms(int ms) {
     // a nonzero delay must be at least one tick, else pdMS_TO_TICKS rounds sub-
@@ -123,7 +143,7 @@ public:
   PWM(PWM &&) = default;
   PWM &operator=(PWM &&) = default;
 
-  void configure_channel(int channel, int pin);
+  void configure_channel(int channel, HAL::Pin pin);
   void set_duty_ratio(int channel, double ratio);
 };
 } // namespace ESP32
