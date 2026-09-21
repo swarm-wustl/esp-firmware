@@ -18,10 +18,11 @@
 static const char *TAG = "main";
 
 namespace HW {
+using SPI = ESP32::SPI;
+using SpiBus = ESP32::SpiBus;
 using GPIO = ESP32::GPIO;
 using PWM = ESP32::PWM;
 
-// TODO: maybe use HAL::pins directly
 constexpr auto MOTOR_PINS =
     L298N::motors(L298N::MotorPins{Motor::Name::LEFT, GPIO_NUM_16, GPIO_NUM_17,
                                    GPIO_NUM_25, 0, GPIO_NUM_0},
@@ -30,15 +31,11 @@ constexpr auto MOTOR_PINS =
 
 using MotorDriver = L298N::MotorDriver<GPIO, PWM, MOTOR_PINS>;
 
-constexpr auto DWM_PINS = HAL::pins(HAL::NamedPin{"reset", GPIO_NUM_27},
+constexpr auto DWM_PINS = HAL::pins(HAL::NamedPin{"cs", GPIO_NUM_4},
+                                    HAL::NamedPin{"reset", GPIO_NUM_27},
                                     HAL::NamedPin{"irq", GPIO_NUM_34});
 
-// the DW1000's own device on the shared bus: it owns the chip select
-using DWM_SPI = ESP32::SPI<GPIO_NUM_4>;
-
-using Dwm = DWM<DWM_SPI, GPIO, DWM_PINS>;
-
-using SpiBus = ESP32::SpiBus;
+using Dwm = DWM<SPI, GPIO, DWM_PINS>;
 
 using Chassis =
     Swarm::chassis<Drive::Style::DIFFERENTIAL, MotorDriver, SpiBus, Dwm>;

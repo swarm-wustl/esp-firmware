@@ -68,7 +68,7 @@ SpiBus &SpiBus::operator=(SpiBus &&other) {
 
 void SpiBus::swap(SpiBus &other) { std::swap(owns_bus_, other.owns_bus_); }
 
-SpiDevice::SpiDevice(Swarm::Assembly, SpiBus &, int cs) : cs_{cs} {
+SPI::SPI(Swarm::Assembly, SpiBus &, HAL::Pin cs) : cs_{cs.number()} {
   spi_device_interface_config_t dev_config{
       // Command and address bits are for specific command and address phases of
       // SPI
@@ -99,20 +99,20 @@ SpiDevice::SpiDevice(Swarm::Assembly, SpiBus &, int cs) : cs_{cs} {
            spi_bus_add_device(HOST, &dev_config, &dev_handle_));
 }
 
-SpiDevice::~SpiDevice() {
+SPI::~SPI() {
   if (dev_handle_) {
     ESP_LOGI(TAG, "SPI remove device: %d", spi_bus_remove_device(dev_handle_));
     dev_handle_ = nullptr;
   }
 }
 
-SpiDevice::SpiDevice(SpiDevice &&other)
+SPI::SPI(SPI &&other)
     : cs_{std::exchange(other.cs_, -1)},
       dev_handle_{std::exchange(other.dev_handle_, nullptr)} {}
 
-SpiDevice &SpiDevice::operator=(SpiDevice &&other) {
+SPI &SPI::operator=(SPI &&other) {
   if (this != &other) {
-    SpiDevice temp{std::move(other)};
+    SPI temp{std::move(other)};
     swap(temp);
   }
 
@@ -120,7 +120,7 @@ SpiDevice &SpiDevice::operator=(SpiDevice &&other) {
 }
 
 std::expected<void, HAL::SpiError>
-SpiDevice::transfer_halfduplex(std::span<const std::byte> tx,
+SPI::transfer_halfduplex(std::span<const std::byte> tx,
                          std::span<std::byte> rx) {
   // Use full-duplex since it allows large transfers via DMA channels (unlike
   // half) To simulate half-duplex transfers, we first do a tx transfer, then an
@@ -150,7 +150,7 @@ SpiDevice::transfer_halfduplex(std::span<const std::byte> tx,
   return {};
 }
 
-void SpiDevice::swap(SpiDevice &other) {
+void SPI::swap(SPI &other) {
   std::swap(cs_, other.cs_);
   std::swap(dev_handle_, other.dev_handle_);
 }

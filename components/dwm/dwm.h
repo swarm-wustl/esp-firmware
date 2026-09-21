@@ -251,7 +251,7 @@ public:
 
   template <typename Bus>
   DWM(Swarm::Assembly assembly, Bus &bus)
-      : spi_{assembly, bus}, gpio_{assembly} {
+      : spi_{assembly, bus, Pins["cs"_p]}, gpio_{assembly} {
     hard_reset();
   }
 

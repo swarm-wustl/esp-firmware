@@ -49,17 +49,20 @@ private:
   void swap(SpiBus &other);
 };
 
-// the untemplated half, so the IDF calls stay in spi.cpp
-class SpiDevice {
+// a device on a bus. The chip select arrives as a HAL::Pin, which can only be
+// minted from a declaration -- so it is claimed by whoever declared it
+class SPI {
 public:
-  SpiDevice(Swarm::Assembly, SpiBus &bus, int cs);
-  ~SpiDevice();
+  static constexpr std::array<HAL::Claim, 0> claims{};
 
-  SpiDevice(const SpiDevice &) = delete;
-  void operator=(const SpiDevice &) = delete;
+  SPI(Swarm::Assembly, SpiBus &bus, HAL::Pin cs);
+  ~SPI();
 
-  SpiDevice(SpiDevice &&other);
-  SpiDevice &operator=(SpiDevice &&other);
+  SPI(const SPI &) = delete;
+  void operator=(const SPI &) = delete;
+
+  SPI(SPI &&other);
+  SPI &operator=(SPI &&other);
 
   std::expected<void, HAL::SpiError>
   transfer_halfduplex(std::span<const std::byte> tx, std::span<std::byte> rx);
@@ -68,26 +71,7 @@ private:
   int cs_{};
   spi_device_handle_t dev_handle_{};
 
-  void swap(SpiDevice &other);
-};
-
-// a device on a bus. The chip select is part of the type, so the device claims
-// it rather than leaving it to whoever happens to construct one
-template <int Cs> class SPI {
-public:
-  static constexpr std::array claims{
-      HAL::Claim{HAL::Resource::Gpio, Cs, HAL::Use::Exclusive},
-  };
-
-  SPI(Swarm::Assembly assembly, SpiBus &bus) : device_{assembly, bus, Cs} {}
-
-  std::expected<void, HAL::SpiError>
-  transfer_halfduplex(std::span<const std::byte> tx, std::span<std::byte> rx) {
-    return device_.transfer_halfduplex(tx, rx);
-  }
-
-private:
-  SpiDevice device_;
+  void swap(SPI &other);
 };
 
 class GPIO {
