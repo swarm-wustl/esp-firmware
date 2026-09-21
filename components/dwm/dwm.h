@@ -1,10 +1,10 @@
 #ifndef DWM_H
 #define DWM_H
 
+#include "assembly.h"
 #include "dwm_data.h"
 #include "dwm_regs.h"
 #include "peripheral_hal.h"
-#include "assembly.h"
 #include "resources.h"
 #include <algorithm>
 #include <array>
@@ -245,9 +245,8 @@ class DWM {
                 "DWM1000 requires little-endian architecture");
 
 public:
-  // its own pins, plus whatever the SPI device it owns claims -- the chip
-  // select lives there, not here
-  static constexpr auto claims = HAL::concat(Pins.claims(), SPI::claims);
+  static constexpr auto claims =
+      HAL::concat(Pins.claims(), GPIO::claims, SPI::claims);
 
   template <typename Bus>
   DWM(Swarm::Assembly assembly, Bus &bus)
