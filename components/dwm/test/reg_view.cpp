@@ -14,9 +14,8 @@ constexpr auto DWM_PINS = HAL::pins(HAL::NamedPin{"cs", GPIO_NUM_4},
 // which needs an Assembly -- so it is a declared peripheral like anything else
 struct HardReset {
   // only the reset line: the chip select belongs to the SPI device type
-  static constexpr std::array claims{
-      HAL::Claim{HAL::Resource::Gpio, DWM_PINS["reset"_p].number(),
-                 HAL::Use::Exclusive}};
+  static constexpr std::array claims{HAL::Claim{
+      HAL::Resource::Gpio, DWM_PINS["reset"_p].number(), HAL::Use::Exclusive}};
 
   explicit HardReset(Swarm::Assembly assembly) {
     ESP32::GPIO gpio{assembly};

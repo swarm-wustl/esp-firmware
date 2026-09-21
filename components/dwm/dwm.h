@@ -219,7 +219,7 @@ private:
 // TODO: add this, and other related classes, to some sort of DWM namespace
 enum class PRF : uint8_t { MHZ_4 = 0b00, MHZ_16 = 0b01, MHZ_64 = 0b10 };
 
-constexpr std::string_view PRFToString(PRF prf) noexcept {
+constexpr std::string_view to_string_view(PRF prf) noexcept {
   using namespace std::string_view_literals;
 
   switch (prf) {
@@ -229,10 +229,9 @@ constexpr std::string_view PRFToString(PRF prf) noexcept {
     return "16 MHz"sv;
   case PRF::MHZ_64:
     return "64 MHz"sv;
-  default:
-    __builtin_unreachable();
   }
 
+  // the value comes off the wire, so a reserved encoding is reachable
   return "UNKNOWN PRF"sv;
 }
 
@@ -266,8 +265,9 @@ public:
     MBPS_68 = 0b10
   };
 
-  // TODO: operator_"" instead of func? same for all ToString methods?
-  static constexpr std::string_view BitRateToString(BitRate br) noexcept {
+  // hidden friend: ADL finds it for the nested enum, so callers write
+  // to_string_view(br) the same way they do for PRF
+  friend constexpr std::string_view to_string_view(BitRate br) noexcept {
     using namespace std::string_view_literals; // Allows for ""sv suffix
 
     switch (br) {
@@ -277,10 +277,9 @@ public:
       return "850 kbps"sv;
     case BitRate::MBPS_68:
       return "6.8 Mbps"sv;
-    default:
-      __builtin_unreachable();
     }
 
+    // the value comes off the wire, so a reserved encoding is reachable
     return "UNKNOWN BITRATE"sv;
   }
 
@@ -643,11 +642,10 @@ private:
     gpio_.delay_ms(10);
   }
 
-  std::expected<std::string_view, HAL::SpiError> get_tx_bit_rate() {
+  std::expected<BitRate, HAL::SpiError> get_tx_bit_rate() {
     return get_reg_view<DWMRegisterID::TX_FCTRL>().read().transform(
         [](uint64_t raw) {
-          return BitRateToString(
-              static_cast<BitRate>((raw >> 13) & 0b11)); // TODO: constants?
+          return static_cast<BitRate>((raw >> 13) & 0b11); // TODO: constants?
         });
   }
 
