@@ -266,6 +266,7 @@ public:
     MBPS_68 = 0b10
   };
 
+  // TODO: operator_"" instead of func? same for all ToString methods?
   static constexpr std::string_view BitRateToString(BitRate br) noexcept {
     using namespace std::string_view_literals; // Allows for ""sv suffix
 
