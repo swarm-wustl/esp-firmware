@@ -1,4 +1,3 @@
-// Written with Claude
 #ifndef PINS_H
 #define PINS_H
 

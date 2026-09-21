@@ -1,4 +1,3 @@
-// Written with Claude
 #ifndef DWM_REGS_H
 #define DWM_REGS_H
 

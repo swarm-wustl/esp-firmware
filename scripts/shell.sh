@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 
-# Written with Claude
 
 # Drops you into the micro-ROS container with the project mounted at /workspace
 # and the ESP32 forwarded over USB/IP, so idf.py build/flash/monitor all work

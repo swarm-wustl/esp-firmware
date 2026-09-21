@@ -1,4 +1,3 @@
-// Written with Claude
 #ifndef DIFFERENTIAL_DRIVE_H
 #define DIFFERENTIAL_DRIVE_H
 

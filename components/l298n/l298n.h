@@ -1,4 +1,3 @@
-// Written with Claude
 #ifndef L298N_H
 #define L298N_H
 

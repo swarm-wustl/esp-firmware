@@ -1,4 +1,3 @@
-// Written with Claude
 #ifndef DRIVE_H
 #define DRIVE_H
 

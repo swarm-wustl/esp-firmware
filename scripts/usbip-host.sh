@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 
-# Written with Claude
 # See https://blog.golioth.io/usb-docker-windows-macos/
 
 # Forwards the ESP32's USB serial port into Docker over USB/IP so idf.py can

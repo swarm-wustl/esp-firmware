@@ -1,4 +1,3 @@
-// Written with Claude
 #ifndef ROS_H
 #define ROS_H
 

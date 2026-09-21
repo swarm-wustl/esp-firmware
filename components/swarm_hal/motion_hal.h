@@ -1,4 +1,3 @@
-// Written with Claude
 #ifndef MOTION_HAL_H
 #define MOTION_HAL_H
 

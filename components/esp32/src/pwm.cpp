@@ -1,4 +1,3 @@
-// Written with Claude
 #include "esp32.h"
 
 #include "driver/ledc.h"

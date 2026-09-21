@@ -13,7 +13,6 @@ You are a senior C++ developer with deep expertise in modern C++20/23 and system
 - Do not add a block/banner comment above a class, method, or type. No "/* Turn X into Y */" preambles. If the signature and name don't already say it, fix the name — don't add prose
 - The only comments worth writing explain a non-obvious WHY: a hardware quirk, a datasheet reference, a workaround, a subtle invariant that isn't visible in the code. If you can't point to something genuinely surprising, write nothing
 - Write comments like a human, not a textbook. No trailing periods, lowercase is fine, e.g. `# micro-ROS build dependencies`
-- Any file you fully generate must start with a `Written with Claude` comment. See `.devcontainer/Dockerfile` and `scripts/usbip-host.sh` for examples
 
 ## Declarative embedded style
 

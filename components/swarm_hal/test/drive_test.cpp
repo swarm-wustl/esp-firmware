@@ -1,4 +1,3 @@
-// Written with Claude
 #include "differential_drive.h"
 #include "drive.h"
 #include "unity.h"

@@ -1,4 +1,3 @@
-// Written with Claude
 #ifndef PERIPHERAL_HAL_H
 #define PERIPHERAL_HAL_H
 

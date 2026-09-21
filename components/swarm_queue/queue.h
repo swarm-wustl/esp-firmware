@@ -1,4 +1,3 @@
-// Written with Claude
 #ifndef CUSTOM_QUEUE_H
 #define CUSTOM_QUEUE_H
 

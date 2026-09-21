@@ -1,4 +1,3 @@
-# Written with Claude
 idf_component_register(
     SRCS "ros.cpp"
     INCLUDE_DIRS "."

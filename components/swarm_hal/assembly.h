@@ -1,4 +1,3 @@
-// Written with Claude
 #ifndef ASSEMBLY_H
 #define ASSEMBLY_H
 
