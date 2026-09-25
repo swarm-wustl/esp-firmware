@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 
 # See https://www.reddit.com/r/vim/comments/1b2zer7/lsp_and_clangd_what_if_the_software_is_built_in_a/
-# Written with Claude
 
 set -euo pipefail
 

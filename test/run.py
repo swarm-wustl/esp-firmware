@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 
-# Written with Claude
-
 # Single entry point for the DWM test suite. Builds the test app for the chosen
 # target, then hands off to pytest-embedded (which drives the unity menu). Run
 # from inside the container (scripts/shell.sh). Extra args pass through to pytest.

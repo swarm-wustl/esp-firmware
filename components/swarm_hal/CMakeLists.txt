@@ -1,11 +1,5 @@
-# micro-ROS only builds for the ESP target; the host (linux) tests never pull
-# motion_hal.h, so keep it out of the linux build closure
-set(reqs "")
-if(NOT "${IDF_TARGET}" STREQUAL "linux")
-    list(APPEND reqs micro_ros_espidf_component)
-endif()
-
+# the kinematics core is pure value types -- no IDF, no micro-ROS -- so it
+# builds for the linux host target and its tests run without a board
 idf_component_register(
     INCLUDE_DIRS "."
-    REQUIRES ${reqs}
 )

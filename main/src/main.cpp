@@ -1,9 +1,10 @@
 #include "consumer.h"
-#include "dwm.h"
 #include "differential_drive.h"
+#include "dwm.h"
 #include "esp32.h"
 #include "l298n.h"
 #include "ros.h"
+#include "system.h"
 
 #include "esp_log.h"
 
@@ -17,30 +18,36 @@
 static const char *TAG = "main";
 
 namespace HW {
-constexpr Drive::Style DRIVE_STYLE = Drive::Style::DIFFERENTIAL;
-constexpr auto MOTOR_NAMES = Drive::motor_names<DRIVE_STYLE>();
-
-constexpr int STANDBY_PIN = GPIO_NUM_0;
-
-constexpr std::array MOTOR_PINS{
-    L298N::MotorPins{Motor::Name::LEFT, GPIO_NUM_16, GPIO_NUM_17, GPIO_NUM_4, 0},
-    L298N::MotorPins{Motor::Name::RIGHT, GPIO_NUM_18, GPIO_NUM_19, GPIO_NUM_5, 1},
-};
-
 using SPI = ESP32::SPI;
+using SpiBus = ESP32::SpiBus;
 using GPIO = ESP32::GPIO;
 using PWM = ESP32::PWM;
-using MotorDriver = L298N::MotorDriver<GPIO, PWM, MOTOR_PINS>;
-using QueueType = Consumer::QueueType<MOTOR_NAMES>;
 
-static_assert(HAL::MotorDriverTrait<MotorDriver, MOTOR_NAMES>);
+constexpr auto MOTOR_PINS =
+    L298N::motors(L298N::MotorPins{Motor::Name::LEFT, GPIO_NUM_16, GPIO_NUM_17,
+                                   GPIO_NUM_25, 0, GPIO_NUM_0},
+                  L298N::MotorPins{Motor::Name::RIGHT, GPIO_NUM_32, GPIO_NUM_33,
+                                   GPIO_NUM_5, 1, GPIO_NUM_0});
+
+using MotorDriver = L298N::MotorDriver<GPIO, PWM, MOTOR_PINS>;
+
+constexpr auto DWM_PINS = HAL::pins(HAL::NamedPin{"cs", GPIO_NUM_4},
+                                    HAL::NamedPin{"reset", GPIO_NUM_27},
+                                    HAL::NamedPin{"irq", GPIO_NUM_34});
+
+using Dwm = DWM<SPI, GPIO, DWM_PINS, SpiBus>;
+
+using Chassis =
+    Swarm::chassis<Drive::Style::DIFFERENTIAL, MotorDriver, SpiBus, Dwm>;
+
+constexpr Drive::Style DRIVE_STYLE = Chassis::style;
+
+using QueueType = Consumer::QueueType<DRIVE_STYLE>;
 } // namespace HW
 
 // TODO: make templated and move to consumer.h?
-// TODO: make struct so we can pass multiple parameters
-
 struct ConsumerTaskData {
-  HW::MotorDriver motorDriver;
+  HW::MotorDriver &motorDriver;
   HW::QueueType queue;
 };
 
@@ -55,9 +62,13 @@ static void consumerTaskWrapper(void *pvParameters) {
 static void onTwist(const geometry_msgs__msg__Twist &twist, void *context) {
   HW::QueueType &queue = *reinterpret_cast<HW::QueueType *>(context);
 
+  const Drive::Twist body_twist{twist.linear.x, twist.linear.y,
+                                twist.angular.z};
+
   if (!queue.push(Consumer::MessageTag::MOTOR_FRAME,
-                  Consumer::MessageBody<HW::MOTOR_NAMES>{
-                      .motor_frame = Drive::convert_twist<HW::DRIVE_STYLE>(twist)})) {
+                  Consumer::MessageBody<HW::DRIVE_STYLE>{
+                      .motor_frame = Drive::inverse_kinematics<HW::DRIVE_STYLE>(
+                          body_twist)})) {
     ESP_LOGE(TAG, "Dropped motor frame: consumer queue full");
   }
 }
@@ -72,9 +83,8 @@ extern "C" void app_main(void) {
   ESP_LOGI(TAG, "Testing UWB");
   ESP_LOGI(TAG, "FreeRTOS tick: %d Hz", CONFIG_FREERTOS_HZ);
 
-  HW::SPI spi{GPIO_NUM_4}; // TODO: put pins in a config somewhere
-  HW::GPIO gpio{};
-  DWM dwm_sensor{std::move(spi), std::move(gpio), GPIO_NUM_27, GPIO_NUM_34};
+  auto &peripherals = HW::Chassis::take();
+  auto &dwm_sensor = peripherals.get<HW::Dwm>();
 
   // bring-up: flip to false on the responder board
   constexpr bool kInitiator = true;
@@ -117,11 +127,8 @@ extern "C" void app_main(void) {
     return;
   }
 
-  // Make the struct static so it lives as long as the program (incase mani()
-  // ever terminates)
-  static ConsumerTaskData consumerTaskData{
-      HW::MotorDriver{HW::GPIO{}, HW::PWM{}, HW::STANDBY_PIN},
-      std::move(*queue)};
+  static ConsumerTaskData consumerTaskData{peripherals.get<HW::MotorDriver>(),
+                                           std::move(*queue)};
 
   ESP_LOGI(TAG, "Hello world!");
 

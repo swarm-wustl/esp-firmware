@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 
-# Written with Claude
 
 # micro-ROS's libmicroros.mk clones ~29 repos from moving branches, so a cold
 # build is not reproducible: the sources drift and eventually stop compiling.

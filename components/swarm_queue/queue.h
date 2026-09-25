@@ -1,16 +1,24 @@
-// Written with Claude
 #ifndef CUSTOM_QUEUE_H
 #define CUSTOM_QUEUE_H
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include <concepts>
 #include <expected>
 #include <optional>
+#include <type_traits>
 #include <utility>
 
 enum class QueueError : uint8_t { Full, Closed };
 
-template <typename Tag, typename Body, size_t Capacity> class Queue {
+// xQueueSend/xQueueReceive memcpy the item in and out, so anything with a
+// non-trivial copy, move or destructor would be silently torn apart
+template <typename T>
+concept Payload = std::is_trivially_copyable_v<T>;
+
+template <typename Tag, typename Body, size_t Capacity>
+  requires Payload<Tag> && Payload<Body>
+class Queue {
 public:
   struct Message {
     Tag tag;

@@ -1,4 +1,3 @@
-// Written with Claude
 #ifndef MOTION_HAL_H
 #define MOTION_HAL_H
 
@@ -8,9 +7,9 @@
 #include "motor.h"
 
 namespace HAL {
-template <typename MotorDriver, auto Names>
+template <typename MotorDriver, Drive::Style S>
 concept MotorDriverTrait =
-    requires(MotorDriver driver, Drive::Frame<Names> frame) {
+    requires(MotorDriver driver, Drive::Frame<S> frame) {
       { driver.run(frame) } -> std::same_as<void>;
       { driver.stop() } -> std::same_as<void>;
     };

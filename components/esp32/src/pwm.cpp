@@ -1,4 +1,3 @@
-// Written with Claude
 #include "esp32.h"
 
 #include "driver/ledc.h"
@@ -6,11 +5,12 @@
 #include <algorithm>
 
 static constexpr ledc_mode_t MODE = LEDC_LOW_SPEED_MODE;
-static constexpr ledc_timer_t TIMER = LEDC_TIMER_0;
+static constexpr ledc_timer_t TIMER =
+    static_cast<ledc_timer_t>(ESP32::PWM::timer);
 static constexpr ledc_timer_bit_t DUTY_RESOLUTION = LEDC_TIMER_10_BIT;
-static constexpr uint32_t FREQUENCY_HZ = 1000;
+static constexpr uint32_t FREQUENCY_HZ = ESP32::PWM::frequency_hz;
 
-ESP32::PWM::PWM() {
+ESP32::PWM::PWM(Swarm::Assembly) {
   ledc_timer_config_t timer = {
       .speed_mode = MODE,
       .duty_resolution = DUTY_RESOLUTION,
@@ -22,9 +22,9 @@ ESP32::PWM::PWM() {
   ESP_ERROR_CHECK(ledc_timer_config(&timer));
 }
 
-void ESP32::PWM::configure_channel(int channel, int pin) {
+void ESP32::PWM::configure_channel(int channel, HAL::Pin pin) {
   ledc_channel_config_t config = {
-      .gpio_num = pin,
+      .gpio_num = pin.number(),
       .speed_mode = MODE,
       .channel = static_cast<ledc_channel_t>(channel),
       .intr_type = LEDC_INTR_DISABLE,

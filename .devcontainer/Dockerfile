@@ -1,5 +1,3 @@
-# Written with Claude
-
 # pinned by digest: espressif/idf:release-v5.5 is a mutable tag and drifted out
 # from under this repo once already (empy 3 -> 4 broke micro-ROS codegen)
 ARG IDF_IMAGE=espressif/idf@sha256:5976da28fd46671f66d8f96908e166f99bc34d1fc24f516ead9a8fbef9bdc109

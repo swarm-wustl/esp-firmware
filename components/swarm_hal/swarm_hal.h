@@ -3,5 +3,6 @@
 
 #include "motion_hal.h"
 #include "peripheral_hal.h"
+#include "resources.h"
 
 #endif

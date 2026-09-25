@@ -11,9 +11,10 @@
 static const char *TAG = "spi";
 
 namespace ESP32 {
-constexpr int SPI_SCK = 18;
-constexpr int SPI_MISO = 19;
-constexpr int SPI_MOSI = 23;
+constexpr int SPI_SCK = SpiBus::sck;
+constexpr int SPI_MISO = SpiBus::miso;
+constexpr int SPI_MOSI = SpiBus::mosi;
+constexpr spi_host_device_t HOST = SpiBus::host;
 
 inline constexpr size_t BYTES_TO_BITS(size_t bytes) { return bytes * 8; }
 
@@ -26,7 +27,7 @@ static HAL::SpiError from_esp_err(esp_err_t err) {
   }
 }
 
-SPI::SPI(int cs) : cs_{cs}, owns_spi_line{true} {
+SpiBus::SpiBus(Swarm::Assembly) : owns_bus_{true} {
   spi_bus_config_t config{
       .mosi_io_num = SPI_MOSI,
       .miso_io_num = SPI_MISO,
@@ -43,6 +44,31 @@ SPI::SPI(int cs) : cs_{cs}, owns_spi_line{true} {
       .intr_flags = 0,                          // TODO
   };
 
+  // TODO: throw?
+  ESP_LOGI(TAG, "SPI init: %d",
+           spi_bus_initialize(HOST, &config, SPI_DMA_CH_AUTO));
+}
+
+SpiBus::~SpiBus() {
+  if (owns_bus_) {
+    ESP_LOGI(TAG, "SPI deinit: %d", spi_bus_free(HOST));
+  }
+}
+
+SpiBus::SpiBus(SpiBus &&other) : owns_bus_{std::exchange(other.owns_bus_, false)} {}
+
+SpiBus &SpiBus::operator=(SpiBus &&other) {
+  if (this != &other) {
+    SpiBus temp{std::move(other)};
+    swap(temp);
+  }
+
+  return *this;
+}
+
+void SpiBus::swap(SpiBus &other) { std::swap(owns_bus_, other.owns_bus_); }
+
+SPI::SPI(Swarm::Assembly, SpiBus &, HAL::Pin cs) : cs_{cs.number()} {
   spi_device_interface_config_t dev_config{
       // Command and address bits are for specific command and address phases of
       // SPI
@@ -69,29 +95,19 @@ SPI::SPI(int cs) : cs_{cs}, owns_spi_line{true} {
       .pre_cb = NULL,
       .post_cb = NULL};
 
-  // TODO: throw?
-  // TODO: dynamically choose host/port?
-  ESP_LOGI(TAG, "SPI init: %d", spi_bus_initialize(SPI2_HOST, &config, SPI_DMA_CH_AUTO));
-
   ESP_LOGI(TAG, "SPI add device: %d",
-      spi_bus_add_device(SPI2_HOST, &dev_config, &dev_handle_));
+           spi_bus_add_device(HOST, &dev_config, &dev_handle_));
 }
 
 SPI::~SPI() {
-  // TODO: throw?
   if (dev_handle_) {
     ESP_LOGI(TAG, "SPI remove device: %d", spi_bus_remove_device(dev_handle_));
     dev_handle_ = nullptr;
-  }
-
-  if (owns_spi_line) {
-    ESP_LOGI(TAG, "SPI deinit: %d", spi_bus_free(SPI2_HOST));
   }
 }
 
 SPI::SPI(SPI &&other)
     : cs_{std::exchange(other.cs_, -1)},
-      owns_spi_line{std::exchange(other.owns_spi_line, false)},
       dev_handle_{std::exchange(other.dev_handle_, nullptr)} {}
 
 SPI &SPI::operator=(SPI &&other) {
@@ -136,7 +152,6 @@ SPI::transfer_halfduplex(std::span<const std::byte> tx,
 
 void SPI::swap(SPI &other) {
   std::swap(cs_, other.cs_);
-  std::swap(owns_spi_line, other.owns_spi_line);
   std::swap(dev_handle_, other.dev_handle_);
 }
 

@@ -1,9 +1,12 @@
 #ifndef DWM_H
 #define DWM_H
 
+#include "assembly.h"
+#include "system.h"
 #include "dwm_data.h"
 #include "dwm_regs.h"
 #include "peripheral_hal.h"
+#include "resources.h"
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -217,7 +220,7 @@ private:
 // TODO: add this, and other related classes, to some sort of DWM namespace
 enum class PRF : uint8_t { MHZ_4 = 0b00, MHZ_16 = 0b01, MHZ_64 = 0b10 };
 
-constexpr std::string_view PRFToString(PRF prf) noexcept {
+constexpr std::string_view to_string_view(PRF prf) noexcept {
   using namespace std::string_view_literals;
 
   switch (prf) {
@@ -227,23 +230,28 @@ constexpr std::string_view PRFToString(PRF prf) noexcept {
     return "16 MHz"sv;
   case PRF::MHZ_64:
     return "64 MHz"sv;
-  default:
-    __builtin_unreachable();
   }
 
+  // the value comes off the wire, so a reserved encoding is reachable
   return "UNKNOWN PRF"sv;
 }
 
-template <HAL::GenericSPIController SPI, HAL::GenericGPIOController GPIO>
+using HAL::operator""_p;
+
+template <HAL::GenericSPIController SPI, HAL::GenericGPIOController GPIO,
+          auto Pins, typename Bus>
 class DWM {
   static_assert(std::endian::native == std::endian::little,
                 "DWM1000 requires little-endian architecture");
 
 public:
-  // TODO: make GPIO rvalue ref?
-  DWM(SPI &&spi, GPIO gpio, uint8_t rst_pin, uint8_t irq_pin)
-      : spi_{std::move(spi)}, gpio_{std::move(gpio)}, rst_pin_{rst_pin},
-        irq_pin_{irq_pin} {
+  static constexpr auto claims =
+      HAL::concat(Pins.claims(), GPIO::claims, SPI::claims);
+
+  using needs = Swarm::needs<Bus>;
+
+  DWM(Swarm::Assembly assembly, Bus &bus)
+      : spi_{assembly, bus, Pins["cs"_p]}, gpio_{assembly} {
     hard_reset();
   }
 
@@ -259,7 +267,9 @@ public:
     MBPS_68 = 0b10
   };
 
-  static constexpr std::string_view BitRateToString(BitRate br) noexcept {
+  // hidden friend: ADL finds it for the nested enum, so callers write
+  // to_string_view(br) the same way they do for PRF
+  friend constexpr std::string_view to_string_view(BitRate br) noexcept {
     using namespace std::string_view_literals; // Allows for ""sv suffix
 
     switch (br) {
@@ -269,10 +279,9 @@ public:
       return "850 kbps"sv;
     case BitRate::MBPS_68:
       return "6.8 Mbps"sv;
-    default:
-      __builtin_unreachable();
     }
 
+    // the value comes off the wire, so a reserved encoding is reachable
     return "UNKNOWN BITRATE"sv;
   }
 
@@ -626,18 +635,19 @@ private:
   }
 
   void hard_reset() {
-    gpio_.set_direction(rst_pin_, HAL::PinMode::Output);
-    gpio_.set_level(rst_pin_, HAL::Voltage::LOW);
+    constexpr HAL::Pin reset = Pins["reset"_p];
+
+    gpio_.set_direction(reset, HAL::PinMode::Output);
+    gpio_.set_level(reset, HAL::Voltage::LOW);
     gpio_.delay_ms(10);
-    gpio_.set_level(rst_pin_, HAL::Voltage::HIGH);
+    gpio_.set_level(reset, HAL::Voltage::HIGH);
     gpio_.delay_ms(10);
   }
 
-  std::expected<std::string_view, HAL::SpiError> get_tx_bit_rate() {
+  std::expected<BitRate, HAL::SpiError> get_tx_bit_rate() {
     return get_reg_view<DWMRegisterID::TX_FCTRL>().read().transform(
         [](uint64_t raw) {
-          return BitRateToString(
-              static_cast<BitRate>((raw >> 13) & 0b11)); // TODO: constants?
+          return static_cast<BitRate>((raw >> 13) & 0b11); // TODO: constants?
         });
   }
 
@@ -671,8 +681,6 @@ private:
 
   SPI spi_;
   GPIO gpio_;
-  uint8_t rst_pin_{};
-  uint8_t irq_pin_{};
 };
 
 #endif

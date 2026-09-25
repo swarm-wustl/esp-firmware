@@ -1,11 +1,21 @@
 #include "dwm.h"
 #include "esp32.h"
+#include "system.h"
 #include "unity.h"
 
+namespace {
+constexpr auto DWM_PINS = HAL::pins(HAL::NamedPin{"cs", GPIO_NUM_4},
+                                    HAL::NamedPin{"reset", GPIO_NUM_27},
+                                    HAL::NamedPin{"irq", GPIO_NUM_34});
+
+using Dwm = DWM<ESP32::SPI, ESP32::GPIO, DWM_PINS, ESP32::SpiBus>;
+using TestSystem = Swarm::system<ESP32::SpiBus, Dwm>;
+} // namespace
+
+
 TEST_CASE("Read DWM1000 ID", "[dwm]") {
-  ESP32::SPI spi{GPIO_NUM_4};
-  ESP32::GPIO gpio{};
-  DWM dwm_device{std::move(spi), std::move(gpio), GPIO_NUM_27, GPIO_NUM_34};
+  auto bus = TestSystem::make<ESP32::SpiBus>();
+  auto dwm_device = TestSystem::make<Dwm>(bus);
 
   auto id = dwm_device.get_device_id();
   TEST_ASSERT_TRUE(id.has_value());
@@ -15,10 +25,8 @@ TEST_CASE("Read DWM1000 ID", "[dwm]") {
 TEST_CASE("TX_FCTRL PRF write, read-back, and reset to default", "[dwm]") {
   // Keep in a blocked scope so it de-inits everything at the end of the block
   {
-    ESP32::SPI spi{GPIO_NUM_4};
-    ESP32::GPIO gpio{};
-    // DWM dwm_test{std::move(spi), std::move(gpio), 13};
-    DWM dwm_device{std::move(spi), std::move(gpio), GPIO_NUM_27, GPIO_NUM_34};
+    auto bus = TestSystem::make<ESP32::SpiBus>();
+  auto dwm_device = TestSystem::make<Dwm>(bus);
 
     // Check default PRF is 16 MHz per datasheet section 2.5
     auto default_prf = dwm_device.get_tx_prf();
@@ -36,9 +44,8 @@ TEST_CASE("TX_FCTRL PRF write, read-back, and reset to default", "[dwm]") {
   // Hard reset and verify default restored
   // Note: DWM constructor calls hard_reset(), so just reconstruct
   {
-    ESP32::SPI spi{GPIO_NUM_4};
-    ESP32::GPIO gpio{};
-    DWM dwm_device{std::move(spi), std::move(gpio), GPIO_NUM_27, GPIO_NUM_34};
+    auto bus = TestSystem::make<ESP32::SpiBus>();
+  auto dwm_device = TestSystem::make<Dwm>(bus);
 
     auto reset_prf = dwm_device.get_tx_prf();
     TEST_ASSERT_TRUE(reset_prf.has_value());
@@ -47,9 +54,8 @@ TEST_CASE("TX_FCTRL PRF write, read-back, and reset to default", "[dwm]") {
 }
 
 TEST_CASE("Read TX and RX timestamps", "[dwm]") {
-  ESP32::SPI spi{GPIO_NUM_4};
-  ESP32::GPIO gpio{};
-  DWM dwm_device{std::move(spi), std::move(gpio), GPIO_NUM_27, GPIO_NUM_34};
+  auto bus = TestSystem::make<ESP32::SpiBus>();
+  auto dwm_device = TestSystem::make<Dwm>(bus);
 
   // no TX/RX has occurred so the stamps are meaningless, but the register read
   // itself should still succeed over SPI

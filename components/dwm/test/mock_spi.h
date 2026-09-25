@@ -1,4 +1,3 @@
-// Written with Claude
 #ifndef DWM_MOCK_SPI_H
 #define DWM_MOCK_SPI_H
 
