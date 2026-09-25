@@ -6,6 +6,7 @@
 
 
 #include "i2c.h"
+#include <unordered_map>
 
 
 static const char *TAG = "i2c-simple-example";
@@ -62,6 +63,69 @@ esp_err_t imu_read_accelerometer_data(int16_t *gx, int16_t *gy, int16_t *gz){
    return ESP_OK;
 }
 
+esp_err_t imu_calibrate_readings(std::unordered_map<std::string, int16_t> *accel_offset_data, std::unordered_map<std::string, int16_t> *gyro_offset_data){
+  int16_t gx_total;
+  int16_t gy_total;
+  int16_t gz_total;
+
+  int16_t ax_high= INT16_MIN;
+  int16_t ax_low= INT16_MAX;
+  
+  int16_t ay_high = INT16_MIN;
+  int16_t ay_low = INT16_MAX;
+  
+  int16_t az_high = INT16_MIN;
+  int16_t az_low = INT16_MAX;
+  
+  int16_t gx_offset;
+  int16_t gy_offset;
+  int16_t gz_offset;
+
+  int16_t ax_offset;
+  int16_t ay_offset;
+  int16_t az_offset;
+
+  int16_t ax_scale;
+  int16_t ay_scale;
+  int16_t az_scale;
+
+  int ax, ay, az, gx, gy, gz;
+  for(int i = 0; i <= 100; ++i){
+
+    
+      ESP_ERROR_CHECK(imu_read_gyroscope_data(&gx, &gy, &gz));
+      ESP_ERROR_CHECK(imu_read_accelerometer_data(&ax, &ay, &az));
+
+      gx_total += *gx 
+      gy_total += *gy
+      gz_total += *gz
+
+      if (*ax < ax_low){
+        ax_low = *ax;
+      }
+
+      if (*ay < ay_low){
+        ay_low = *ay;
+      }
+
+      if (*az < az_low){
+        az_low = *az;
+      }
+
+
+      if (*ax > ax_high){
+        ax_high = *ax;
+      }
+
+      if (*ay > ay_high){
+        ay_high = *ay;
+      }
+
+      if (*az > az_high){
+        az_high = *az;
+      }
+  }
+}
 
 /**
 * @brief i2c master initialization
