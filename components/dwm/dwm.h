@@ -376,12 +376,12 @@ public:
     uint32_t panadr_val = (static_cast<uint32_t>(network_id) << 16) | device_address;
 
     // Write the 32-bit value to PAN_ADR at sub-register offset 0x00
-    return write_sub_value(dw1000::PAN_ADR, 0x00, panadr_val, 4);
+    return write_sub_value(dw1000::PANADR, 0x00, panadr_val, 4);
 }
   //Read PAN_ADR
   std::expected<uint32_t, HAL::SpiError> read_network() {
     std::array<std::byte, 4> b{};
-    return read_sub(dw1000::PAN_ADR, 0, b).transform([&] {
+    return read_sub(dw1000::PANADR, 0, b).transform([&] {
         uint32_t v = 0;
         for (size_t i = 0; i < b.size(); ++i) {
             v |= static_cast<uint32_t>(std::to_integer<uint8_t>(b[i])) << (8 * i);
