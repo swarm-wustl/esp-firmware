@@ -35,7 +35,7 @@ constexpr auto DWM_PINS = HAL::pins(HAL::NamedPin{"cs", GPIO_NUM_4},
                                     HAL::NamedPin{"reset", GPIO_NUM_27},
                                     HAL::NamedPin{"irq", GPIO_NUM_34});
 
-using Dwm = DWM<SPI, GPIO, DWM_PINS>;
+using Dwm = DWM<SPI, GPIO, DWM_PINS, SpiBus>;
 
 using Chassis =
     Swarm::chassis<Drive::Style::DIFFERENTIAL, MotorDriver, SpiBus, Dwm>;
@@ -47,7 +47,7 @@ using QueueType = Consumer::QueueType<DRIVE_STYLE>;
 
 // TODO: make templated and move to consumer.h?
 struct ConsumerTaskData {
-  HW::MotorDriver motorDriver;
+  HW::MotorDriver &motorDriver;
   HW::QueueType queue;
 };
 
@@ -83,8 +83,8 @@ extern "C" void app_main(void) {
   ESP_LOGI(TAG, "Testing UWB");
   ESP_LOGI(TAG, "FreeRTOS tick: %d Hz", CONFIG_FREERTOS_HZ);
 
-  HW::SpiBus spi_bus = HW::Chassis::make<HW::SpiBus>();
-  HW::Dwm dwm_sensor = HW::Chassis::make<HW::Dwm>(spi_bus);
+  auto &peripherals = HW::Chassis::take();
+  auto &dwm_sensor = peripherals.get<HW::Dwm>();
 
   // bring-up: flip to false on the responder board
   constexpr bool kInitiator = true;
@@ -127,7 +127,7 @@ extern "C" void app_main(void) {
     return;
   }
 
-  static ConsumerTaskData consumerTaskData{HW::Chassis::make<HW::MotorDriver>(),
+  static ConsumerTaskData consumerTaskData{peripherals.get<HW::MotorDriver>(),
                                            std::move(*queue)};
 
   ESP_LOGI(TAG, "Hello world!");

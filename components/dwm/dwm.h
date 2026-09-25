@@ -2,6 +2,7 @@
 #define DWM_H
 
 #include "assembly.h"
+#include "system.h"
 #include "dwm_data.h"
 #include "dwm_regs.h"
 #include "peripheral_hal.h"
@@ -238,7 +239,7 @@ constexpr std::string_view to_string_view(PRF prf) noexcept {
 using HAL::operator""_p;
 
 template <HAL::GenericSPIController SPI, HAL::GenericGPIOController GPIO,
-          auto Pins>
+          auto Pins, typename Bus>
 class DWM {
   static_assert(std::endian::native == std::endian::little,
                 "DWM1000 requires little-endian architecture");
@@ -247,7 +248,8 @@ public:
   static constexpr auto claims =
       HAL::concat(Pins.claims(), GPIO::claims, SPI::claims);
 
-  template <typename Bus>
+  using needs = Swarm::needs<Bus>;
+
   DWM(Swarm::Assembly assembly, Bus &bus)
       : spi_{assembly, bus, Pins["cs"_p]}, gpio_{assembly} {
     hard_reset();
