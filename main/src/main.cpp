@@ -101,20 +101,20 @@ extern "C" void app_main(void) {
     ESP_LOGE(TAG, "DW1000 configure failed");
   }
 
-  while (true) {
-    if constexpr (kInitiator) {
-      if (auto d = dwm_sensor.range()) {
-        ESP_LOGI(TAG, "range: %d cm", static_cast<int>(*d * 100.0));
-      } else {
-        ESP_LOGE(TAG, "range failed");
-      }
-      vTaskDelay(pdMS_TO_TICKS(200));
-    } else {
-      auto r = dwm_sensor.respond();
-      ESP_LOGI(TAG, "respond: %s", r ? "ok" : "fail");
-      vTaskDelay(pdMS_TO_TICKS(10));
-    }
-  }
+  // while (true) {
+  //   if constexpr (kInitiator) {
+  //     if (auto d = dwm_sensor.range()) {
+  //       ESP_LOGI(TAG, "range: %d cm", static_cast<int>(*d * 100.0));
+  //     } else {
+  //       ESP_LOGE(TAG, "range failed");
+  //     }
+  //     vTaskDelay(pdMS_TO_TICKS(200));
+  //   } else {
+  //     auto r = dwm_sensor.respond();
+  //     ESP_LOGI(TAG, "respond: %s", r ? "ok" : "fail");
+  //     vTaskDelay(pdMS_TO_TICKS(10));
+  //   }
+  // }
 #if defined(CONFIG_MICRO_ROS_ESP_NETIF_WLAN) ||                                \
     defined(CONFIG_MICRO_ROS_ESP_NETIF_ENET)
   ESP_ERROR_CHECK(uros_network_interface_initialize());
