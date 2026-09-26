@@ -17,9 +17,7 @@
 #include <memory>
 #include <chrono>
 #include <thread>
-
-#define LSBSENS_GYRO 131 //LSB sensitivity for the gyroscope
-#define LSBSENS_ACCEL 16384 //LSB sensitivity for the accelerometer
+#include <unordered_map>
 
 static const char *TAG = "main";
 
@@ -174,10 +172,23 @@ extern "C" void app_main(void) {
    int16_t accelX;
    int16_t accelY;
    int16_t accelZ;
+   
+   std::unordered_map<std::string, int16_t> accel_offset_data, gyro_offset_data;
 
+   ESP_LOGI(TAG, "Calibrating data - do not move device");
+
+   ESP_ERROR_CHECK(imu_calibrate_readings(&accel_offset_data, &gyro_offset_data);
 
    while (1){
        ESP_ERROR_CHECK(imu_read_gyroscope_data(&gyroX, &gyroY, &gyroZ));
+
+       gyroX -= gyro_offset_data["gx_offset"]
+       gyroY -= gyro_offset_data["gy_offset"]
+       gyroZ -= gyro_offset_data["gz_offset"]
+
+       accelX = accel_offset_data["ax_scale"] * (accelX - accel_offset_data["ax_offset"]);
+       accelY = accel_offset_data["ay_scale"] * (accelY - accel_offset_data["ay_offset"]);
+       accelZ = accel_offset_data["az_scale"] * (accelZ - accel_offset_data["az_offset"]);
 
 
        // read in angles per second

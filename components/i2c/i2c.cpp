@@ -64,9 +64,9 @@ esp_err_t imu_read_accelerometer_data(int16_t *gx, int16_t *gy, int16_t *gz){
 }
 
 esp_err_t imu_calibrate_readings(std::unordered_map<std::string, int16_t> *accel_offset_data, std::unordered_map<std::string, int16_t> *gyro_offset_data){
-  int16_t gx_total;
-  int16_t gy_total;
-  int16_t gz_total;
+  int16_t gx_total = 0;
+  int16_t gy_total = 0;
+  int16_t gz_total = 0;
 
   int16_t ax_high= INT16_MIN;
   int16_t ax_low= INT16_MAX;
@@ -77,55 +77,71 @@ esp_err_t imu_calibrate_readings(std::unordered_map<std::string, int16_t> *accel
   int16_t az_high = INT16_MIN;
   int16_t az_low = INT16_MAX;
   
-  int16_t gx_offset;
-  int16_t gy_offset;
-  int16_t gz_offset;
+  int16_t gx_offset = 0;
+  int16_t gy_offset = 0;
+  int16_t gz_offset = 0;
 
-  int16_t ax_offset;
-  int16_t ay_offset;
-  int16_t az_offset;
+  int16_t ax_offset = 0;
+  int16_t ay_offset = 0;
+  int16_t az_offset = 0;
 
-  int16_t ax_scale;
-  int16_t ay_scale;
-  int16_t az_scale;
+  int16_t ax_scale = 0;
+  int16_t ay_scale = 0;
+  int16_t az_scale = 0;
 
-  int ax, ay, az, gx, gy, gz;
-  for(int i = 0; i <= 100; ++i){
+  int16_t ax, ay, az, gx, gy, gz;
+  for(int i = 0; i <= NUM_SAMPLES; ++i){
 
     
       ESP_ERROR_CHECK(imu_read_gyroscope_data(&gx, &gy, &gz));
       ESP_ERROR_CHECK(imu_read_accelerometer_data(&ax, &ay, &az));
 
-      gx_total += *gx 
-      gy_total += *gy
-      gz_total += *gz
+      gx_total += gx 
+      gy_total += gy
+      gz_total += gz
 
-      if (*ax < ax_low){
-        ax_low = *ax;
-      }
-
-      if (*ay < ay_low){
-        ay_low = *ay;
-      }
-
-      if (*az < az_low){
-        az_low = *az;
-      }
+      ax_low = std::min(ax, ax_low);
+      ax_high = std::max(ax, ax_high);
 
 
-      if (*ax > ax_high){
-        ax_high = *ax;
-      }
+      ay_low = std::min(ay, ay_low);
+      ay_high = std::max(ay, ay_high);
 
-      if (*ay > ay_high){
-        ay_high = *ay;
-      }
 
-      if (*az > az_high){
-        az_high = *az;
-      }
-  }
+      az_low = std::min(az, az_low);
+      az_high = std::max(az, az_high);
+ }
+
+  gx_offset = gx_total/NUM_SAMPLES;
+  gy_offset = gy_total/NUM_SAMPLES;
+  gz_offset = gz_total/NUM_SAMPLES;
+
+
+  ax_offset = (ax_high + ax_low)/2;
+  ay_offset = (ay_high + ay_low)/2; 
+  az_offset = (az_high + az_low)/2;
+
+  ax_scale = LSBSENS_ACCEL/(ax_high - ax_low);
+  ay_scale = LSBSENS_ACCEL/(ay_high - ay_low);
+  az_scale = LSBSENS_ACCEL/(az_high - az_low);
+
+  *gyro_offset_data["gx_offset"] = gx_offset;
+  *gyro_offset_data["gy_offset"] = gy_offset;
+  *gyro_offset_data["gz_offset"] = gz_offset;
+
+
+  *accel_offset_data["ax_offset"] = ax_offset;
+  *accel_offset_data["ay_offset"] = ay_offset;
+  *accel_offset_data["az_offset"] = az_offset;
+
+
+  *accel_offset_data["ax_scale"] = ax_scale;
+  *accel_offset_data["ay_scale"] = ay_scale;
+  *accel_offset_data["az_scale"] = az_scale;
+
+
 }
+
 
 /**
 * @brief i2c master initialization

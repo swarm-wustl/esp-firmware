@@ -43,6 +43,10 @@
 #define ACCEL_ZOUT_L                 0x40
 
 
+#define LSBSENS_GYRO 131 //LSB sensitivity for the gyroscope
+#define LSBSENS_ACCEL 16384 //LSB sensitivity for the accelerometer
+
+#define NUM_SAMPLES 100 //samples taken for calibration purposes
 
 
 esp_err_t mpu6050_register_read(uint8_t reg_addr, uint8_t *data, size_t len);
@@ -55,6 +59,6 @@ esp_err_t imu_read_gyroscope_data(int16_t *gx, int16_t *gy, int16_t *gz);
 
 
 esp_err_t imu_read_accelerometer_data(int16_t *gx, int16_t *gy, int16_t *gz);
-
+}
 
 esp_err_t i2c_master_init(void);
