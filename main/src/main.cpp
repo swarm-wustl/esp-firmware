@@ -132,6 +132,8 @@ extern "C" void app_main(void) {
 
   ESP_LOGI(TAG, "Hello world!");
 
+  // TODO: tune priorities of tasks
+
   xTaskCreate(
       rosTaskWrapper, "uros_task",
       4096, // TODO: see

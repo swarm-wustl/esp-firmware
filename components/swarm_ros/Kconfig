@@ -1,0 +1,13 @@
+menu "Swarm ROS"
+
+    config SWARM_ROS_NAMESPACE
+        string "ROS namespace for this board"
+        default "swarm_1"
+        help
+            Namespace the node and its relative topics live under, e.g. a
+            value of "swarm_1" gives /swarm_1/base and /swarm_1/cmd_vel.
+            Must be a valid ROS identifier: [A-Za-z_][A-Za-z0-9_]*. Each
+            board in the swarm needs a distinct value, or the nodes collide
+            on the agent. Empty puts the node at the root.
+
+endmenu

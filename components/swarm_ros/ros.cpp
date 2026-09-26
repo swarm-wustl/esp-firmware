@@ -63,12 +63,13 @@ void ROS::spin(void *context, TwistHandler on_twist) {
                                          &allocator));
 
   rcl_node_t node;
-  RCCHECK(rclc_node_init_default(&node, "uros_node", "", &support));
+  RCCHECK(rclc_node_init_default(&node, "base", CONFIG_SWARM_ROS_NAMESPACE,
+                                 &support));
 
   rcl_subscription_t subscriber;
   RCCHECK(rclc_subscription_init_default(
       &subscriber, &node,
-      ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist), "uros_topic"));
+      ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist), "cmd_vel"));
 
   rclc_executor_t executor;
   RCCHECK(rclc_executor_init(&executor, &support.context, 1, &allocator));
