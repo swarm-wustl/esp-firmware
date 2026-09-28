@@ -3,11 +3,13 @@
 #include "dwm.h"
 #include "esp32.h"
 #include "l298n.h"
-#include "ros.h"
+#include "session.h"
 #include "system.h"
 
 #include "esp_log.h"
 
+#include <geometry_msgs/msg/twist.h>
+#include <sensor_msgs/msg/range.h>
 #include <uros_network_interfaces.h>
 
 #include "freertos/FreeRTOS.h"
@@ -16,6 +18,9 @@
 #include <utility>
 
 static const char *TAG = "main";
+
+SWARM_ROS_MESSAGE(geometry_msgs, msg, Twist)
+SWARM_ROS_MESSAGE(sensor_msgs, msg, Range)
 
 namespace HW {
 using SPI = ESP32::SPI;
@@ -43,6 +48,11 @@ using Chassis =
 constexpr Drive::Style DRIVE_STYLE = Chassis::style;
 
 using QueueType = Consumer::QueueType<DRIVE_STYLE>;
+
+using CmdVel = ROS::subscribes<geometry_msgs__msg__Twist, "cmd_vel">;
+using UwbRange = ROS::publishes<sensor_msgs__msg__Range, "uwb/range">;
+
+using Node = ROS::node<"base", CONFIG_SWARM_ROS_NAMESPACE, CmdVel, UwbRange>;
 } // namespace HW
 
 // TODO: make templated and move to consumer.h?
@@ -59,22 +69,27 @@ static void consumerTaskWrapper(void *pvParameters) {
   vTaskDelete(nullptr);
 }
 
-static void onTwist(const geometry_msgs__msg__Twist &twist, void *context) {
-  HW::QueueType &queue = *reinterpret_cast<HW::QueueType *>(context);
-
-  const Drive::Twist body_twist{twist.linear.x, twist.linear.y,
-                                twist.angular.z};
-
-  if (!queue.push(Consumer::MessageTag::MOTOR_FRAME,
-                  Consumer::MessageBody<HW::DRIVE_STYLE>{
-                      .motor_frame = Drive::inverse_kinematics<HW::DRIVE_STYLE>(
-                          body_twist)})) {
-    ESP_LOGE(TAG, "Dropped motor frame: consumer queue full");
-  }
-}
-
 static void rosTaskWrapper(void *pvParameters) {
-  ROS::spin(pvParameters, onTwist);
+  HW::QueueType &queue = *reinterpret_cast<HW::QueueType *>(pvParameters);
+
+  static ROS::session<HW::Node> session;
+
+  static auto onTwist = [&queue](const geometry_msgs__msg__Twist &twist) {
+    const Drive::Twist body_twist{twist.linear.x, twist.linear.y,
+                                  twist.angular.z};
+
+    if (!queue.push(Consumer::MessageTag::MOTOR_FRAME,
+                    Consumer::MessageBody<HW::DRIVE_STYLE>{
+                        .motor_frame =
+                            Drive::inverse_kinematics<HW::DRIVE_STYLE>(
+                                body_twist)})) {
+      ESP_LOGE(TAG, "Dropped motor frame: consumer queue full");
+    }
+  };
+
+  if (session.init() && session.on<HW::CmdVel>(onTwist)) {
+    session.spin();
+  }
 
   vTaskDelete(nullptr);
 }
