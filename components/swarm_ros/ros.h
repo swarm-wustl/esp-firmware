@@ -7,6 +7,7 @@
 
 #include <concepts>
 #include <cstddef>
+#include <cstdint>
 
 namespace ROS {
 template <size_t N> struct name {
@@ -30,6 +31,15 @@ concept Described = requires {
       const rosidl_message_type_support_t *>;
 };
 
+// a message carrying a std_msgs/Header, so the session can stamp it centrally
+// rather than every producer remembering to
+template <typename Msg>
+concept Stamped = requires(Msg &msg) {
+  msg.header.stamp.sec;
+  msg.header.stamp.nanosec;
+  msg.header.frame_id;
+};
+
 // RELIABLE is declarable but has not worked against this libmicroros build --
 // the agent refuses the datareader and rcl reports a bare RMW_RET_ERROR. The
 // middleware is compiled with RMW_UXRCE_MAX_HISTORY 1 while the reliable
@@ -43,6 +53,7 @@ constexpr const rmw_qos_profile_t *profile_for(QoS qos) {
 
 struct subscription_kind {};
 struct publisher_kind {};
+struct stream_kind {};
 
 template <Described Msg, name Topic, QoS Q = QoS::SENSOR_DATA>
 struct subscribes {
@@ -62,6 +73,26 @@ struct publishes {
   static constexpr QoS qos = Q;
 };
 
+// a publisher that owns the channel feeding it, so a producer on another task
+// hands over a plain value and never touches an rcl handle. Fill converts the
+// payload into the message; the header is the session's business
+template <Described Msg, name Topic, name FrameId, typename Payload, auto Fill,
+          size_t Depth = 8, QoS Q = QoS::SENSOR_DATA>
+struct streams {
+  using kind = stream_kind;
+  using message_type = Msg;
+  using payload_type = Payload;
+
+  static constexpr auto topic = Topic;
+  static constexpr auto frame_id = FrameId;
+  static constexpr auto fill = Fill;
+  static constexpr size_t depth = Depth;
+  static constexpr QoS qos = Q;
+
+  static_assert(std::invocable<decltype(Fill), Msg &, const Payload &>,
+                "Fill must be callable as Fill(message, payload)");
+};
+
 template <typename T>
 concept Subscribes = std::same_as<typename T::kind, subscription_kind>;
 
@@ -69,7 +100,10 @@ template <typename T>
 concept Publishes = std::same_as<typename T::kind, publisher_kind>;
 
 template <typename T>
-concept Declaration = Subscribes<T> || Publishes<T>;
+concept Streams = std::same_as<typename T::kind, stream_kind>;
+
+template <typename T>
+concept Declaration = Subscribes<T> || Publishes<T> || Streams<T>;
 
 namespace detail {
 template <Declaration... Decls> consteval bool topics_unique() {
@@ -103,8 +137,10 @@ template <name Name, name Namespace, Declaration... Decls> struct node {
   static constexpr auto node_name = Name;
   static constexpr auto node_namespace = Namespace;
 
-  static constexpr size_t subscriptions = (0 + ... + (Subscribes<Decls> ? 1 : 0));
-  static constexpr size_t publishers = (0 + ... + (Publishes<Decls> ? 1 : 0));
+  static constexpr size_t subscriptions =
+      (0 + ... + (Subscribes<Decls> ? 1 : 0));
+  static constexpr size_t publishers =
+      (0 + ... + ((Publishes<Decls> || Streams<Decls>) ? 1 : 0));
 
   static_assert(subscriptions <= RMW_UXRCE_MAX_SUBSCRIPTIONS,
                 "more subscriptions than libmicroros was built for -- raise "

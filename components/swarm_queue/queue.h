@@ -16,14 +16,11 @@ enum class QueueError : uint8_t { Full, Closed };
 template <typename T>
 concept Payload = std::is_trivially_copyable_v<T>;
 
-template <typename Tag, typename Body, size_t Capacity>
-  requires Payload<Tag> && Payload<Body>
+template <typename Body, size_t Capacity>
+  requires Payload<Body>
 class Queue {
 public:
-  struct Message {
-    Tag tag;
-    Body body;
-  };
+  using value_type = Body;
 
 private:
   QueueHandle_t handle;
@@ -32,7 +29,7 @@ private:
 
 public:
   [[nodiscard]] static std::optional<Queue> create() {
-    QueueHandle_t h = xQueueCreate(Capacity, sizeof(Message));
+    QueueHandle_t h = xQueueCreate(Capacity, sizeof(Body));
 
     if (h == nullptr) {
       return std::nullopt;
@@ -63,30 +60,26 @@ public:
   }
 
   [[nodiscard]] std::expected<void, QueueError>
-  push(Tag tag, Body body, TickType_t timeout = portMAX_DELAY) {
+  push(const Body &body, TickType_t timeout = portMAX_DELAY) {
     if (handle == nullptr) {
       return std::unexpected{QueueError::Closed};
     }
 
-    // xQueueSend copies the message into the queue's own storage, so a local
-    // is enough -- and std::move would leave the copied-from bytes behind
-    const Message msg{.tag = tag, .body = body};
-
-    if (xQueueSend(handle, &msg, timeout) != pdPASS) {
+    if (xQueueSend(handle, &body, timeout) != pdPASS) {
       return std::unexpected{QueueError::Full};
     }
 
     return {};
   }
 
-  [[nodiscard]] std::optional<Message> pop(TickType_t timeout = portMAX_DELAY) {
-    Message msg;
+  [[nodiscard]] std::optional<Body> pop(TickType_t timeout = portMAX_DELAY) {
+    Body body;
 
-    if (handle == nullptr || xQueueReceive(handle, &msg, timeout) != pdPASS) {
+    if (handle == nullptr || xQueueReceive(handle, &body, timeout) != pdPASS) {
       return std::nullopt;
     }
 
-    return msg;
+    return body;
   }
 };
 
