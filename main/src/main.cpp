@@ -63,8 +63,6 @@ using EncoderBank =
 
 using Chassis = Swarm::chassis<STYLE, MotorDriver, SpiBus, Dwm, EncoderBank>;
 
-constexpr Drive::Style DRIVE_STYLE = Chassis::style;
-
 using CmdVel = ROS::subscribes<geometry_msgs__msg__Twist, "cmd_vel">;
 using UwbRange = ROS::streams<sensor_msgs__msg__Range, "uwb/range", "uwb_link",
                               double, &fill_range>;
@@ -134,8 +132,8 @@ extern "C" void app_main(void) {
 
   static auto motion = Sched::make_task<4096, configMAX_PRIORITIES - 2>(
       Sched::latest<HW::MOTION_PERIOD_MS>(commands) |
-      Sched::then(Drive::inverse_kinematics<HW::DRIVE_STYLE>) |
-      Sched::to([&motors](const Drive::Frame<HW::DRIVE_STYLE> &frame) {
+      Sched::then(Drive::inverse_kinematics<HW::STYLE>) |
+      Sched::to([&motors](const Drive::Frame<HW::STYLE> &frame) {
         motors.run(frame);
       }));
 
