@@ -13,8 +13,6 @@
 #include "swarm_hal.h"
 
 namespace L298N {
-using HAL::operator""_p;
-
 struct MotorPins {
   Motor::Name name;
   int in_a;

@@ -52,8 +52,13 @@ consteval uint32_t gcd(uint32_t a, uint32_t b) {
 consteval uint32_t min_of(uint32_t a, uint32_t b) { return a < b ? a : b; }
 } // namespace detail
 
+// a period alone is not a source -- a pipeline carries one too, and nothing
+// should be able to stand in for the thing that emits the values
 template <typename S>
-concept Source = requires { S::period_ms; };
+concept Source = requires(S source) {
+  S::period_ms;
+  source.poll([](auto &&) {});
+};
 
 template <uint32_t PeriodMs> struct timer_source {
   static_assert(PeriodMs > 0, "a period of zero would never yield");
@@ -95,18 +100,6 @@ template <uint32_t PeriodMs, typename Channel> struct latest_source {
   }
 };
 
-template <uint32_t PeriodMs> inline constexpr timer_source<PeriodMs> every{};
-
-template <uint32_t PeriodMs, typename Channel>
-constexpr auto from(Channel &channel) {
-  return drain_source<PeriodMs, Channel>{&channel};
-}
-
-template <uint32_t PeriodMs, typename Channel>
-constexpr auto latest(Channel &channel) {
-  return latest_source<PeriodMs, Channel>{&channel};
-}
-
 template <typename F, bool Terminal> struct stage {
   static constexpr bool terminal = Terminal;
 
@@ -131,6 +124,7 @@ template <typename F> constexpr auto to(F fn) {
 template <Source Src, Stage... Stages> class pipeline {
 public:
   static constexpr uint32_t period_ms = Src::period_ms;
+  static constexpr size_t stages = sizeof...(Stages);
 
   constexpr pipeline(Src source, std::tuple<Stages...> stages)
       : source_(std::move(source)), stages_(std::move(stages)) {}
@@ -152,9 +146,14 @@ public:
   }
 
 private:
-  static constexpr bool ends_in_sink =
-      std::tuple_element_t<sizeof...(Stages) - 1,
-                           std::tuple<Stages...>>::terminal;
+  static constexpr bool ends_in_sink = [] {
+    if constexpr (sizeof...(Stages) == 0) {
+      return false;
+    } else {
+      return std::tuple_element_t<sizeof...(Stages) - 1,
+                                  std::tuple<Stages...>>::terminal;
+    }
+  }();
 
   template <size_t I, typename V> void step(V &&value) {
     if constexpr (I == sizeof...(Stages)) {
@@ -198,13 +197,25 @@ private:
   uint32_t drops_ = 0;
 };
 
-template <Source Src, Stage Next> constexpr auto operator|(Src source, Next next) {
-  return pipeline<Src, Next>{std::move(source), std::tuple{std::move(next)}};
-}
-
+// a source enters the chain already wrapped, so every link of the fold has a
+// pipeline on the left and one overload covers all of them
 template <Source Src, Stage... Stages, Stage Next>
 constexpr auto operator|(pipeline<Src, Stages...> pipe, Next next) {
   return std::move(pipe).append(std::move(next));
+}
+
+template <uint32_t PeriodMs>
+inline constexpr auto every =
+    pipeline<timer_source<PeriodMs>>{timer_source<PeriodMs>{}, {}};
+
+template <uint32_t PeriodMs, typename Channel>
+constexpr auto from(Channel &channel) {
+  return pipeline<drain_source<PeriodMs, Channel>>{{&channel}, {}};
+}
+
+template <uint32_t PeriodMs, typename Channel>
+constexpr auto latest(Channel &channel) {
+  return pipeline<latest_source<PeriodMs, Channel>>{{&channel}, {}};
 }
 
 template <uint32_t StackBytes, UBaseType_t Priority, typename... Pipes>
@@ -226,6 +237,9 @@ public:
   }();
 
   static_assert(sizeof...(Pipes) > 0, "a task with no pipelines does nothing");
+  static_assert(((Pipes::stages > 0) && ...),
+                "a pipeline with no stages polls its source and throws every "
+                "value away -- give it a `to`");
   static_assert(base_ms == shortest_ms,
                 "every period in a task must be a multiple of the shortest one "
                 "-- otherwise the derived wake period collapses toward 1ms. "

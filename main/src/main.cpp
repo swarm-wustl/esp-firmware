@@ -1,5 +1,6 @@
 #include "differential_drive.h"
 #include "dwm.h"
+#include "encoders.h"
 #include "esp32.h"
 #include "l298n.h"
 #include "session.h"
@@ -49,8 +50,18 @@ constexpr auto DWM_PINS = HAL::pins(HAL::NamedPin{"cs", GPIO_NUM_4},
 
 using Dwm = DWM<SPI, GPIO, DWM_PINS, SpiBus>;
 
-using Chassis =
-    Swarm::chassis<Drive::Style::DIFFERENTIAL, MotorDriver, SpiBus, Dwm>;
+constexpr Drive::Style STYLE = Drive::Style::DIFFERENTIAL;
+
+// one PCNT unit per wheel. 13/14/21/22 all carry an internal pull-up and are
+// not strapping pins -- 34-39 would need external ones
+constexpr auto ENCODER_ROWS = Encoders::for_style<STYLE>(
+    Encoders::Row{Motor::Name::LEFT, 14, 13, 0},
+    Encoders::Row{Motor::Name::RIGHT, 22, 21, 1});
+
+using EncoderBank =
+    Encoders::Bank<ESP32::QuadratureCounter, ENCODER_ROWS, Encoder::fit0485>;
+
+using Chassis = Swarm::chassis<STYLE, MotorDriver, SpiBus, Dwm, EncoderBank>;
 
 constexpr Drive::Style DRIVE_STYLE = Chassis::style;
 
@@ -71,10 +82,22 @@ constexpr bool kInitiator = true;
 constexpr uint32_t MOTION_PERIOD_MS = 5;
 constexpr uint32_t EXECUTOR_PERIOD_MS = 10;
 constexpr uint32_t POLL_PERIOD_MS = kInitiator ? 200 : 10;
+constexpr uint32_t ODOMETRY_PERIOD_MS = 50;
 } // namespace HW
 
 static HW::CmdChannel commands;
 static ROS::session<HW::Node> session;
+
+static constexpr const char *label(Motor::Name name) {
+  switch (name) {
+  case Motor::Name::LEFT:
+    return "left";
+  case Motor::Name::RIGHT:
+    return "right";
+  default:
+    return "motor";
+  }
+}
 
 static auto onTwist = [](const geometry_msgs__msg__Twist &twist) {
   const Drive::Twist body{twist.linear.x, twist.linear.y, twist.angular.z};
@@ -90,6 +113,7 @@ extern "C" void app_main(void) {
   auto &peripherals = HW::Chassis::take();
   auto &dwm_sensor = peripherals.get<HW::Dwm>();
   auto &motors = peripherals.get<HW::MotorDriver>();
+  auto &encoders = peripherals.get<HW::EncoderBank>();
 
   if (auto id = dwm_sensor.get_device_id()) {
     ESP_LOGI(TAG, "DW1000 id: 0x%08lX", static_cast<unsigned long>(*id));
@@ -115,6 +139,19 @@ extern "C" void app_main(void) {
         motors.run(frame);
       }));
 
+  static auto odometry = Sched::make_task<4096, configMAX_PRIORITIES - 4>(
+      Sched::every<HW::ODOMETRY_PERIOD_MS> |
+      Sched::then([&encoders] { return encoders.advance(); }) |
+      Sched::to([](const auto &deltas) {
+        constexpr double seconds = HW::ODOMETRY_PERIOD_MS / 1000.0;
+
+        for (const Encoder::Reading &wheel : deltas) {
+          ESP_LOGI(TAG, "%s %+5ld counts %+7.2f rpm", label(wheel.name),
+                   static_cast<long>(wheel.counts),
+                   Encoder::rpm(HW::EncoderBank::spec, wheel.counts, seconds));
+        }
+      }));
+
   // init runs on the uros task, not here: a dead agent must not stop motion
   // from spawning
   static auto ros = Sched::make_task<16000, configMAX_PRIORITIES - 1>(
@@ -133,6 +170,7 @@ extern "C" void app_main(void) {
   // TODO: maybe make this part of construction so we don't have two-phase?
   ros.spawn("uros");
   motion.spawn("motion");
+  odometry.spawn("odometry");
 
   if constexpr (HW::kInitiator) {
     static auto ranging = Sched::make_task<4096, configMAX_PRIORITIES - 3>(
