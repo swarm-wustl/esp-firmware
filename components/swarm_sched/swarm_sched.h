@@ -130,7 +130,9 @@ public:
       : source_(std::move(source)), stages_(std::move(stages)) {}
 
   void run() {
-    source_.poll([this](auto &&value) { step<0>(std::forward<decltype(value)>(value)); });
+    source_.poll([this](auto &&value) {
+      step<0>(std::forward<decltype(value)>(value));
+    });
   }
 
   [[nodiscard]] uint32_t drops() const { return drops_; }
@@ -176,12 +178,14 @@ private:
       } else if constexpr (detail::is_expected_v<Result>) {
         auto result = std::get<I>(stages_)(std::forward<V>(value));
 
+        // TODO: some way to properly handle drops?
         if (!result) {
           ++drops_;
           return;
         }
 
-        if constexpr (std::is_void_v<typename std::decay_t<Result>::value_type>) {
+        if constexpr (std::is_void_v<
+                          typename std::decay_t<Result>::value_type>) {
           step<I + 1>(std::monostate{});
         } else {
           step<I + 1>(*std::move(result));
@@ -222,13 +226,11 @@ template <uint32_t StackBytes, UBaseType_t Priority, typename... Pipes>
 class task {
 public:
   static constexpr uint32_t base_ms =
-      (Pipes::period_ms | ... | 0) == 0
-          ? 1
-          : [] {
-              uint32_t g = 0;
-              ((g = detail::gcd(g, Pipes::period_ms)), ...);
-              return g;
-            }();
+      (Pipes::period_ms | ... | 0) == 0 ? 1 : [] {
+        uint32_t g = 0;
+        ((g = detail::gcd(g, Pipes::period_ms)), ...);
+        return g;
+      }();
 
   static constexpr uint32_t shortest_ms = [] {
     uint32_t m = UINT32_MAX;
