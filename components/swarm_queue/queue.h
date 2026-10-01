@@ -7,9 +7,8 @@
 #include <expected>
 #include <optional>
 #include <type_traits>
-#include <utility>
 
-enum class QueueError : uint8_t { Full, Closed };
+enum class QueueError : uint8_t { Full };
 
 // xQueueSend/xQueueReceive memcpy the item in and out, so anything with a
 // non-trivial copy, move or destructor would be silently torn apart
@@ -22,49 +21,23 @@ class Queue {
 public:
   using value_type = Body;
 
-private:
-  QueueHandle_t handle;
+  // static storage, so creation cannot fail and there is no such thing as a
+  // channel that does not exist yet
+  Queue()
+      : handle(xQueueCreateStatic(Capacity, sizeof(Body), storage, &control)) {}
 
-  explicit Queue(QueueHandle_t h) : handle(h) {}
-
-public:
-  [[nodiscard]] static std::optional<Queue> create() {
-    QueueHandle_t h = xQueueCreate(Capacity, sizeof(Body));
-
-    if (h == nullptr) {
-      return std::nullopt;
-    }
-
-    return Queue{h};
-  }
-
-  ~Queue() {
-    if (handle != nullptr) {
-      vQueueDelete(handle);
-    }
-  }
+  ~Queue() { vQueueDelete(handle); }
 
   Queue(const Queue &) = delete;
   Queue &operator=(const Queue &) = delete;
 
-  Queue(Queue &&other) noexcept : handle(std::exchange(other.handle, nullptr)) {}
-
-  Queue &operator=(Queue &&other) noexcept {
-    if (this != &other) {
-      if (handle != nullptr) {
-        vQueueDelete(handle);
-      }
-      handle = std::exchange(other.handle, nullptr);
-    }
-    return *this;
-  }
+  // the queue's storage lives in this object, so the handle cannot outlive its
+  // address
+  Queue(Queue &&) = delete;
+  Queue &operator=(Queue &&) = delete;
 
   [[nodiscard]] std::expected<void, QueueError>
   push(const Body &body, TickType_t timeout = portMAX_DELAY) {
-    if (handle == nullptr) {
-      return std::unexpected{QueueError::Closed};
-    }
-
     if (xQueueSend(handle, &body, timeout) != pdPASS) {
       return std::unexpected{QueueError::Full};
     }
@@ -75,12 +48,17 @@ public:
   [[nodiscard]] std::optional<Body> pop(TickType_t timeout = portMAX_DELAY) {
     Body body;
 
-    if (handle == nullptr || xQueueReceive(handle, &body, timeout) != pdPASS) {
+    if (xQueueReceive(handle, &body, timeout) != pdPASS) {
       return std::nullopt;
     }
 
     return body;
   }
+
+private:
+  StaticQueue_t control{};
+  alignas(Body) uint8_t storage[Capacity * sizeof(Body)]{};
+  QueueHandle_t handle;
 };
 
 #endif

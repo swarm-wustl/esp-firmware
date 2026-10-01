@@ -13,7 +13,6 @@
 #include <uros_network_interfaces.h>
 
 #include "freertos/FreeRTOS.h"
-#include <optional>
 
 static const char *TAG = "main";
 
@@ -74,17 +73,13 @@ constexpr uint32_t EXECUTOR_PERIOD_MS = 10;
 constexpr uint32_t POLL_PERIOD_MS = kInitiator ? 200 : 10;
 } // namespace HW
 
-static HW::CmdChannel *cmd_channel = nullptr;
+static HW::CmdChannel commands;
 static ROS::session<HW::Node> session;
 
 static auto onTwist = [](const geometry_msgs__msg__Twist &twist) {
-  if (cmd_channel == nullptr) {
-    return;
-  }
-
   const Drive::Twist body{twist.linear.x, twist.linear.y, twist.angular.z};
 
-  if (!cmd_channel->push(body, 0)) {
+  if (!commands.push(body, 0)) {
     ESP_LOGW(TAG, "Dropped twist: command channel full");
   }
 };
@@ -113,17 +108,8 @@ extern "C" void app_main(void) {
   ESP_ERROR_CHECK(uros_network_interface_initialize());
 #endif
 
-  static std::optional<HW::CmdChannel> commands = HW::CmdChannel::create();
-
-  if (!commands) {
-    ESP_LOGE(TAG, "Unable to create command channel");
-    return;
-  }
-
-  cmd_channel = &*commands;
-
   static auto motion = Sched::make_task<4096, configMAX_PRIORITIES - 2>(
-      Sched::latest<HW::MOTION_PERIOD_MS>(*commands) |
+      Sched::latest<HW::MOTION_PERIOD_MS>(commands) |
       Sched::then(Drive::inverse_kinematics<HW::DRIVE_STYLE>) |
       Sched::to([&motors](const Drive::Frame<HW::DRIVE_STYLE> &frame) {
         motors.run(frame);
@@ -132,9 +118,9 @@ extern "C" void app_main(void) {
   // init runs on the uros task, not here: a dead agent must not stop motion
   // from spawning
   static auto ros = Sched::make_task<16000, configMAX_PRIORITIES - 1>(
-      Sched::every<HW::EXECUTOR_PERIOD_MS> |
-      Sched::to([] { session.poll(); }));
+      Sched::every<HW::EXECUTOR_PERIOD_MS> | Sched::to([] { session.poll(); }));
 
+  // TODO: encapsulate this
   ros.on_start([] {
     if (!session.init() || !session.on<HW::CmdVel>(onTwist)) {
       ESP_LOGE(TAG, "micro-ROS session init failed");

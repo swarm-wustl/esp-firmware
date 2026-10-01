@@ -43,7 +43,7 @@ template <Streams Decl> struct entity<Decl> {
 
   rcl_publisher_t handle{};
   typename Decl::message_type message{};
-  std::optional<channel_type> channel{};
+  channel_type channel{};
 };
 } // namespace detail
 
@@ -106,6 +106,8 @@ public:
     }
 #endif
 
+    up = ok;
+
     return ok;
   }
 
@@ -131,13 +133,13 @@ public:
   template <Streams Decl>
     requires declared<Decl>
   [[nodiscard]] bool send(const typename Decl::payload_type &payload) {
-    auto &e = std::get<detail::entity<Decl>>(entities);
-
-    if (!e.channel) {
+    if (!up) {
       return false;
     }
 
-    return e.channel->push(payload, 0).has_value();
+    auto &e = std::get<detail::entity<Decl>>(entities);
+
+    return e.channel.push(payload, 0).has_value();
   }
 
   template <Publishes Decl>
@@ -185,14 +187,6 @@ private:
       }
 
       if constexpr (Streams<Decl>) {
-        using Channel = typename Entity::channel_type;
-
-        e.channel = Channel::create();
-
-        if (!e.channel) {
-          return false;
-        }
-
         if constexpr (Stamped<typename Decl::message_type>) {
           rosidl_runtime_c__String__assign(&e.message.header.frame_id,
                                            Decl::frame_id);
@@ -207,11 +201,7 @@ private:
     using Decl = typename Entity::declaration;
 
     if constexpr (Streams<Decl>) {
-      if (!e.channel) {
-        return;
-      }
-
-      while (auto sample = e.channel->pop(0)) {
+      while (auto sample = e.channel.pop(0)) {
         Decl::fill(e.message, *sample);
 
         if constexpr (Stamped<typename Decl::message_type>) {
@@ -246,6 +236,10 @@ private:
   std::tuple<detail::entity<Decls>...> entities{};
   uint32_t dropped = 0;
   bool synchronised = true;
+
+  // producers on other tasks may call send() before the uros task has brought
+  // the session up; their samples have no publisher to go to yet
+  bool up = false;
 };
 } // namespace ROS
 
