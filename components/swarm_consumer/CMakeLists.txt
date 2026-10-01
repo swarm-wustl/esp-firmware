@@ -1,5 +1,0 @@
-idf_component_register(
-    SRCS ""
-    INCLUDE_DIRS "."
-    REQUIRES freertos swarm_queue swarm_hal
-)

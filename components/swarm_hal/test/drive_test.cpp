@@ -10,7 +10,7 @@ constexpr auto kFrame = Drive::inverse_kinematics<Drive::Style::DIFFERENTIAL>(
 
 static_assert(Drive::motor_count<Drive::Style::DIFFERENTIAL> == 2);
 
-// the consumer queue memcpys its items, so a frame has to survive that
+// FreeRTOS queues memcpy their items, so a frame has to survive that
 static_assert(std::is_trivially_copyable_v<Drive::Frame<Drive::Style::DIFFERENTIAL>>);
 static_assert(std::is_trivially_copyable_v<Motor::Command>);
 static_assert(kFrame.commands[0].name == Motor::Name::LEFT);
