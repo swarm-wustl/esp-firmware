@@ -19,14 +19,11 @@ struct MotorPins {
   int in_b;
   int enable;
   int pwm_channel;
-  int standby;
 
-  // one STBY drives both halves of an L298N, so motors are expected to share it
   consteval auto pins() const {
     return HAL::pins(HAL::NamedPin{"in_a", in_a},
                      HAL::NamedPin{"in_b", in_b},
-                     HAL::NamedPin{"enable", enable},
-                     HAL::NamedPin{"standby", standby, HAL::Use::Shared});
+                     HAL::NamedPin{"enable", enable});
   }
 };
 
@@ -50,7 +47,7 @@ consteval auto roster_of(const std::array<MotorPins, N> &pins) {
 
 template <size_t N>
 consteval auto claims_of(const std::array<MotorPins, N> &table) {
-  std::array<HAL::Claim, N * 5> claims{};
+  std::array<HAL::Claim, N * 4> claims{};
   size_t next = 0;
 
   for (const MotorPins &motor : table) {
@@ -92,7 +89,6 @@ public:
     for (size_t i = 0; i < Pins.size(); ++i) {
       gpio_.set_direction(kInA[i], HAL::PinMode::Output);
       gpio_.set_direction(kInB[i], HAL::PinMode::Output);
-      gpio_.set_direction(kStandby[i], HAL::PinMode::Output);
       pwm_.configure_channel(Pins[i].pwm_channel, kEnable[i]);
     }
   }
@@ -107,16 +103,12 @@ public:
     for (const Motor::Command &cmd : frame.commands) {
       apply(slot_of(cmd.name), cmd);
     }
-
-    set_standby(HAL::Voltage::HIGH);
   }
 
   void stop() {
     for (size_t i = 0; i < Pins.size(); ++i) {
       apply(i, Motor::Command{Pins[i].name, Motor::Direction::STOP, 0.0});
     }
-
-    set_standby(HAL::Voltage::LOW);
   }
 
 private:
@@ -125,7 +117,6 @@ private:
   static constexpr auto kInA = pin_column<Pins, "in_a">();
   static constexpr auto kInB = pin_column<Pins, "in_b">();
   static constexpr auto kEnable = pin_column<Pins, "enable">();
-  static constexpr auto kStandby = pin_column<Pins, "standby">();
 
   GPIO gpio_;
   PWM pwm_;
@@ -133,12 +124,6 @@ private:
   static constexpr size_t slot_of(Motor::Name name) {
     return static_cast<size_t>(
         std::ranges::find(Pins, name, &MotorPins::name) - Pins.begin());
-  }
-
-  void set_standby(HAL::Voltage level) {
-    for (const HAL::Pin &standby : kStandby) {
-      gpio_.set_level(standby, level);
-    }
   }
 
   void apply(size_t slot, const Motor::Command &cmd) {

@@ -115,7 +115,10 @@ public:
   // the constructor configures one LEDC timer for the whole channel group, so
   // a second PWM wanting a different frequency would silently retune the first
   static constexpr int timer = 0;
-  static constexpr uint32_t frequency_hz = 1000;
+
+  // above audible and well inside the TB6612's 100 kHz ceiling. 10-bit duty at
+  // this rate needs 20.48 MHz of the 80 MHz LEDC clock, so the resolution holds
+  static constexpr uint32_t frequency_hz = 20000;
 
   static constexpr std::array claims{
       HAL::Claim{HAL::Resource::LedcTimer, timer, HAL::Use::Shared},

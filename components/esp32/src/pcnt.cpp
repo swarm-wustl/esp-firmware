@@ -82,6 +82,10 @@ void ESP32::QuadratureCounter::configure_unit(int unit, HAL::Pin a,
       .flags = {},
   };
 
+  // pcnt_new_channel() calls gpio_pullup_en() on both GPIOs of each channel and
+  // ignores the result, so an input-only pad (34-39) logs "input-only pad has no
+  // internal PU" twice per pin and is otherwise configured correctly. There is no
+  // flag to suppress it; those pins need an external pull-up on the board
   pcnt_channel_handle_t channel_a = nullptr;
   pcnt_channel_handle_t channel_b = nullptr;
 

@@ -1,5 +1,4 @@
 #include "differential_drive.h"
-#include "dwm.h"
 #include "encoders.h"
 #include "esp32.h"
 #include "l298n.h"
@@ -7,10 +6,11 @@
 #include "swarm_sched.h"
 #include "system.h"
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_system.h"
 
 #include <geometry_msgs/msg/twist.h>
-#include <sensor_msgs/msg/range.h>
 #include <uros_network_interfaces.h>
 
 #include "freertos/FreeRTOS.h"
@@ -18,68 +18,59 @@
 static const char *TAG = "main";
 
 SWARM_ROS_MESSAGE(geometry_msgs, msg, Twist)
-SWARM_ROS_MESSAGE(sensor_msgs, msg, Range)
-
-static void fill_range(sensor_msgs__msg__Range &msg, const double &meters) {
-  // Range was written for sonar/IR; UWB has no radiation_type of its own, and
-  // INFRARED is the conventional stand-in until this moves to a swarm_msgs type
-  msg.radiation_type = sensor_msgs__msg__Range__INFRARED;
-  msg.field_of_view = 6.2831853f;
-  msg.min_range = 0.0f;
-  msg.max_range = 300.0f;
-  msg.range = static_cast<float>(meters);
-}
 
 namespace HW {
-using SPI = ESP32::SPI;
-using SpiBus = ESP32::SpiBus;
 using GPIO = ESP32::GPIO;
 using PWM = ESP32::PWM;
 
-constexpr auto MOTOR_PINS =
-    L298N::motors(L298N::MotorPins{Motor::Name::LEFT, GPIO_NUM_16, GPIO_NUM_17,
-                                   GPIO_NUM_25, 0, GPIO_NUM_0},
-                  L298N::MotorPins{Motor::Name::RIGHT, GPIO_NUM_32, GPIO_NUM_33,
-                                   GPIO_NUM_5, 1, GPIO_NUM_0});
+// TODO: NEWMCPCBV2 routes both TB6612s over pins the Makerfabs ESP32 UWB
+// carrier has already spoken for, so the DW1000 is off the chassis until the
+// board is reworked -- see `git show 962dca0:main/src/main.cpp` for the wiring
+// that goes back once it is. The two that need a cut-and-jumper, because the
+// DW1000 drives them and would fight the ESP32:
+//   GPIO19  M3 PWMA   vs SPI_MISO
+//   GPIO34  M3 EncA   vs DW_IRQ
+// and three where two ESP32 outputs share a net, so each function corrupts the
+// other but nothing is damaged:
+//   GPIO4   M1 PWMA   vs DW_CS
+//   GPIO23  M2 BIN2   vs SPI_MOSI
+//   GPIO27  M3 AIN2   vs DW_RST
+// M4 (25/32/33, encoder 36/39) is the only channel clear of all of it.
+
+// M3 and M4 are the only motors with encoders, so they are the differential
+// pair; M1/M2 are unpopulated and claim nothing. LEFT/RIGHT is a guess at which
+// connector is which side -- swap the two names if the robot spins on a
+// forward twist
+constexpr auto MOTOR_PINS = L298N::motors(
+    L298N::MotorPins{Motor::Name::LEFT, GPIO_NUM_26, GPIO_NUM_27, GPIO_NUM_19,
+                     0},
+    L298N::MotorPins{Motor::Name::RIGHT, GPIO_NUM_32, GPIO_NUM_33, GPIO_NUM_25,
+                     1});
 
 using MotorDriver = L298N::MotorDriver<GPIO, PWM, MOTOR_PINS>;
 
-constexpr auto DWM_PINS = HAL::pins(HAL::NamedPin{"cs", GPIO_NUM_4},
-                                    HAL::NamedPin{"reset", GPIO_NUM_27},
-                                    HAL::NamedPin{"irq", GPIO_NUM_34});
-
-using Dwm = DWM<SPI, GPIO, DWM_PINS, SpiBus>;
-
 constexpr Drive::Style STYLE = Drive::Style::DIFFERENTIAL;
 
-// one PCNT unit per wheel. 13/14/21/22 all carry an internal pull-up and are
-// not strapping pins -- 34-39 would need external ones
+// one PCNT unit per wheel. 34/35/36/39 are input-only and have no internal
+// pull-up, so an open-collector hall output needs an external one
 constexpr auto ENCODER_ROWS = Encoders::for_style<STYLE>(
-    Encoders::Row{Motor::Name::LEFT, 14, 13, 0},
-    Encoders::Row{Motor::Name::RIGHT, 22, 21, 1});
+    Encoders::Row{Motor::Name::LEFT, 34, 35, 0},
+    Encoders::Row{Motor::Name::RIGHT, 36, 39, 1});
 
 using EncoderBank =
     Encoders::Bank<ESP32::QuadratureCounter, ENCODER_ROWS, Encoder::fit0485>;
 
-using Chassis = Swarm::chassis<STYLE, MotorDriver, SpiBus, Dwm, EncoderBank>;
+using Chassis = Swarm::chassis<STYLE, MotorDriver, EncoderBank>;
 
 using CmdVel = ROS::subscribes<geometry_msgs__msg__Twist, "cmd_vel">;
-using UwbRange = ROS::streams<sensor_msgs__msg__Range, "uwb/range", "uwb_link",
-                              double, &fill_range>;
 
-using Node = ROS::node<"base", CONFIG_SWARM_ROS_NAMESPACE, CmdVel, UwbRange>;
+using Node = ROS::node<"base", CONFIG_SWARM_ROS_NAMESPACE, CmdVel>;
 
 using CmdChannel = Sched::channel<Drive::Twist, 4>;
 
-// bring-up: flip to false on the responder board
-constexpr bool kInitiator = true;
-
-// motion is arithmetic plus two GPIO writes, so it shares the fast task. UWB
-// blocks up to ~40ms inside range()'s two 20ms receives, which would eat eight
-// motion cycles, so it gets a task of its own
+// motion is arithmetic plus two GPIO writes, so it shares the fast task
 constexpr uint32_t MOTION_PERIOD_MS = 5;
 constexpr uint32_t EXECUTOR_PERIOD_MS = 10;
-constexpr uint32_t POLL_PERIOD_MS = kInitiator ? 200 : 10;
 constexpr uint32_t ODOMETRY_PERIOD_MS = 50;
 } // namespace HW
 
@@ -100,6 +91,9 @@ static constexpr const char *label(Motor::Name name) {
 static auto onTwist = [](const geometry_msgs__msg__Twist &twist) {
   const Drive::Twist body{twist.linear.x, twist.linear.y, twist.angular.z};
 
+  // bring-up only: remove once cmd_vel is known to reach the wheels
+  ESP_LOGI(TAG, "twist x=%.2f z=%.2f", body.linear_x, body.angular_z);
+
   if (!commands.push(body, 0)) {
     ESP_LOGW(TAG, "Dropped twist: command channel full");
   }
@@ -109,21 +103,8 @@ extern "C" void app_main(void) {
   ESP_LOGI(TAG, "FreeRTOS tick: %d Hz", CONFIG_FREERTOS_HZ);
 
   auto &peripherals = HW::Chassis::take();
-  auto &dwm_sensor = peripherals.get<HW::Dwm>();
   auto &motors = peripherals.get<HW::MotorDriver>();
-  auto &encoders = peripherals.get<HW::EncoderBank>();
-
-  if (auto id = dwm_sensor.get_device_id()) {
-    ESP_LOGI(TAG, "DW1000 id: 0x%08lX", static_cast<unsigned long>(*id));
-  } else {
-    ESP_LOGE(TAG, "DW1000 id read failed");
-  }
-
-  if (auto r = dwm_sensor.configure(); r) {
-    ESP_LOGI(TAG, "DW1000 configured");
-  } else {
-    ESP_LOGE(TAG, "DW1000 configure failed");
-  }
+  // auto &encoders = peripherals.get<HW::EncoderBank>();
 
 #if defined(CONFIG_MICRO_ROS_ESP_NETIF_WLAN) ||                                \
     defined(CONFIG_MICRO_ROS_ESP_NETIF_ENET)
@@ -134,21 +115,29 @@ extern "C" void app_main(void) {
       Sched::latest<HW::MOTION_PERIOD_MS>(commands) |
       Sched::then(Drive::inverse_kinematics<HW::STYLE>) |
       Sched::to([&motors](const Drive::Frame<HW::STYLE> &frame) {
+        // bring-up only: remove once cmd_vel is known to reach the wheels
+        for (const Motor::Command &cmd : frame.commands) {
+          ESP_LOGI(TAG, "%s dir=%d duty=%.2f", label(cmd.name),
+                   static_cast<int>(cmd.dir), cmd.pwm_ratio);
+        }
+
         motors.run(frame);
       }));
 
-  static auto odometry = Sched::make_task<4096, configMAX_PRIORITIES - 4>(
-      Sched::every<HW::ODOMETRY_PERIOD_MS> |
-      Sched::then([&encoders] { return encoders.advance(); }) |
-      Sched::to([](const auto &deltas) {
-        constexpr double seconds = HW::ODOMETRY_PERIOD_MS / 1000.0;
-
-        for (const Encoder::Reading &wheel : deltas) {
-          ESP_LOGI(TAG, "%s %+5ld counts %+7.2f rpm", label(wheel.name),
-                   static_cast<long>(wheel.counts),
-                   Encoder::rpm(HW::EncoderBank::spec, wheel.counts, seconds));
-        }
-      }));
+  // 20 Hz x 2 wheels drowns the micro-ROS session messages on the console
+  // static auto odometry = Sched::make_task<4096, configMAX_PRIORITIES - 4>(
+  //     Sched::every<HW::ODOMETRY_PERIOD_MS> |
+  //     Sched::then([&encoders] { return encoders.advance(); }) |
+  //     Sched::to([](const auto &deltas) {
+  //       constexpr double seconds = HW::ODOMETRY_PERIOD_MS / 1000.0;
+  //
+  //       for (const Encoder::Reading &wheel : deltas) {
+  //         ESP_LOGI(TAG, "%s %+5ld counts %+7.2f rpm", label(wheel.name),
+  //                  static_cast<long>(wheel.counts),
+  //                  Encoder::rpm(HW::EncoderBank::spec, wheel.counts,
+  //                  seconds));
+  //       }
+  //     }));
 
   // init runs on the uros task, not here: a dead agent must not stop motion
   // from spawning
@@ -156,11 +145,27 @@ extern "C" void app_main(void) {
       Sched::every<HW::EXECUTOR_PERIOD_MS> | Sched::to([] { session.poll(); }));
 
   // TODO: encapsulate this
+  //
+  // a false from on_start deletes the task, so one lost handshake used to cost
+  // cmd_vel until the next power cycle. init() unwinds itself on failure, so
+  // retrying is just a delay
   ros.on_start([] {
-    if (!session.init() || !session.on<HW::CmdVel>(onTwist)) {
-      ESP_LOGE(TAG, "micro-ROS session init failed");
-      return false;
+    ESP_LOGI(TAG, "heap before session init: %lu free, %lu largest block",
+             static_cast<unsigned long>(esp_get_free_heap_size()),
+             static_cast<unsigned long>(
+                 heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
+
+    while (!session.init() || !session.on<HW::CmdVel>(onTwist)) {
+      session.fini();
+
+      ESP_LOGW(TAG, "micro-ROS session init failed; retrying agent %s:%s",
+               CONFIG_MICRO_ROS_AGENT_IP, CONFIG_MICRO_ROS_AGENT_PORT);
+
+      vTaskDelay(pdMS_TO_TICKS(1000));
     }
+
+    ESP_LOGI(TAG, "micro-ROS session up: /%s/base subscribed to cmd_vel",
+             CONFIG_SWARM_ROS_NAMESPACE);
 
     return true;
   });
@@ -168,26 +173,5 @@ extern "C" void app_main(void) {
   // TODO: maybe make this part of construction so we don't have two-phase?
   ros.spawn("uros");
   motion.spawn("motion");
-  odometry.spawn("odometry");
-
-  if constexpr (HW::kInitiator) {
-    static auto ranging = Sched::make_task<4096, configMAX_PRIORITIES - 3>(
-        Sched::every<HW::POLL_PERIOD_MS> |
-        Sched::then([&dwm_sensor] { return dwm_sensor.range(); }) |
-        Sched::to([](double meters) {
-          if (!session.send<HW::UwbRange>(meters)) {
-            ESP_LOGW(TAG, "Dropped range: publish channel full");
-          }
-        }));
-
-    ranging.spawn("ranging");
-  } else {
-    // the responder measures t_reply on its own crystal and drift multiplies
-    // it, so this task must not be preempted between rx(poll) and tx(reply)
-    static auto responding = Sched::make_task<4096, configMAX_PRIORITIES - 1>(
-        Sched::every<HW::POLL_PERIOD_MS> |
-        Sched::to([&dwm_sensor] { return dwm_sensor.respond(); }));
-
-    responding.spawn("responding");
-  }
+  // odometry.spawn("odometry");
 }

@@ -29,12 +29,14 @@ template <Subscribes Decl> struct entity<Decl> {
 
   rcl_subscription_t handle{};
   typename Decl::message_type storage{};
+  bool created = false;
 };
 
 template <Publishes Decl> struct entity<Decl> {
   using declaration = Decl;
 
   rcl_publisher_t handle{};
+  bool created = false;
 };
 
 template <Streams Decl> struct entity<Decl> {
@@ -44,6 +46,7 @@ template <Streams Decl> struct entity<Decl> {
   rcl_publisher_t handle{};
   typename Decl::message_type message{};
   channel_type channel{};
+  bool created = false;
 };
 } // namespace detail
 
@@ -73,30 +76,55 @@ public:
                    CONFIG_MICRO_ROS_AGENT_IP, CONFIG_MICRO_ROS_AGENT_PORT,
                    rcl_init_options_get_rmw_init_options(&options)),
                "agent address")) {
+      rcl_init_options_fini(&options);
+
       return false;
     }
 #endif
 
-    if (!check(rclc_support_init_with_options(&support, 0, nullptr, &options,
-                                              &allocator),
-               "support")) {
+    const bool supported = check(
+        rclc_support_init_with_options(&support, 0, nullptr, &options,
+                                       &allocator),
+        "support");
+
+    // rcl_init copies the options into the context, so the local set is spent
+    // either way -- and leaking it costs a retry its memory
+    rcl_init_options_fini(&options);
+
+    if (!supported) {
       return false;
     }
 
+    stage_ = stage::support;
+
     if (!check(rclc_node_init_default(&handle, Name, Namespace, &support),
                "node")) {
+      fini();
+
       return false;
     }
+
+    stage_ = stage::node;
 
     if (!check(rclc_executor_init(&executor, &support.context, executor_handles,
                                   &allocator),
                "executor")) {
+      fini();
+
       return false;
     }
+
+    stage_ = stage::executor;
 
     bool ok = true;
 
     std::apply([&](auto &...e) { ((ok = ok && create(e)), ...); }, entities);
+
+    if (!ok) {
+      fini();
+
+      return false;
+    }
 
 #ifdef CONFIG_MICRO_ROS_ESP_XRCE_DDS_MIDDLEWARE
     // the ESP32 boots at epoch 0, so a header stamp is meaningless until the
@@ -106,9 +134,34 @@ public:
     }
 #endif
 
-    up = ok;
+    stage_ = stage::running;
 
-    return ok;
+    return true;
+  }
+
+  // unwinds whatever init() managed to build, in reverse, so a failed attempt
+  // can be retried instead of costing the caller its task
+  void fini() {
+    switch (stage_) {
+    case stage::running:
+    case stage::executor:
+      std::apply([&](auto &...e) { (destroy(e), ...); }, entities);
+      rclc_executor_fini(&executor);
+      [[fallthrough]];
+
+    case stage::node:
+      rcl_node_fini(&handle);
+      [[fallthrough]];
+
+    case stage::support:
+      rclc_support_fini(&support);
+      [[fallthrough]];
+
+    case stage::none:
+      break;
+    }
+
+    stage_ = stage::none;
   }
 
   template <Subscribes Decl, typename Handler>
@@ -133,7 +186,7 @@ public:
   template <Streams Decl>
     requires declared<Decl>
   [[nodiscard]] bool send(const typename Decl::payload_type &payload) {
-    if (!up) {
+    if (stage_ != stage::running) {
       return false;
     }
 
@@ -164,6 +217,11 @@ public:
 private:
   using description = node<Name, Namespace, Decls...>;
 
+  // construction is strictly ordered, so how far init() got is also exactly
+  // what fini() has to undo. A producer on another task may reach send()
+  // before any of it exists, which is what anything short of running means
+  enum class stage : uint8_t { none, support, node, executor, running };
+
   // rclc rejects a zero-handle executor, and a node may legitimately be
   // publish-only
   static constexpr size_t executor_handles =
@@ -176,15 +234,20 @@ private:
         message<typename Decl::message_type>::type_support();
 
     if constexpr (Subscribes<Decl>) {
-      return check(rclc_subscription_init(&e.handle, &handle, type_support,
-                                          Decl::topic, profile_for(Decl::qos)),
-                   Decl::topic);
+      e.created =
+          check(rclc_subscription_init(&e.handle, &handle, type_support,
+                                       Decl::topic, profile_for(Decl::qos)),
+                Decl::topic);
+
+      return e.created;
     } else {
       if (!check(rclc_publisher_init(&e.handle, &handle, type_support,
                                      Decl::topic, profile_for(Decl::qos)),
                  Decl::topic)) {
         return false;
       }
+
+      e.created = true;
 
       if constexpr (Streams<Decl>) {
         if constexpr (Stamped<typename Decl::message_type>) {
@@ -195,6 +258,22 @@ private:
 
       return true;
     }
+  }
+
+  template <typename Entity> void destroy(Entity &e) {
+    using Decl = typename Entity::declaration;
+
+    if (!e.created) {
+      return;
+    }
+
+    if constexpr (Subscribes<Decl>) {
+      rcl_subscription_fini(&e.handle, &handle);
+    } else {
+      rcl_publisher_fini(&e.handle, &handle);
+    }
+
+    e.created = false;
   }
 
   template <typename Entity> void flush(Entity &e) {
@@ -236,10 +315,7 @@ private:
   std::tuple<detail::entity<Decls>...> entities{};
   uint32_t dropped = 0;
   bool synchronised = true;
-
-  // producers on other tasks may call send() before the uros task has brought
-  // the session up; their samples have no publisher to go to yet
-  bool up = false;
+  stage stage_ = stage::none;
 };
 } // namespace ROS
 
