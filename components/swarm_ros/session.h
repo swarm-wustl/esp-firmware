@@ -20,6 +20,7 @@
 
 namespace ROS {
 bool check(rcl_ret_t status, const char *what);
+void report_poll(uint32_t polls, uint32_t errors, int last);
 
 namespace detail {
 template <Declaration Decl> struct entity;
@@ -63,11 +64,11 @@ public:
   static constexpr bool declared = (std::same_as<Decl, Decls> || ...);
 
   [[nodiscard]] bool init() {
-    rcl_allocator_t allocator = rcl_get_default_allocator();
+    allocator_ = rcl_get_default_allocator();
 
     rcl_init_options_t options = rcl_get_zero_initialized_init_options();
 
-    if (!check(rcl_init_options_init(&options, allocator), "init_options")) {
+    if (!check(rcl_init_options_init(&options, allocator_), "init_options")) {
       return false;
     }
 
@@ -84,7 +85,7 @@ public:
 
     const bool supported = check(
         rclc_support_init_with_options(&support, 0, nullptr, &options,
-                                       &allocator),
+                                       &allocator_),
         "support");
 
     // rcl_init copies the options into the context, so the local set is spent
@@ -107,7 +108,7 @@ public:
     stage_ = stage::node;
 
     if (!check(rclc_executor_init(&executor, &support.context, executor_handles,
-                                  &allocator),
+                                  &allocator_),
                "executor")) {
       fini();
 
@@ -206,9 +207,32 @@ public:
   // one pass: service the executor, then publish whatever the producers queued.
   // Non-blocking -- the caller's period paces it
   void poll() {
-    rclc_executor_spin_some(&executor, 0);
+    // bring-up instrumentation: spin_some's return was being discarded, so an
+    // executor erroring every cycle would look identical to no data arriving
+    const rcl_ret_t rc = rclc_executor_spin_some(&executor, 0);
+
+    ++polls;
+
+    if (rc != RCL_RET_OK && rc != RCL_RET_TIMEOUT) {
+      ++spin_errors;
+    }
+
+    if (polls % 200 == 0) {
+      report_poll(polls, spin_errors, static_cast<int>(rc));
+    }
 
     std::apply([&](auto &...e) { (flush(e), ...); }, entities);
+  }
+
+  // XRCE pushes subscription data unsolicited, so a client whose outbound
+  // traffic stops -- a best-effort reader sends nothing on its own -- loses
+  // any NAT mapping between it and the agent, and the push goes nowhere
+  [[nodiscard]] bool ping(int timeout_ms = 100) {
+#ifdef CONFIG_MICRO_ROS_ESP_XRCE_DDS_MIDDLEWARE
+    return rmw_uros_ping_agent(timeout_ms, 1) == RMW_RET_OK;
+#else
+    return true;
+#endif
   }
 
   [[nodiscard]] bool synced() const { return synchronised; }
@@ -309,11 +333,16 @@ private:
 #endif
   }
 
+  // rclc_support_t and rclc_executor_t both store the allocator by POINTER and
+  // dereference it long after init() returns, so it cannot be an automatic
+  rcl_allocator_t allocator_{};
   rclc_support_t support{};
   rcl_node_t handle{};
   rclc_executor_t executor{};
   std::tuple<detail::entity<Decls>...> entities{};
   uint32_t dropped = 0;
+  uint32_t polls = 0;
+  uint32_t spin_errors = 0;
   bool synchronised = true;
   stage stage_ = stage::none;
 };

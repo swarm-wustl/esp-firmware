@@ -41,11 +41,11 @@ using PWM = ESP32::PWM;
 // pair; M1/M2 are unpopulated and claim nothing. LEFT/RIGHT is a guess at which
 // connector is which side -- swap the two names if the robot spins on a
 // forward twist
-constexpr auto MOTOR_PINS = L298N::motors(
-    L298N::MotorPins{Motor::Name::LEFT, GPIO_NUM_26, GPIO_NUM_27, GPIO_NUM_19,
-                     0},
-    L298N::MotorPins{Motor::Name::RIGHT, GPIO_NUM_32, GPIO_NUM_33, GPIO_NUM_25,
-                     1});
+constexpr auto MOTOR_PINS =
+    L298N::motors(L298N::MotorPins{Motor::Name::LEFT, GPIO_NUM_26, GPIO_NUM_27,
+                                   GPIO_NUM_19, 0},
+                  L298N::MotorPins{Motor::Name::RIGHT, GPIO_NUM_32, GPIO_NUM_33,
+                                   GPIO_NUM_25, 1});
 
 using MotorDriver = L298N::MotorDriver<GPIO, PWM, MOTOR_PINS>;
 
@@ -53,9 +53,9 @@ constexpr Drive::Style STYLE = Drive::Style::DIFFERENTIAL;
 
 // one PCNT unit per wheel. 34/35/36/39 are input-only and have no internal
 // pull-up, so an open-collector hall output needs an external one
-constexpr auto ENCODER_ROWS = Encoders::for_style<STYLE>(
-    Encoders::Row{Motor::Name::LEFT, 34, 35, 0},
-    Encoders::Row{Motor::Name::RIGHT, 36, 39, 1});
+constexpr auto ENCODER_ROWS =
+    Encoders::for_style<STYLE>(Encoders::Row{Motor::Name::LEFT, 34, 35, 0},
+                               Encoders::Row{Motor::Name::RIGHT, 36, 39, 1});
 
 using EncoderBank =
     Encoders::Bank<ESP32::QuadratureCounter, ENCODER_ROWS, Encoder::fit0485>;
@@ -155,6 +155,7 @@ extern "C" void app_main(void) {
              static_cast<unsigned long>(
                  heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
 
+    // TODO: this should really be encapsulated and part of ros declaration.
     while (!session.init() || !session.on<HW::CmdVel>(onTwist)) {
       session.fini();
 
