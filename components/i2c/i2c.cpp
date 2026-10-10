@@ -6,8 +6,6 @@
 
 
 #include "i2c.h"
-#include <unordered_map>
-
 
 static const char *TAG = "i2c-simple-example";
 
@@ -63,84 +61,37 @@ esp_err_t imu_read_accelerometer_data(int16_t *gx, int16_t *gy, int16_t *gz){
    return ESP_OK;
 }
 
-esp_err_t imu_calibrate_readings(std::unordered_map<std::string, int16_t> *accel_offset_data, std::unordered_map<std::string, int16_t> *gyro_offset_data){
-  int16_t gx_total = 0;
-  int16_t gy_total = 0;
-  int16_t gz_total = 0;
+esp_err_t imu_calibrate_readings(ImuCalibration *cal)
+{
+  int32_t gx_sum = 0, gy_sum = 0, gz_sum = 0;
+  int32_t ax_sum = 0, ay_sum = 0, az_sum = 0;
 
-  int16_t ax_high= INT16_MIN;
-  int16_t ax_low= INT16_MAX;
-  
-  int16_t ay_high = INT16_MIN;
-  int16_t ay_low = INT16_MAX;
-  
-  int16_t az_high = INT16_MIN;
-  int16_t az_low = INT16_MAX;
-  
-  int16_t gx_offset = 0;
-  int16_t gy_offset = 0;
-  int16_t gz_offset = 0;
+  for (int i = 0; i < NUM_SAMPLES; ++i) {
+    int16_t ax, ay, az, gx, gy, gz;
 
-  int16_t ax_offset = 0;
-  int16_t ay_offset = 0;
-  int16_t az_offset = 0;
+    esp_err_t ret = imu_read_gyroscope_data(&gx, &gy, &gz);
+    if (ret != ESP_OK) return ret;
+    ret = imu_read_accelerometer_data(&ax, &ay, &az);
+    if (ret != ESP_OK) return ret;
 
-  int16_t ax_scale = 0;
-  int16_t ay_scale = 0;
-  int16_t az_scale = 0;
+    gx_sum += gx; gy_sum += gy; gz_sum += gz;
+    ax_sum += ax; ay_sum += ay; az_sum += az;
 
-  int16_t ax, ay, az, gx, gy, gz;
-  for(int i = 0; i <= NUM_SAMPLES; ++i){
+    vTaskDelay(pdMS_TO_TICKS(5)); // let the sensor produce fresh samples
+  }
 
-    
-      ESP_ERROR_CHECK(imu_read_gyroscope_data(&gx, &gy, &gz));
-      ESP_ERROR_CHECK(imu_read_accelerometer_data(&ax, &ay, &az));
+  cal->gx_offset = gx_sum / NUM_SAMPLES;
+  cal->gy_offset = gy_sum / NUM_SAMPLES;
+  cal->gz_offset = gz_sum / NUM_SAMPLES;
 
-      gx_total += gx 
-      gy_total += gy
-      gz_total += gz
+  // Assumes the board is flat and still with Z pointing up: Z should read +1 g
+  cal->ax_offset = ax_sum / NUM_SAMPLES;
+  cal->ay_offset = ay_sum / NUM_SAMPLES;
+  cal->az_offset = az_sum / NUM_SAMPLES - (int32_t)LSBSENS_ACCEL;
 
-      ax_low = std::min(ax, ax_low);
-      ax_high = std::max(ax, ax_high);
-
-
-      ay_low = std::min(ay, ay_low);
-      ay_high = std::max(ay, ay_high);
-
-
-      az_low = std::min(az, az_low);
-      az_high = std::max(az, az_high);
- }
-
-  gx_offset = gx_total/NUM_SAMPLES;
-  gy_offset = gy_total/NUM_SAMPLES;
-  gz_offset = gz_total/NUM_SAMPLES;
-
-
-  ax_offset = (ax_high + ax_low)/2;
-  ay_offset = (ay_high + ay_low)/2; 
-  az_offset = (az_high + az_low)/2;
-
-  ax_scale = LSBSENS_ACCEL/(ax_high - ax_low);
-  ay_scale = LSBSENS_ACCEL/(ay_high - ay_low);
-  az_scale = LSBSENS_ACCEL/(az_high - az_low);
-
-  *gyro_offset_data["gx_offset"] = gx_offset;
-  *gyro_offset_data["gy_offset"] = gy_offset;
-  *gyro_offset_data["gz_offset"] = gz_offset;
-
-
-  *accel_offset_data["ax_offset"] = ax_offset;
-  *accel_offset_data["ay_offset"] = ay_offset;
-  *accel_offset_data["az_offset"] = az_offset;
-
-
-  *accel_offset_data["ax_scale"] = ax_scale;
-  *accel_offset_data["ay_scale"] = ay_scale;
-  *accel_offset_data["az_scale"] = az_scale;
-
-
+  return ESP_OK;
 }
+
 
 
 /**

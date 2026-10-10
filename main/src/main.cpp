@@ -173,40 +173,29 @@ extern "C" void app_main(void) {
    int16_t accelY;
    int16_t accelZ;
    
-   std::unordered_map<std::string, int16_t> accel_offset_data, gyro_offset_data;
-
+   ImuCalibration cal;
    ESP_LOGI(TAG, "Calibrating data - do not move device");
+   ESP_ERROR_CHECK(imu_calibrate_readings(&cal));
+   
 
-   ESP_ERROR_CHECK(imu_calibrate_readings(&accel_offset_data, &gyro_offset_data);
+
 
    while (1){
-       ESP_ERROR_CHECK(imu_read_gyroscope_data(&gyroX, &gyroY, &gyroZ));
+     ESP_ERROR_CHECK(imu_read_gyroscope_data(&gyroX, &gyroY, &gyroZ));
+     ESP_ERROR_CHECK(imu_read_accelerometer_data(&accelX, &accelY, &accelZ));
 
-       gyroX -= gyro_offset_data["gx_offset"]
-       gyroY -= gyro_offset_data["gy_offset"]
-       gyroZ -= gyro_offset_data["gz_offset"]
+     // Subtract offsets in int32 to avoid int16 wraparound
+     float gx = (gyroX - cal.gx_offset) / (float)LSBSENS_GYRO;
+     float gy = (gyroY - cal.gy_offset) / (float)LSBSENS_GYRO;
+     float gz = (gyroZ - cal.gz_offset) / (float)LSBSENS_GYRO;
 
-       accelX = accel_offset_data["ax_scale"] * (accelX - accel_offset_data["ax_offset"]);
-       accelY = accel_offset_data["ay_scale"] * (accelY - accel_offset_data["ay_offset"]);
-       accelZ = accel_offset_data["az_scale"] * (accelZ - accel_offset_data["az_offset"]);
+     float ax = (accelX - cal.ax_offset) / (float)LSBSENS_ACCEL;
+     float ay = (accelY - cal.ay_offset) / (float)LSBSENS_ACCEL;
+     float az = (accelZ - cal.az_offset) / (float)LSBSENS_ACCEL;
 
+     ESP_LOGI(TAG, "GYRO  (dps): %.4f %.4f %.4f", gx, gy, gz);
+     ESP_LOGI(TAG, "ACCEL (g):   %.4f %.4f %.4f", ax, ay, az);
 
-       // read in angles per second
-       ESP_LOGI(TAG, "GYROX = %.4f", ((float)gyroX)/LSBSENS_GYRO);
-       ESP_LOGI(TAG, "GYROY = %.4f", ((float)gyroY)/LSBSENS_GYRO);
-       ESP_LOGI(TAG, "GYROZ = %.4f", ((float)gyroZ)/LSBSENS_GYRO);
-       ESP_LOGI(TAG, "Gyroscope read successfully");
-
-
-       ESP_ERROR_CHECK(imu_read_accelerometer_data(&accelX, &accelY, &accelZ));
-
-
-       //read in g (9.81 m/s^2)
-       ESP_LOGI(TAG, "ACCELX = %.4f", ((float)accelX)/LSBSENS_ACCEL);
-       ESP_LOGI(TAG, "ACCELY = %.4f", ((float)accelY)/LSBSENS_ACCEL);
-       ESP_LOGI(TAG, "ACCELZ = %.4f", ((float)accelZ)/LSBSENS_ACCEL);
-       ESP_LOGI(TAG, "Accelerometer read successfully");
-      
-       vTaskDelay(pdMS_TO_TICKS(100));
-    }
+     vTaskDelay(pdMS_TO_TICKS(100));
+   }
 }

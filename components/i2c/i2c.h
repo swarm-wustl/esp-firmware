@@ -8,6 +8,8 @@
 #include <stdio.h>
 #include "esp_log.h"
 #include "driver/i2c.h"
+#include <unordered_map>
+#include <string>
 
 #define I2C_MASTER_SCL_IO           14      /*!< GPIO number used for I2C master clock */
 #define I2C_MASTER_SDA_IO           4      /*!< GPIO number used for I2C master data  */
@@ -49,6 +51,15 @@
 #define NUM_SAMPLES 100 //samples taken for calibration purposes
 
 
+struct ImuCalibration {
+  int32_t gx_offset, gy_offset, gz_offset;
+  int32_t ax_offset, ay_offset, az_offset;
+};
+
+
+esp_err_t imu_calibrate_readings(ImuCalibration *cal);
+
+
 esp_err_t mpu6050_register_read(uint8_t reg_addr, uint8_t *data, size_t len);
 
 
@@ -59,6 +70,5 @@ esp_err_t imu_read_gyroscope_data(int16_t *gx, int16_t *gy, int16_t *gz);
 
 
 esp_err_t imu_read_accelerometer_data(int16_t *gx, int16_t *gy, int16_t *gz);
-}
 
 esp_err_t i2c_master_init(void);
