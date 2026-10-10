@@ -14,11 +14,26 @@
 #include <rclc/rclc.h>
 #include <rosidl_runtime_c/string_functions.h>
 
+#include <expected>
 #include <optional>
 #include <tuple>
 #include <utility>
 
 namespace ROS {
+// which step of the session failed. The rcl return code and its message are
+// logged where they happen; this is what a caller can branch on
+enum class Error : uint8_t {
+  options,
+  transport,
+  support,
+  node,
+  executor,
+  entity,
+  handler,
+  publish,
+  spin,
+};
+
 bool check(rcl_ret_t status, const char *what);
 
 namespace detail {
@@ -59,16 +74,22 @@ public:
   session(const session &) = delete;
   session &operator=(const session &) = delete;
 
+  // rclc keeps interior pointers -- support holds &allocator_, the executor
+  // holds &support.context -- so a session that has run init() cannot be
+  // relocated without dangling both
+  session(session &&) = delete;
+  session &operator=(session &&) = delete;
+
   template <Declaration Decl>
   static constexpr bool declared = (std::same_as<Decl, Decls> || ...);
 
-  [[nodiscard]] bool init() {
+  [[nodiscard]] std::expected<void, Error> init() {
     allocator_ = rcl_get_default_allocator();
 
     rcl_init_options_t options = rcl_get_zero_initialized_init_options();
 
     if (!check(rcl_init_options_init(&options, allocator_), "init_options")) {
-      return false;
+      return std::unexpected{Error::options};
     }
 
 #ifdef CONFIG_MICRO_ROS_ESP_XRCE_DDS_MIDDLEWARE
@@ -78,7 +99,7 @@ public:
                "agent address")) {
       rcl_init_options_fini(&options);
 
-      return false;
+      return std::unexpected{Error::transport};
     }
 #endif
 
@@ -92,7 +113,7 @@ public:
     rcl_init_options_fini(&options);
 
     if (!supported) {
-      return false;
+      return std::unexpected{Error::support};
     }
 
     stage_ = stage::support;
@@ -101,7 +122,7 @@ public:
                "node")) {
       fini();
 
-      return false;
+      return std::unexpected{Error::node};
     }
 
     stage_ = stage::node;
@@ -111,7 +132,7 @@ public:
                "executor")) {
       fini();
 
-      return false;
+      return std::unexpected{Error::executor};
     }
 
     stage_ = stage::executor;
@@ -123,7 +144,7 @@ public:
     if (!ok) {
       fini();
 
-      return false;
+      return std::unexpected{Error::entity};
     }
 
 #ifdef CONFIG_MICRO_ROS_ESP_XRCE_DDS_MIDDLEWARE
@@ -136,7 +157,7 @@ public:
 
     stage_ = stage::running;
 
-    return true;
+    return {};
   }
 
   // unwinds whatever init() managed to build, in reverse, so a failed attempt
@@ -167,10 +188,10 @@ public:
   template <Subscribes Decl, typename Handler>
     requires declared<Decl> &&
              std::invocable<Handler, const typename Decl::message_type &>
-  [[nodiscard]] bool on(Handler &handler) {
+  [[nodiscard]] std::expected<void, Error> on(Handler &handler) {
     auto &e = std::get<detail::entity<Decl>>(entities);
 
-    return check(
+    const bool added = check(
         rclc_executor_add_subscription_with_context(
             &executor, &e.handle, &e.storage,
             [](const void *msg, void *context) {
@@ -179,6 +200,12 @@ public:
             },
             &handler, ON_NEW_DATA),
         "add subscription");
+
+    if (!added) {
+      return std::unexpected{Error::handler};
+    }
+
+    return {};
   }
 
   // callable from any task: a queue push, no rcl contact. Timeout 0, so a
@@ -197,25 +224,34 @@ public:
 
   template <Publishes Decl>
     requires declared<Decl>
-  [[nodiscard]] bool publish(const typename Decl::message_type &msg) {
+  [[nodiscard]] std::expected<void, Error>
+  publish(const typename Decl::message_type &msg) {
     auto &e = std::get<detail::entity<Decl>>(entities);
 
-    return check(rcl_publish(&e.handle, &msg, nullptr), "publish");
+    if (!check(rcl_publish(&e.handle, &msg, nullptr), "publish")) {
+      return std::unexpected{Error::publish};
+    }
+
+    return {};
   }
 
   // one pass: service the executor, then publish whatever the producers queued.
   // Non-blocking -- the caller's period paces it
-  void poll() {
+  [[nodiscard]] std::expected<void, Error> poll() {
     const rcl_ret_t rc = rclc_executor_spin_some(&executor, 0);
+
+    std::apply([&](auto &...e) { (flush(e), ...); }, entities);
 
     // an executor that fails every cycle looks exactly like a topic nobody
     // publishes to, so the one return value that can tell them apart is worth
     // reading. RCL_RET_TIMEOUT just means nothing was ready
     if (rc != RCL_RET_OK && rc != RCL_RET_TIMEOUT) {
       check(rc, "spin");
+
+      return std::unexpected{Error::spin};
     }
 
-    std::apply([&](auto &...e) { (flush(e), ...); }, entities);
+    return {};
   }
 
   // XRCE pushes subscription data unsolicited, so a client whose outbound

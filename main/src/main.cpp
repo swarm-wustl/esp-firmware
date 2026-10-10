@@ -131,7 +131,8 @@ extern "C" void app_main(void) {
   // init runs on the uros task, not here: a dead agent must not stop motion
   // from spawning
   static auto ros = Sched::make_task<16000, configMAX_PRIORITIES - 1>(
-      Sched::every<HW::EXECUTOR_PERIOD_MS> | Sched::to([] { session.poll(); }));
+      Sched::every<HW::EXECUTOR_PERIOD_MS> |
+      Sched::to([] { return session.poll(); }));
 
   // TODO: encapsulate this
   //
@@ -155,7 +156,6 @@ extern "C" void app_main(void) {
     return true;
   });
 
-  // TODO: maybe make this part of construction so we don't have two-phase?
   ros.spawn("uros");
   motion.spawn("motion");
   // odometry.spawn("odometry");
