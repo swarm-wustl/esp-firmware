@@ -84,6 +84,64 @@ static auto onTwist = [](const geometry_msgs__msg__Twist &twist) {
   }
 };
 
+
+static const char *TAG = "UWB_IRQ";
+
+// Configuration
+constexpr gpio_num_t kUwbIrqPin = GPIO_NUM_34;
+static TaskHandle_t s_uwb_task_handle = nullptr;
+
+// =============================================================================
+// 1. HARDWARE ISR (Runs in IRAM, takes < 1 microsecond)
+// =============================================================================
+extern "C" void IRAM_ATTR dwm_gpio_isr_handler(void *arg) {
+  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+  if (s_uwb_task_handle != nullptr) {
+    // Unblock the worker task instantly
+    vTaskNotifyGiveFromISR(s_uwb_task_handle, &xHigherPriorityTaskWoken);
+  }
+
+  if (xHigherPriorityTaskWoken) {
+    portYIELD_FROM_ISR();
+  }
+}
+
+// =============================================================================
+// 2. UWB WORKER TASK (Handles SPI & Response Logic)
+// =============================================================================
+void uwb_worker_task(void *pvParameters) {
+  // Grab pointer to your driver instance passed via xTaskCreate
+  auto *dwm = static_cast<DWM *>(pvParameters);
+
+  // Store task handle so the ISR knows who to wake up
+  s_uwb_task_handle = xTaskGetCurrentTaskHandle();
+
+  ESP_LOGI(TAG, "UWB Worker Task ready and sleeping...");
+
+  while (true) {
+    // Sleep with 0% CPU usage until the GPIO ISR fires
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+    // -------------------------------------------------------------------------
+    // Hardware Response Logic
+    // -------------------------------------------------------------------------
+    // 1. Read status and process frame (e.g. DWM::respond() or range logic)
+    if (auto r = dwm->respond(); r) {
+      ESP_LOGI(TAG, "UWB respond successful");
+    } else {
+      ESP_LOGE(TAG, "UWB respond failed or invalid frame");
+    }
+
+    // 2. IMPORTANT: Write-1-to-Clear (W1C) status register over SPI
+    // dwm->clear_status_flags(); 
+    // Once status is cleared, the DW1000 will pull its IRQ line LOW,
+    // making it ready to fire the next rising edge.
+  }
+}
+
+
+
 extern "C" void app_main(void) {
   ESP_LOGI(TAG, "FreeRTOS tick: %d Hz", CONFIG_FREERTOS_HZ);
 
@@ -134,24 +192,49 @@ extern "C" void app_main(void) {
   ros.spawn("uros");
   motion.spawn("motion");
 
-  if constexpr (HW::kInitiator) {
-    static auto ranging = Sched::make_task<4096, configMAX_PRIORITIES - 3>(
-        Sched::every<HW::POLL_PERIOD_MS> |
-        Sched::then([&dwm_sensor] { return dwm_sensor.range(); }) |
-        Sched::to([](double meters) {
-          if (!session.send<HW::UwbRange>(meters)) {
-            ESP_LOGW(TAG, "Dropped range: publish channel full");
-          }
-        }));
 
-    ranging.spawn("ranging");
-  } else {
-    // the responder measures t_reply on its own crystal and drift multiplies
-    // it, so this task must not be preempted between rx(poll) and tx(reply)
-    static auto responding = Sched::make_task<4096, configMAX_PRIORITIES - 1>(
-        Sched::every<HW::POLL_PERIOD_MS> |
-        Sched::to([&dwm_sensor] { return dwm_sensor.respond(); }));
+// Configure GPIO Interrupt Pin
+  gpio_config_t io_conf = {
+      .pin_bit_mask = (1ULL << kUwbIrqPin),
+      .mode = GPIO_MODE_INPUT,
+      .pull_up_en = GPIO_PULLUP_DISABLE,
+      .pull_down_en = GPIO_PULLDOWN_ENABLE, // DW1000 IRQ is Active-HIGH
+      .intr_type = GPIO_INTR_POSEDGE,        // Trigger on rising edge (TXFRS/RXFCG)
+  };
+  gpio_config(&io_conf);
 
-    responding.spawn("responding");
-  }
+  // Install GPIO ISR service & register handler
+  gpio_install_isr_service(0);
+  gpio_isr_handler_add(kUwbIrqPin, dwm_gpio_isr_handler, nullptr);
+
+  // Spawn dedicated worker task (High priority)
+  xTaskCreate(
+      uwb_worker_task,
+      "uwb_worker",
+      4096,
+      &dwm_sensor,               // Pass driver instance pointer
+      configMAX_PRIORITIES - 2, // High priority to handle IRQ immediately
+      nullptr
+  );
+
+  // if constexpr (HW::kInitiator) {
+  //   static auto ranging = Sched::make_task<4096, configMAX_PRIORITIES - 3>(
+  //       Sched::every<HW::POLL_PERIOD_MS> |
+  //       Sched::then([&dwm_sensor] { return dwm_sensor.range(); }) |
+  //       Sched::to([](double meters) {
+  //         if (!session.send<HW::UwbRange>(meters)) {
+  //           ESP_LOGW(TAG, "Dropped range: publish channel full");
+  //         }
+  //       }));
+
+  //   ranging.spawn("ranging");
+  // } else {
+  //   // the responder measures t_reply on its own crystal and drift multiplies
+  //   // it, so this task must not be preempted between rx(poll) and tx(reply)
+  //   static auto responding = Sched::make_task<4096, configMAX_PRIORITIES - 1>(
+  //       Sched::every<HW::POLL_PERIOD_MS> |
+  //       Sched::to([&dwm_sensor] { return dwm_sensor.respond(); }));
+
+  //   responding.spawn("responding");
+  // }
 }
