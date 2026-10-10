@@ -448,6 +448,17 @@ public:
         .and_then([this] { return set_tx_bit_rate(BitRate::MBPS_68); })
         .and_then(
             [this] { return set_tx_preamble_length(PreambleLength::LEN_128); });
+        .and_then([this] {
+            //Set SYS_MASK to enable interrupts
+            if (_type == TAG){
+              write_sub_value(dw1000::SYS_MASK, 0, dw1000::TXFRS,
+                                            1);
+            }
+            write_sub_value(dw1000::SYS_MASK, 0, dw1000::RXFCG,
+                                 1);
+                                 
+        })
+
   }
 
  
@@ -495,9 +506,16 @@ public:
 	}
 	
 	return false;
-
-
 }
+
+  //Interrupt Handling:
+
+
+
+  // std::expected<void,HAL::SpiError> loop(){
+    
+
+  // }
 
 
   // Write payload to TX_BUFFER, set the frame length, start TX, wait for TXFRS.
@@ -645,6 +663,8 @@ private:
 
   static constexpr double SECONDS_PER_TICK = 1.0 / 63'897'600'000.0;
   static constexpr double SPEED_OF_LIGHT = 299'792'458.0;
+  static constexpr std::byte POLL{0x0};
+  static constexpr std::byte POLL_ACK{0x03}
   static constexpr std::byte RANGE_POLL{0x01};
   static constexpr std::byte RANGE_REPLY{0x02};
 
@@ -810,7 +830,7 @@ private:
   MAX_DEVICES = 10;
 
 
-  DeviceRole m_role;
+  DeviceRole _type;
   SPI spi_;
   GPIO gpio_;
   DWMDevice[MAX_DEVICES] _networkDevices;

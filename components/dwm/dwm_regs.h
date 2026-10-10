@@ -23,7 +23,8 @@ inline constexpr uint8_t TX_ANTD = 0x18;
 inline constexpr uint8_t CHAN_CTRL = 0x1F;
 inline constexpr uint8_t OTP_IF = 0x2D;
 inline constexpr uint8_t PMSC = 0x36;
-inline constexpr uint8_t  PANADR = 0x03;
+inline constexpr uint8_t PANADR = 0x03;
+inline constexpr uint8_t SYS_MASK = 0x0E;
 
 //PAN ADR (0x04) bits
     inline constexpr uint8_t LEN_PAN = 4;
