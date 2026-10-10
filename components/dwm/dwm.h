@@ -51,6 +51,79 @@ private:
   uint64_t raw_time_{};
 };
 
+class DWMDevice {
+public:
+    // Default constructor
+    DWMDevice() = default;
+
+    // Parameterized constructor
+    DWMDevice(std::array<std::byte, 8> address, std::array<std::byte, 2> shortAddress)
+        : address(address), short_address(shortAddress) {}
+
+    // Set 8-byte extended address from raw byte pointer
+    void setAddress(const uint8_t* addr) {
+        if (addr == nullptr) return;
+        std::memcpy(this->address.data(), addr, 8);
+    }
+
+    // Set 8-byte extended address from byte array
+    void setAddress(const std::array<std::byte, 8>& addr) {
+        this->address = addr;
+    }
+
+    // Set 2-byte short address from raw byte pointer
+    void setShortAddress(const uint8_t* addr) {
+        if (addr == nullptr) return;
+        std::memcpy(this->short_address.data(), addr, 2);
+    }
+
+    // Set 2-byte short address from uint16_t (Little-Endian)
+    void setShortAddress(uint16_t addr) {
+        short_address[0] = static_cast<std::byte>(addr & 0xFF);
+        short_address[1] = static_cast<std::byte>((addr >> 8) & 0xFF);
+    }
+
+    // Updates the stored range value
+    void setRange(float range) {
+        this->_range = static_cast<double>(range);
+    }
+    void setIndex(uint8_t index) { _index = index; }
+
+
+    // Getters
+    [[nodiscard]] double getRange() const { return _range; }
+    [[nodiscard]] const std::array<std::byte, 8>& getAddress() const { return address; }
+    [[nodiscard]] const std::array<std::byte, 2>& getShortAddress() const { return short_address; }
+
+    uint8_t getIndex() { return _index; }
+
+    //Comparison:
+    [[nodiscard]] bool isAddressEqual(const DWMDevice* other) const {
+        if (other == nullptr) return false;
+        return this->address == other->address;
+    }
+
+    // Checks if another device has the exact same 2-byte short address
+    [[nodiscard]] bool isShortAddressEqual(const DWMDevice* other) const {
+        if (other == nullptr) return false;
+        return this->short_address == other->short_address;
+    }
+
+    // Direct std::array comparison overloads for checking against raw byte arrays
+    [[nodiscard]] bool isAddressEqual(const std::array<std::byte, 8>& addr) const {
+        return this->address == addr;
+    }
+
+    [[nodiscard]] bool isShortAddressEqual(const std::array<std::byte, 2>& short_addr) const {
+        return this->short_address == short_addr;
+    }
+private:
+    uint8_t _index;
+    std::array<std::byte, 8> address{};
+    std::array<std::byte, 2> short_address{};
+    double _range{0.0};
+};
+
 // TODO: consider moving this into RegisterInfo
 template <DWMRegisterID ID>
 concept IsTimestampRegister =
@@ -399,6 +472,32 @@ public:
     });
 }
 
+  std::expected<bool, HAL::SpiError> add_network_device(DWMDevice* device, bool shortAddress) {
+    bool   addDevice = true;
+    for (int i  = 0; i < _networkDevicesNumber;i++){
+        if(_networkDevices[i].isAddressEqual(device) && !shortAddress) {
+        //the device already exists
+        addDevice = false;
+        return false;
+      }
+      else if(_networkDevices[i].isShortAddressEqual(device) && shortAddress) {
+        //the device already exists
+        addDevice = false;
+        return false;
+      }
+    }
+    if(addDevice) {
+		device->setRange(0);
+		memcpy(&_networkDevices[_networkDevicesNumber], device, sizeof(DWMDevice));
+		_networkDevices[_networkDevicesNumber].setIndex(_networkDevicesNumber);
+		_networkDevicesNumber++;
+		return true;
+	}
+	
+	return false;
+
+
+}
 
 
   // Write payload to TX_BUFFER, set the frame length, start TX, wait for TXFRS.
@@ -708,9 +807,16 @@ private:
     ANCHOR
 };
 
+  MAX_DEVICES = 10;
+
+
   DeviceRole m_role;
   SPI spi_;
   GPIO gpio_;
+  DWMDevice[MAX_DEVICES] _networkDevices;
+  volatile uint8_t _networkDevicesNumber = 0;
+  uint8_t rst_pin_{};
+  uint8_t irq_pin_{};
 };
 
 #endif
