@@ -69,7 +69,7 @@ using CmdChannel = Sched::channel<Drive::Twist, 4>;
 // motion is arithmetic plus two GPIO writes, so it shares the fast task
 constexpr uint32_t MOTION_PERIOD_MS = 5;
 constexpr uint32_t EXECUTOR_PERIOD_MS = 10;
-constexpr uint32_t ODOMETRY_PERIOD_MS = 50;
+constexpr uint32_t ODOMETRY_PERIOD_MS = 500;
 } // namespace HW
 
 static HW::CmdChannel commands;
@@ -99,7 +99,7 @@ extern "C" void app_main(void) {
 
   auto &peripherals = HW::Chassis::take();
   auto &motors = peripherals.get<HW::MotorDriver>();
-  // auto &encoders = peripherals.get<HW::EncoderBank>();
+  auto &encoders = peripherals.get<HW::EncoderBank>();
 
 #if defined(CONFIG_MICRO_ROS_ESP_NETIF_WLAN) ||                                \
     defined(CONFIG_MICRO_ROS_ESP_NETIF_ENET)
@@ -113,20 +113,18 @@ extern "C" void app_main(void) {
         motors.run(frame);
       }));
 
-  // 20 Hz x 2 wheels drowns the micro-ROS session messages on the console
-  // static auto odometry = Sched::make_task<4096, configMAX_PRIORITIES - 4>(
-  //     Sched::every<HW::ODOMETRY_PERIOD_MS> |
-  //     Sched::then([&encoders] { return encoders.advance(); }) |
-  //     Sched::to([](const auto &deltas) {
-  //       constexpr double seconds = HW::ODOMETRY_PERIOD_MS / 1000.0;
-  //
-  //       for (const Encoder::Reading &wheel : deltas) {
-  //         ESP_LOGI(TAG, "%s %+5ld counts %+7.2f rpm", label(wheel.name),
-  //                  static_cast<long>(wheel.counts),
-  //                  Encoder::rpm(HW::EncoderBank::spec, wheel.counts,
-  //                  seconds));
-  //       }
-  //     }));
+  static auto odometry = Sched::make_task<4096, configMAX_PRIORITIES - 4>(
+      Sched::every<HW::ODOMETRY_PERIOD_MS> |
+      Sched::then([&encoders] { return encoders.advance(); }) |
+      Sched::to([](const auto &deltas) {
+        constexpr double seconds = HW::ODOMETRY_PERIOD_MS / 1000.0;
+
+        for (const Encoder::Reading &wheel : deltas) {
+          ESP_LOGI(TAG, "%s %+5ld counts %+7.2f rpm", label(wheel.name),
+                   static_cast<long>(wheel.counts),
+                   Encoder::rpm(HW::EncoderBank::spec, wheel.counts, seconds));
+        }
+      }));
 
   // init runs on the uros task, not here: a dead agent must not stop motion
   // from spawning
@@ -135,7 +133,6 @@ extern "C" void app_main(void) {
       Sched::to([] { return session.poll(); }));
 
   // TODO: encapsulate this
-  //
   // a false from on_start deletes the task, so one lost handshake used to cost
   // cmd_vel until the next power cycle. init() unwinds itself on failure, so
   // retrying is just a delay
@@ -158,5 +155,5 @@ extern "C" void app_main(void) {
 
   ros.spawn("uros");
   motion.spawn("motion");
-  // odometry.spawn("odometry");
+  odometry.spawn("odometry");
 }
