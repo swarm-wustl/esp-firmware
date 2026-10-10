@@ -25,7 +25,10 @@ class SpiBus {
 public:
   static constexpr spi_host_device_t host = SPI2_HOST;
   static constexpr int sck = 18;
-  static constexpr int miso = 19;
+  // the carrier wires MISO to 19, which NEWMCPCBV2 gives to M3's PWM. 22 is
+  // free and wired to nothing, which is what keeps the bus declarable while
+  // the ranging tasks are unspawned -- see the TODO in main.cpp
+  static constexpr int miso = 22;
   static constexpr int mosi = 23;
 
   static constexpr std::array claims{
