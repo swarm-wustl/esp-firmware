@@ -5,6 +5,7 @@
 #include <memory>
 #include <tuple>
 
+#include <driver/pulse_cnt.h>
 #include <driver/spi_common.h>
 #include <driver/spi_master.h>
 
@@ -13,6 +14,7 @@
 
 #include "assembly.h"
 #include "driver/gpio.h"
+#include "encoder.h"
 #include "swarm_hal.h"
 
 namespace ESP32 {
@@ -23,7 +25,10 @@ class SpiBus {
 public:
   static constexpr spi_host_device_t host = SPI2_HOST;
   static constexpr int sck = 18;
-  static constexpr int miso = 19;
+  // the carrier wires MISO to 19, which NEWMCPCBV2 gives to M3's PWM. 22 is
+  // free and wired to nothing, which is what keeps the bus declarable while
+  // the ranging tasks are unspawned -- see the TODO in main.cpp
+  static constexpr int miso = 22;
   static constexpr int mosi = 23;
 
   static constexpr std::array claims{
@@ -113,7 +118,10 @@ public:
   // the constructor configures one LEDC timer for the whole channel group, so
   // a second PWM wanting a different frequency would silently retune the first
   static constexpr int timer = 0;
-  static constexpr uint32_t frequency_hz = 1000;
+
+  // above audible and well inside the TB6612's 100 kHz ceiling. 10-bit duty at
+  // this rate needs 20.48 MHz of the 80 MHz LEDC clock, so the resolution holds
+  static constexpr uint32_t frequency_hz = 20000;
 
   static constexpr std::array claims{
       HAL::Claim{HAL::Resource::LedcTimer, timer, HAL::Use::Shared},
@@ -129,6 +137,47 @@ public:
 
   void configure_channel(int channel, HAL::Pin pin);
   void set_duty_ratio(int channel, double ratio);
+};
+
+// PCNT in quadrature: two channels per unit, each counting both edges of one
+// signal with the other as the level input, so every edge of the pair moves the
+// count and its sign is the direction
+class QuadratureCounter {
+public:
+  static constexpr auto decoding = Encoder::Decoding::X4;
+
+  // the units are claimed by whoever declares the encoder rows, so this holds
+  // no hardware of its own
+  static constexpr std::array<HAL::Claim, 0> claims{};
+
+  static constexpr size_t max_units = 8;
+
+  // the hardware counter is 16-bit, so the driver accumulates at these limits
+  // and the running 32-bit total is what gets read back
+  static constexpr int low_limit = -32768;
+  static constexpr int high_limit = 32767;
+
+  // a hall edge can chatter; anything shorter than this is not motion. 1us
+  // allows ~170 output rev/s at X4, far past the 1.25 rev/s this gearbox turns
+  static constexpr uint32_t glitch_filter_ns = 1000;
+
+  explicit QuadratureCounter(Swarm::Assembly);
+  ~QuadratureCounter();
+
+  QuadratureCounter(const QuadratureCounter &) = delete;
+  void operator=(const QuadratureCounter &) = delete;
+
+  QuadratureCounter(QuadratureCounter &&other);
+  QuadratureCounter &operator=(QuadratureCounter &&other);
+
+  void configure_unit(int unit, HAL::Pin a, HAL::Pin b);
+  int32_t count(int unit);
+  void clear(int unit);
+
+private:
+  std::array<pcnt_unit_handle_t, max_units> units_{};
+
+  void swap(QuadratureCounter &other);
 };
 } // namespace ESP32
 

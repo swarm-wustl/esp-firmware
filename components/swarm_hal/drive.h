@@ -36,16 +36,21 @@ template <Style S> inline constexpr size_t motor_count = wheels<S>().size();
 // the roster and the style name the same motors, one each. A motor the
 // geometry never commands would sit enabled and idle, so it belongs in its own
 // declaration rather than the drive roster
-template <auto Names, Style S> consteval bool covers() {
+template <Style S, size_t N>
+consteval bool covers_roster(const std::array<Motor::Name, N> &names) {
   constexpr auto rows = wheels<S>();
 
-  if (Names.size() != rows.size()) {
+  if (names.size() != rows.size()) {
     return false;
   }
 
-  return std::ranges::all_of(rows, [](const Wheel &wheel) {
-    return std::ranges::count(Names, wheel.name) == 1;
+  return std::ranges::all_of(rows, [&names](const Wheel &wheel) {
+    return std::ranges::count(names, wheel.name) == 1;
   });
+}
+
+template <auto Names, Style S> consteval bool covers() {
+  return covers_roster<S>(Names);
 }
 
 template <auto Names, Style S>
