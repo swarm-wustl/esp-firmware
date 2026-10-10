@@ -25,11 +25,12 @@ class SpiBus {
 public:
   static constexpr spi_host_device_t host = SPI2_HOST;
   static constexpr int sck = 18;
-  // the carrier wires MISO to 19, which NEWMCPCBV2 gives to M3's PWM. 22 is
-  // free and wired to nothing, which is what keeps the bus declarable while
-  // the ranging tasks are unspawned -- see the TODO in main.cpp
-  static constexpr int miso = 22;
-  static constexpr int mosi = 23;
+  // the carrier wires MISO to 19 and MOSI to 23, which NEWMCPCBV2 gives to M3's
+  // PWM and the UMC's BIN2. 12 and 14 are free and wired to nothing, which is
+  // what keeps the bus declarable while the ranging tasks are unspawned -- see
+  // the TODO in main.cpp
+  static constexpr int miso = 12;
+  static constexpr int mosi = 14;
 
   static constexpr std::array claims{
       HAL::Claim{HAL::Resource::SpiHost, static_cast<int>(host),

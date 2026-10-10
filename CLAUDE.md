@@ -91,6 +91,32 @@ device owns its sub-devices and folds in their claims (`DWM` holds its SPI,
 `L298N::MotorDriver` its PWM), so the config sees the whole tree from the two
 types it is handed.
 
+## The UMC
+
+The universal module connector is the face modules bolt onto -- it carries an
+I2C bus so a module can be anything -- and motors M1 and M2 raise and lower it.
+They are encoder-less and always move together, so there is no geometry and no
+drive style: `Motor::ganged<Names>(effort)` turns one effort in `[-1, 1]`,
+sign for direction, into the `Motor::Frame` a driver runs. The roster comes
+from `UmcDriver::motors`, so the pin table is the only place the motors are
+named.
+
+`Motor::Frame<N>` is what `L298N::MotorDriver::run` takes, and `Drive::Frame<S>`
+is that frame sized by a style -- which is why the same driver template serves
+both the wheels and the UMC with no second algorithm. A UMC motor mounted facing
+the other way gets its `in_a`/`in_b` swapped in the pin row.
+
+ROS: `std_msgs/Float32` on `umc/front`, effort in `[-1, 1]`, saturated in
+`Motor::ganged` so a publisher cannot ask for more than full duty.
+
+```sh
+ros2 topic pub -1 /<CONFIG_SWARM_ROS_NAMESPACE>/umc/front std_msgs/Float32 '{data: 0.6}'
+```
+
+That is both subscriptions libmicroros was built for
+(`RMW_UXRCE_MAX_SUBSCRIPTIONS 2`); a third needs `colcon.meta` raised and
+libmicroros rebuilt.
+
 ## DW1000 references
 
 When answering questions about the DW1000 / register behavior, consult `docs/references.md`:
@@ -149,7 +175,7 @@ patch applied yet.
 
 Tests live in `components/dwm/test/` and `components/swarm_hal/test/` (tagged Unity `TEST_CASE`s) and split into two tiers, launched via `test/run.py` (which builds the app then hands off to `pytest-embedded`). Run from inside the container:
 
-- `./test/run.py host` — pure value-type, mock-SPI and kinematics unit tests (`[dwm_data]`, `[dwm_mock]`, `[drive]`), built for the `linux` target and run natively, no board
+- `./test/run.py host` — pure value-type, mock-SPI and kinematics unit tests (`[dwm_data]`, `[dwm_mock]`, `[drive]`, `[motor]`), built for the `linux` target and run natively, no board
 - `./test/run.py device` — on-device integration tests (`[dwm_reg]`, `[dwm]`) needing a real DW1000; pytest flashes and runs over serial
 - extra args pass through to pytest, e.g. `./test/run.py host -s`
 
