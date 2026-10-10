@@ -8,7 +8,6 @@
 #include <utility>
 
 #include "assembly.h"
-#include "drive.h"
 #include "motor.h"
 #include "swarm_hal.h"
 
@@ -99,7 +98,9 @@ public:
   MotorDriver(MotorDriver &&) = default;
   MotorDriver &operator=(MotorDriver &&) = default;
 
-  template <Drive::Style S> void run(const Drive::Frame<S> &frame) {
+  template <size_t N>
+    requires(N <= Pins.size())
+  void run(const Motor::Frame<N> &frame) {
     for (const Motor::Command &cmd : frame.commands) {
       apply(slot_of(cmd.name), cmd);
     }

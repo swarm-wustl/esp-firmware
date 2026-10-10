@@ -56,11 +56,7 @@ template <auto Names, Style S> consteval bool covers() {
 template <auto Names, Style S>
 concept covered_by = covers<Names, S>();
 
-template <Style S> struct Frame {
-  std::array<Motor::Command, motor_count<S>> commands;
-};
-
-constexpr double magnitude(double v) { return v < 0.0 ? -v : v; }
+template <Style S> using Frame = Motor::Frame<motor_count<S>>;
 
 constexpr double wheel_velocity(const Wheel &wheel, const Twist &twist) {
   return wheel.linear_x * twist.linear_x + wheel.linear_y * twist.linear_y +
@@ -74,18 +70,10 @@ constexpr double saturation_divisor(const std::array<double, N> &velocities) {
   double peak = 1.0;
 
   for (double v : velocities) {
-    peak = magnitude(v) > peak ? magnitude(v) : peak;
+    peak = Motor::magnitude(v) > peak ? Motor::magnitude(v) : peak;
   }
 
   return peak;
-}
-
-constexpr Motor::Command command_for(Motor::Name name, double velocity) {
-  return {name,
-          velocity > 0.0   ? Motor::Direction::FORWARD
-          : velocity < 0.0 ? Motor::Direction::REVERSE
-                           : Motor::Direction::STOP,
-          magnitude(velocity)};
 }
 
 // TODO: actually have this be inverse kinematics...
@@ -104,7 +92,7 @@ template <Style S> constexpr Frame<S> inverse_kinematics(const Twist &twist) {
   Frame<S> frame{};
 
   for (size_t i = 0; i < rows.size(); ++i) {
-    frame.commands[i] = command_for(rows[i].name, velocities[i] / divisor);
+    frame.commands[i] = Motor::command_for(rows[i].name, velocities[i] / divisor);
   }
 
   return frame;
