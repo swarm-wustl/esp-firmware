@@ -6,9 +6,7 @@
 #include "swarm_sched.h"
 #include "system.h"
 
-#include "esp_heap_caps.h"
 #include "esp_log.h"
-#include "esp_system.h"
 
 #include <geometry_msgs/msg/twist.h>
 #include <uros_network_interfaces.h>
@@ -91,9 +89,6 @@ static constexpr const char *label(Motor::Name name) {
 static auto onTwist = [](const geometry_msgs__msg__Twist &twist) {
   const Drive::Twist body{twist.linear.x, twist.linear.y, twist.angular.z};
 
-  // bring-up only: remove once cmd_vel is known to reach the wheels
-  ESP_LOGI(TAG, "twist x=%.2f z=%.2f", body.linear_x, body.angular_z);
-
   if (!commands.push(body, 0)) {
     ESP_LOGW(TAG, "Dropped twist: command channel full");
   }
@@ -115,12 +110,6 @@ extern "C" void app_main(void) {
       Sched::latest<HW::MOTION_PERIOD_MS>(commands) |
       Sched::then(Drive::inverse_kinematics<HW::STYLE>) |
       Sched::to([&motors](const Drive::Frame<HW::STYLE> &frame) {
-        // bring-up only: remove once cmd_vel is known to reach the wheels
-        for (const Motor::Command &cmd : frame.commands) {
-          ESP_LOGI(TAG, "%s dir=%d duty=%.2f", label(cmd.name),
-                   static_cast<int>(cmd.dir), cmd.pwm_ratio);
-        }
-
         motors.run(frame);
       }));
 
@@ -150,11 +139,6 @@ extern "C" void app_main(void) {
   // cmd_vel until the next power cycle. init() unwinds itself on failure, so
   // retrying is just a delay
   ros.on_start([] {
-    ESP_LOGI(TAG, "heap before session init: %lu free, %lu largest block",
-             static_cast<unsigned long>(esp_get_free_heap_size()),
-             static_cast<unsigned long>(
-                 heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
-
     // TODO: this should really be encapsulated and part of ros declaration.
     while (!session.init() || !session.on<HW::CmdVel>(onTwist)) {
       session.fini();

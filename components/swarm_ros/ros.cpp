@@ -4,12 +4,6 @@
 
 static const char *TAG = "ros";
 
-void ROS::report_poll(uint32_t polls, uint32_t errors, int last) {
-  ESP_LOGI(TAG, "poll #%lu: %lu spin errors, last rc=%d",
-           static_cast<unsigned long>(polls),
-           static_cast<unsigned long>(errors), last);
-}
-
 bool ROS::check(rcl_ret_t status, const char *what) {
   if (status == RCL_RET_OK) {
     return true;

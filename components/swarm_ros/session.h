@@ -20,7 +20,6 @@
 
 namespace ROS {
 bool check(rcl_ret_t status, const char *what);
-void report_poll(uint32_t polls, uint32_t errors, int last);
 
 namespace detail {
 template <Declaration Decl> struct entity;
@@ -207,18 +206,13 @@ public:
   // one pass: service the executor, then publish whatever the producers queued.
   // Non-blocking -- the caller's period paces it
   void poll() {
-    // bring-up instrumentation: spin_some's return was being discarded, so an
-    // executor erroring every cycle would look identical to no data arriving
     const rcl_ret_t rc = rclc_executor_spin_some(&executor, 0);
 
-    ++polls;
-
+    // an executor that fails every cycle looks exactly like a topic nobody
+    // publishes to, so the one return value that can tell them apart is worth
+    // reading. RCL_RET_TIMEOUT just means nothing was ready
     if (rc != RCL_RET_OK && rc != RCL_RET_TIMEOUT) {
-      ++spin_errors;
-    }
-
-    if (polls % 200 == 0) {
-      report_poll(polls, spin_errors, static_cast<int>(rc));
+      check(rc, "spin");
     }
 
     std::apply([&](auto &...e) { (flush(e), ...); }, entities);
@@ -341,8 +335,6 @@ private:
   rclc_executor_t executor{};
   std::tuple<detail::entity<Decls>...> entities{};
   uint32_t dropped = 0;
-  uint32_t polls = 0;
-  uint32_t spin_errors = 0;
   bool synchronised = true;
   stage stage_ = stage::none;
 };
