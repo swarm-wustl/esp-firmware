@@ -6,16 +6,19 @@ Run `./flash.sh [USB device]`. The script provides specific instructions on how 
 
 # Teleop
 
-`./scripts/teleop.sh` brings up the micro-ROS agent (`microros/micro-ros-agent:humble`,
-UDP on `CONFIG_MICRO_ROS_AGENT_PORT`) and drops you into `teleop_twist_keyboard`
-publishing to `/<CONFIG_SWARM_ROS_NAMESPACE>/cmd_vel`, both read out of `sdkconfig`.
-The board has to reach `CONFIG_MICRO_ROS_AGENT_IP` on the LAN, so that must be this
-machine's address.
+`./scripts/agent.sh` runs the micro-ROS agent (`microros/micro-ros-agent:humble`)
+on `CONFIG_MICRO_ROS_AGENT_PORT`, read out of `sdkconfig`. The board has to reach
+`CONFIG_MICRO_ROS_AGENT_IP` on the LAN, so that must be this machine's address.
 
-- `scripts/teleop.sh` -- agent (if not already up) + keyboard
-- `scripts/teleop.sh agent` -- agent only, in the foreground with `-v6` logs
-- `scripts/teleop.sh stop` -- stop the agent container
-- `scripts/teleop.sh build` -- rebuild `swarm-teleop:latest` from `docker/teleop/Dockerfile`
+- `scripts/agent.sh` -- foreground, ctrl-c to stop; extra args reach
+  `micro_ros_agent`, e.g. `scripts/agent.sh -v6`
+- `scripts/agent.sh detach` / `stop` / `status` / `port`
+
+`./scripts/teleop.sh` starts the agent if it isn't up, then drops you into
+`teleop_twist_keyboard` publishing to `/<CONFIG_SWARM_ROS_NAMESPACE>/cmd_vel`. It
+runs in the agent's network namespace -- XRCE-mapped topics aren't discoverable
+across a docker bridge. `scripts/teleop.sh build` rebuilds `swarm-teleop:latest`
+from `docker/teleop/Dockerfile`.
 
 # Editor / clangd LSP
 Always start Neovim from the swarm repo root (`nvim` from this directory), not from a
