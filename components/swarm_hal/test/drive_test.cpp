@@ -6,8 +6,12 @@
 #include <type_traits>
 
 namespace {
-constexpr auto kFrame = Drive::inverse_kinematics<Drive::Style::DIFFERENTIAL>(
-    Drive::Twist{1.0, 0.0, 0.0});
+constexpr auto drive(const Drive::Twist &twist) {
+  return Drive::to_commands<Drive::Style::DIFFERENTIAL>(
+      Drive::inverse_kinematics<Drive::Style::DIFFERENTIAL>(twist));
+}
+
+constexpr auto kFrame = drive(Drive::Twist{1.0, 0.0, 0.0});
 
 static_assert(Drive::motor_count<Drive::Style::DIFFERENTIAL> == 2);
 
@@ -34,8 +38,7 @@ void check(const Motor::Command &cmd, Motor::Direction dir, double ratio) {
 } // namespace
 
 TEST_CASE("differential: forward twist drives both wheels forward", "[drive]") {
-  const auto frame = Drive::inverse_kinematics<Drive::Style::DIFFERENTIAL>(
-      Drive::Twist{1.0, 0.0, 0.0});
+  const auto frame = drive(Drive::Twist{1.0, 0.0, 0.0});
   const double expected = std::min(1.0, 1.0 / Drive::kWheelRadius);
 
   check(command_for(frame, Motor::Name::LEFT), Motor::Direction::FORWARD,
@@ -45,8 +48,7 @@ TEST_CASE("differential: forward twist drives both wheels forward", "[drive]") {
 }
 
 TEST_CASE("differential: negative linear reverses both wheels", "[drive]") {
-  const auto frame = Drive::inverse_kinematics<Drive::Style::DIFFERENTIAL>(
-      Drive::Twist{-0.2, 0.0, 0.0});
+  const auto frame = drive(Drive::Twist{-0.2, 0.0, 0.0});
   const double expected = 0.2 / Drive::kWheelRadius;
 
   check(command_for(frame, Motor::Name::LEFT), Motor::Direction::REVERSE,
@@ -56,8 +58,7 @@ TEST_CASE("differential: negative linear reverses both wheels", "[drive]") {
 }
 
 TEST_CASE("differential: pure rotation counter-rotates the wheels", "[drive]") {
-  const auto frame = Drive::inverse_kinematics<Drive::Style::DIFFERENTIAL>(
-      Drive::Twist{0.0, 0.0, 1.0});
+  const auto frame = drive(Drive::Twist{0.0, 0.0, 1.0});
   const double expected =
       std::min(1.0, Drive::kHalfTrack / Drive::kWheelRadius);
 
@@ -68,8 +69,7 @@ TEST_CASE("differential: pure rotation counter-rotates the wheels", "[drive]") {
 }
 
 TEST_CASE("differential: zero twist stops both wheels", "[drive]") {
-  const auto frame = Drive::inverse_kinematics<Drive::Style::DIFFERENTIAL>(
-      Drive::Twist{0.0, 0.0, 0.0});
+  const auto frame = drive(Drive::Twist{0.0, 0.0, 0.0});
 
   check(command_for(frame, Motor::Name::LEFT), Motor::Direction::STOP, 0.0);
   check(command_for(frame, Motor::Name::RIGHT), Motor::Direction::STOP, 0.0);
@@ -78,8 +78,7 @@ TEST_CASE("differential: zero twist stops both wheels", "[drive]") {
 // scaling all wheels by the same divisor keeps the turn radius; clamping each
 // one alone would straighten the arc out
 TEST_CASE("differential: saturation preserves the wheel ratio", "[drive]") {
-  const auto frame = Drive::inverse_kinematics<Drive::Style::DIFFERENTIAL>(
-      Drive::Twist{1.0, 0.0, 1.0});
+  const auto frame = drive(Drive::Twist{1.0, 0.0, 1.0});
 
   const auto left = command_for(frame, Motor::Name::LEFT);
   const auto right = command_for(frame, Motor::Name::RIGHT);
@@ -92,8 +91,7 @@ TEST_CASE("differential: saturation preserves the wheel ratio", "[drive]") {
 
 TEST_CASE("differential: linear_y does not move a nonholonomic base",
           "[drive]") {
-  const auto frame = Drive::inverse_kinematics<Drive::Style::DIFFERENTIAL>(
-      Drive::Twist{0.0, 1.0, 0.0});
+  const auto frame = drive(Drive::Twist{0.0, 1.0, 0.0});
 
   check(command_for(frame, Motor::Name::LEFT), Motor::Direction::STOP, 0.0);
   check(command_for(frame, Motor::Name::RIGHT), Motor::Direction::STOP, 0.0);

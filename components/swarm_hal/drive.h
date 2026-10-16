@@ -68,44 +68,8 @@ constexpr double wheel_velocity(const Wheel &wheel, const Twist &twist) {
          wheel.angular_z * twist.angular_z;
 }
 
-// scaling every wheel by the same factor keeps the mix -- and so the heading --
-// that clamping each one independently would distort
-template <size_t N>
-constexpr double saturation_divisor(const std::array<double, N> &velocities) {
-  double peak = 1.0;
-
-  for (double v : velocities) {
-    peak = Motor::magnitude(v) > peak ? Motor::magnitude(v) : peak;
-  }
-
-  return peak;
-}
-
-// TODO: actually have this be inverse kinematics...
-// then have a separate stage that converts vel -> duty cycles for motors
-template <Style S> constexpr Frame<S> inverse_kinematics(const Twist &twist) {
-  constexpr auto rows = wheels<S>();
-
-  std::array<double, motor_count<S>> velocities{};
-
-  for (size_t i = 0; i < rows.size(); ++i) {
-    velocities[i] = wheel_velocity(rows[i], twist);
-  }
-
-  const double divisor = saturation_divisor(velocities);
-
-  Frame<S> frame{};
-
-  for (size_t i = 0; i < rows.size(); ++i) {
-    frame.commands[i] =
-        Motor::command_for(rows[i].name, velocities[i] / divisor);
-  }
-
-  return frame;
-}
-
 template <Style S>
-constexpr auto inverse_kinematics_pure(const Twist &twist)
+constexpr auto inverse_kinematics(const Twist &twist)
     -> WheelAngularVelocities<S> {
   constexpr auto rows = wheels<S>();
 
@@ -118,6 +82,8 @@ constexpr auto inverse_kinematics_pure(const Twist &twist)
   return angular_velocities;
 }
 
+// scaling every wheel by the same factor keeps the mix -- and so the heading --
+// that clamping each one independently would distort
 template <std::floating_point T, size_t N>
 constexpr auto desaturate(std::array<T, N> data, T limit = 1)
     -> std::array<T, N> {

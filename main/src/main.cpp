@@ -186,6 +186,7 @@ extern "C" void app_main(void) {
   static auto motion = Sched::make_task<4096, configMAX_PRIORITIES - 2>(
       Sched::latest<HW::MOTION_PERIOD_MS>(commands) |
           Sched::then(Drive::inverse_kinematics<HW::STYLE>) |
+          Sched::then(Drive::to_commands<HW::STYLE>) |
           Sched::to([&motors](const Drive::Frame<HW::STYLE> &frame) {
             motors.run(frame);
           }),
