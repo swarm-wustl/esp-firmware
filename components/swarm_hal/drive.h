@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 
@@ -58,6 +59,10 @@ concept covered_by = covers<Names, S>();
 
 template <Style S> using Frame = Motor::Frame<motor_count<S>>;
 
+// rad/s
+template <Style S>
+using WheelAngularVelocities = std::array<double, motor_count<S>>;
+
 constexpr double wheel_velocity(const Wheel &wheel, const Twist &twist) {
   return wheel.linear_x * twist.linear_x + wheel.linear_y * twist.linear_y +
          wheel.angular_z * twist.angular_z;
@@ -92,11 +97,56 @@ template <Style S> constexpr Frame<S> inverse_kinematics(const Twist &twist) {
   Frame<S> frame{};
 
   for (size_t i = 0; i < rows.size(); ++i) {
-    frame.commands[i] = Motor::command_for(rows[i].name, velocities[i] / divisor);
+    frame.commands[i] =
+        Motor::command_for(rows[i].name, velocities[i] / divisor);
   }
 
   return frame;
 }
+
+template <Style S>
+constexpr auto inverse_kinematics_pure(const Twist &twist)
+    -> WheelAngularVelocities<S> {
+  constexpr auto rows = wheels<S>();
+
+  WheelAngularVelocities<S> angular_velocities{};
+
+  for (size_t i = 0; i < rows.size(); ++i) {
+    angular_velocities[i] = wheel_velocity(rows[i], twist);
+  }
+
+  return angular_velocities;
+}
+
+template <std::floating_point T, size_t N>
+constexpr auto desaturate(std::array<T, N> data, T limit = 1)
+    -> std::array<T, N> {
+  // Find the absolute peak (+/-)
+  const T peak = std::ranges::fold_left(
+      data, limit, [](T acc, T v) { return std::max(acc, v < 0 ? -v : v); });
+
+  std::ranges::transform(data, data.begin(),
+                         [scale = limit / peak](T v) { return v * scale; });
+
+  return data;
+}
+
+template <Style S>
+constexpr auto to_commands(const WheelAngularVelocities<S> &velocities)
+    -> Frame<S> {
+  // TODO: consider holding names in the angular velocities struct directly
+  constexpr auto rows = wheels<S>();
+  auto desaturated = desaturate(velocities);
+
+  Frame<S> res{};
+
+  for (size_t i = 0; i < motor_count<S>; ++i) {
+    res.commands[i] = Motor::command_for(rows[i].name, desaturated[i]);
+  }
+
+  return res;
+}
+
 } // namespace Drive
 
 #endif
