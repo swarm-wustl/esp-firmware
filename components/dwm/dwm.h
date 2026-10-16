@@ -30,6 +30,21 @@ enum class DWMRegisterID : uint8_t {
   TX_BUFFER = 0x09,
 };
 
+
+enum class RangingRole { Idle, Initiator, Responder };
+
+enum class InitiatorState {
+    Idle,
+    WaitingForReply,
+    WaitingForFinalFrame
+};
+
+enum class ResponderState {
+    Idle,
+    WaitingForPoll,
+    SendingFinalFrame
+};
+
 class DWMTimestamp {
   // full 40-bit counter. do NOT drop the low bits: the sub-nanosecond flight
   // time that ranging measures lives in them (1 m ~= 213 of these ~15.65 ps
@@ -394,6 +409,150 @@ public:
     return 0;
   }
 
+
+///Interupt Handling and Helpers
+
+
+    // Trigger initiating a range sequence asynchronously
+  std::expected<void, HAL::SpiError> start_range() {
+  role_ = RangingRole::Initiator;
+  init_state_ = InitiatorState::WaitingForReply;
+
+  std::array<std::byte, 1> poll{RANGE_POLL};
+  if (auto r = transmit_async(poll); !r) { // Triggers TX, does not block
+      init_state_ = InitiatorState::Idle;
+      return std::unexpected(r.error());
+  }
+  return {};
+  }
+    // Prepare responder to listen for incoming poll frames
+
+  std::expected<void, HAL::SpiError> start_responder() {
+      role_ = RangingRole::Responder;
+      resp_state_ = ResponderState::WaitingForPoll;
+      return  enable_rx(); // Enable receiver and wait for ISR
+  }
+
+  // Call from worker task upon ISR notification
+
+  std::expected<void, HAL::SpiError> handle_interrupt() {
+    uint64_t status = read_sys_status();
+
+    if (role_ == RangingRole::Initiator) {
+        handle_initiator_irq(status);
+    } else if (role_ == RangingRole::Responder) {
+        handle_responder_irq(status);
+    }
+
+    clear_status(status); // Write-1-To-Clear (W1C)
+}
+
+std::expected<void, HAL::SpiError> handle_initiator_irq(uint64_t status) {
+    if (is_tx_done(status) && init_state_ == InitiatorState::WaitingForReply) {
+        t_poll_tx_ = get_tx_timestamp();
+        enable_rx(); // Transition hardware to listening state
+        return;
+    }
+
+    if (is_rx_done(status)) {
+        if (init_state_ == InitiatorState::WaitingForReply) {
+            std::array<std::byte, 1> reply{};
+            if (read_rx_buffer(reply) && reply[0] == RANGE_REPLY) {
+                t_reply_rx_ = get_rx_timestamp();
+                init_state_ = InitiatorState::WaitingForFinalFrame;
+                enable_rx();
+            } else {
+                init_state_ = InitiatorState::Idle; // Handle error/unexpected frame
+            }
+        } 
+        else if (init_state_ == InitiatorState::WaitingForFinalFrame) {
+            std::array<std::byte, 9> final_frame{};
+            if (read_rx_buffer(final_frame) && final_frame[0] == RANGE_REPLY) {
+                uint64_t t_reply = 0;
+                for (int i = 0; i < 8; ++i) {
+                    t_reply |= static_cast<uint64_t>(
+                        std::to_integer<uint8_t>(final_frame[1 + i])) << (8 * i);
+                }
+
+                if (t_poll_tx_ && t_reply_rx_) {
+                    uint64_t t_round = (*t_reply_rx_ - *t_poll_tx_).count();
+                    double tof = (static_cast<double>(t_round) - static_cast<double>(t_reply)) / 2.0;
+                    double distance = tof * SECONDS_PER_TICK * SPEED_OF_LIGHT;
+                    
+                    // Distance calculated successfully
+                    on_range_complete(distance);
+                }
+            }
+            init_state_ = InitiatorState::Idle;
+        }
+    }
+}
+
+std::expected<void, HAL::SpiError> handle_responder_irq(uint64_t status) {
+    if (is_rx_done(status) && resp_state_ == ResponderState::WaitingForPoll) {
+        std::array<std::byte, 1> poll{};
+        if (read_rx_buffer(poll) && poll[0] == RANGE_POLL) {
+            t_poll_rx_ = get_rx_timestamp();
+            
+            // Immediate response
+            std::array<std::byte, 1> reply{RANGE_REPLY};
+            transmit_async(reply);
+            resp_state_ = ResponderState::SendingFinalFrame;
+        }
+    } 
+    else if (is_tx_done(status) && resp_state_ == ResponderState::SendingFinalFrame) {
+        auto t_reply_tx = get_tx_timestamp();
+        if (t_reply_tx && t_poll_rx_) {
+            uint64_t t_reply = (*t_reply_tx - *t_poll_rx_).count();
+            
+            std::array<std::byte, 9> final_frame{RANGE_REPLY};
+            for (int i = 0; i < 8; ++i) {
+                final_frame[1 + i] = std::byte((t_reply >> (8 * i)) & 0xFF);
+            }
+            
+            transmit_async(final_frame);
+        }
+        resp_state_ = ResponderState::WaitingForPoll;
+        enable_rx(); // Return to listening mode
+    }
+}
+
+std::expected<bool, HAL::SpiError> is_tx_done(uint64_t status) {
+    return (status & dw1000::TXFRS) != 0;
+}
+std::expected<bool, HAL::SpiError> is_rx_done(uint64_t status) {
+    return (status & dw1000::RXFRS) != 0;
+}
+
+
+std::expected<void, HAL::SpiError> enable_rx() {
+    // Enable the receiver directly without resetting the TRX block via force_idle()
+    return write_sub_value(dw1000::SYS_CTRL, 0, dw1000::RXENAB, 2);
+}
+
+  std::expected<size_t, HAL::SpiError> read_rx_buffer(std::span<std::byte> out) {
+    // 1. Read frame length from RX_FINFO
+    std::array<std::byte, 4> finfo{};
+    if (auto f = read_sub(dw1000::RX_FINFO, 0, finfo); !f) {
+        return std::unexpected(f.error());
+    }
+    
+    uint16_t len = static_cast<uint16_t>(
+        ((std::to_integer<uint16_t>(finfo[1]) << 8) |
+         std::to_integer<uint16_t>(finfo[0])) & 0x03FF);
+
+    // Subtract 2 bytes for the 16-bit 802.15.4 CRC (FCS)
+    size_t payload = len >= 2 ? len - 2u : 0;
+    size_t bytes_to_read = std::min(payload, out.size());
+
+    // 2. Read only the payload data directly from RX_BUFFER register
+    if (auto d = read_sub(dw1000::RX_BUFFER, 0, out.first(bytes_to_read)); !d) {
+        return std::unexpected(d.error());
+    }
+
+    return bytes_to_read;
+}
+
   std::expected<uint32_t, HAL::SpiError> get_device_id() {
     return get_reg_view<DWMRegisterID::DEV_ID>().read().transform(
         [](uint64_t raw) { return static_cast<uint32_t>(raw); });
@@ -419,6 +578,7 @@ public:
     return get_reg_view<DWMRegisterID::RX_TIME>().read();
   }
 
+  
   std::expected<DWMTimestamp, HAL::SpiError> get_tx_timestamp() {
     return get_reg_view<DWMRegisterID::TX_TIME>().read();
   }
@@ -508,15 +668,34 @@ public:
 	return false;
 }
 
-  //Interrupt Handling:
 
 
 
-  // std::expected<void,HAL::SpiError> loop(){
-    
 
-  // }
+  std::expected<void, HAL::SpiError> transmit_async(std::span<const std::byte> payload) {
+    uint16_t frame_len = static_cast<uint16_t>(payload.size() + 2); // +2 for FCS CRC
 
+    auto tx_fctrl = get_reg_view<DWMRegisterID::TX_FCTRL>();
+
+    // 1. Write frame data to TX buffer
+    if (auto r = write_sub(dw1000::TX_BUFFER, 0, payload); !r) {
+        return std::unexpected(r.error());
+    }
+
+    // 2. Write frame length into control register
+    if (auto r = tx_fctrl.write_bit_range(6, 0, frame_len); !r) {
+        return std::unexpected(r.error());
+    }
+
+    // 3. Trigger transmission asynchronously (TXSTRT)
+    if (auto r = write_sub_value(dw1000::SYS_CTRL, 0, dw1000::TXSTRT, 1); !r) {
+        return std::unexpected(r.error());
+    }
+
+    // Returns immediately. The DW1000 will pull the IRQ line HIGH 
+    // and set SYS_STATUS_TXFRS when transmission completes over the air.
+    return {};
+}
 
   // Write payload to TX_BUFFER, set the frame length, start TX, wait for TXFRS.
   std::expected<void, HAL::SpiError>
@@ -686,6 +865,22 @@ private:
     return 3;
   }
 
+
+  RangingRole role_{RangingRole::Idle};
+    InitiatorState init_state_{InitiatorState::Idle};
+    ResponderState resp_state_{ResponderState::Idle};
+
+    // Timestamp storage across states
+    std::optional<Timestamp> t_poll_tx_;
+    std::optional<Timestamp> t_poll_rx_;
+    std::optional<Timestamp> t_reply_rx_;
+
+    // Helper interrupt handlers
+    void handle_initiator_irq(uint64_t status_flags);
+    void handle_responder_irq(uint64_t status_flags);
+
+
+
   std::expected<void, HAL::SpiError>
   write_sub(uint8_t reg, uint16_t offset, std::span<const std::byte> data) {
     std::array<std::byte, 3> hdr{};
@@ -755,6 +950,9 @@ private:
     return std::unexpected(HAL::SpiError::Timeout);
   }
 
+
+
+
   // manual 2.5.5.10 Table 4: force sys clock, kick OTP->LDE, restore clock
   std::expected<void, HAL::SpiError> load_lde() {
     return write_sub_value(dw1000::PMSC, 0x00, 0x0301, 2)
@@ -788,6 +986,13 @@ private:
   }
 
   std::expected<BitRate, HAL::SpiError> get_tx_bit_rate() {
+    return get_reg_view<DWMRegisterID::TX_FCTRL>().read().transform(
+        [](uint64_t raw) {
+          return static_cast<BitRate>((raw >> 13) & 0b11); // TODO: constants?
+        });
+  }
+
+  std::expected<BitRate, HAL::SpiError> is_tx_done() {
     return get_reg_view<DWMRegisterID::TX_FCTRL>().read().transform(
         [](uint64_t raw) {
           return static_cast<BitRate>((raw >> 13) & 0b11); // TODO: constants?

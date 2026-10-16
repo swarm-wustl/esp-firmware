@@ -111,33 +111,19 @@ extern "C" void IRAM_ATTR dwm_gpio_isr_handler(void *arg) {
 // 2. UWB WORKER TASK (Handles SPI & Response Logic)
 // =============================================================================
 void uwb_worker_task(void *pvParameters) {
-  // Grab pointer to your driver instance passed via xTaskCreate
-  auto *dwm = static_cast<DWM *>(pvParameters);
+    auto *dwm = static_cast<DWM *>(pvParameters);
 
-  // Store task handle so the ISR knows who to wake up
-  s_uwb_task_handle = xTaskGetCurrentTaskHandle();
+    s_uwb_task_handle = xTaskGetCurrentTaskHandle();
 
-  ESP_LOGI(TAG, "UWB Worker Task ready and sleeping...");
+    ESP_LOGI(TAG, "UWB Worker Task ready and sleeping...");
 
-  while (true) {
-    // Sleep with 0% CPU usage until the GPIO ISR fires
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    while (true) {
+        // Wait indefinitely until GPIO ISR fires xTaskNotifyFromISR
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
-    // -------------------------------------------------------------------------
-    // Hardware Response Logic
-    // -------------------------------------------------------------------------
-    // 1. Read status and process frame (e.g. DWM::respond() or range logic)
-    if (auto r = dwm->respond(); r) {
-      ESP_LOGI(TAG, "UWB respond successful");
-    } else {
-      ESP_LOGE(TAG, "UWB respond failed or invalid frame");
+        // Process hardware flags, advance state machine, and clear IRQ line
+        dwm->handle_interrupt();
     }
-
-    // 2. IMPORTANT: Write-1-to-Clear (W1C) status register over SPI
-    // dwm->clear_status_flags(); 
-    // Once status is cleared, the DW1000 will pull its IRQ line LOW,
-    // making it ready to fire the next rising edge.
-  }
 }
 
 
