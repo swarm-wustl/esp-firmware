@@ -3,6 +3,7 @@
 #include "encoders.h"
 #include "esp32.h"
 #include "l298n.h"
+#include "odometry.h"
 #include "session.h"
 #include "swarm_sched.h"
 #include "system.h"
@@ -113,7 +114,7 @@ using Node =
 
 using CmdChannel = Sched::channel<Drive::Twist, 4>;
 using UmcChannel = Sched::channel<double, 4>;
-using SpeedMailbox = Sched::channel<Drive::WheelVelocities<STYLE>, 1>;
+using PoseMailbox = Sched::channel<Odometry::Pose, 1>;
 
 // motion is arithmetic plus two GPIO writes, so it shares the fast task
 constexpr uint32_t MOTION_PERIOD_MS = 5;
@@ -146,19 +147,8 @@ constexpr bool kInitiator = true;
 
 static HW::CmdChannel commands;
 static HW::UmcChannel umc_commands;
-static HW::SpeedMailbox wheel_speeds;
+static HW::PoseMailbox poses;
 static ROS::session<HW::Node> session;
-
-static constexpr const char *label(Motor::Name name) {
-  switch (name) {
-  case Motor::Name::LEFT:
-    return "left";
-  case Motor::Name::RIGHT:
-    return "right";
-  default:
-    return "motor";
-  }
-}
 
 static auto onTwist = [](const geometry_msgs__msg__Twist &twist) {
   const Drive::Twist body{twist.linear.x, twist.linear.y, twist.angular.z};
@@ -207,12 +197,15 @@ extern "C" void app_main(void) {
 #endif
 
   static auto motion = Sched::make_task<4096, configMAX_PRIORITIES - 2>(
-      Sched::held<HW::DRIVE_PERIOD_MS>(commands) |
+      // the loop integrates odometry, so it has to run from boot rather than
+      // from the first cmd_vel. A zero twist coasts the wheels while it does
+      Sched::held<HW::DRIVE_PERIOD_MS>(commands, Drive::Twist{}) |
           Sched::then(Drive::inverse_kinematics<HW::STYLE>) |
           Sched::to(
-              [&motors, &encoders, regulators = Drive::Regulators<HW::STYLE>{}](
+              [&motors, &encoders, regulators = Drive::Regulators<HW::STYLE>{},
+               pose = Odometry::Pose{}](
                   const Drive::WheelVelocities<HW::STYLE> &targets) mutable {
-                const auto measured = Drive::map(
+                const auto measured = Arrays::map(
                     encoders.advance(), [](const Encoder::Reading &r) {
                       return Drive::WheelVelocity{
                           r.name, Encoder::rad_per_second(HW::EncoderBank::spec,
@@ -226,7 +219,11 @@ extern "C" void app_main(void) {
                 regulators = next;
 
                 motors.run(frame);
-                wheel_speeds.overwrite(measured);
+
+                pose = Odometry::integrate(
+                    pose, Drive::forward_kinematics<HW::STYLE>(measured),
+                    HW::CONTROL.period);
+                poses.overwrite(pose);
               }),
       Sched::latest<HW::MOTION_PERIOD_MS>(umc_commands) |
           Sched::then(Motor::ganged<HW::UmcDriver::motors>) |
@@ -241,12 +238,10 @@ extern "C" void app_main(void) {
           }));
 
   static auto odometry = Sched::make_task<4096, configMAX_PRIORITIES - 4>(
-      Sched::latest<HW::ODOMETRY_PERIOD_MS>(wheel_speeds) |
-      Sched::to([](const Drive::WheelVelocities<HW::STYLE> &speeds) {
-        for (const Drive::WheelVelocity &wheel : speeds) {
-          ESP_LOGI(TAG, "%s %+7.2f rad/s", label(wheel.name),
-                   wheel.angular_velocity);
-        }
+      Sched::latest<HW::ODOMETRY_PERIOD_MS>(poses) |
+      Sched::to([](const Odometry::Pose &pose) {
+        ESP_LOGI(TAG, "pose x %+7.3f m  y %+7.3f m  theta %+6.3f rad", pose.x,
+                 pose.y, pose.theta);
       }));
 
   // init runs on the uros task, not here: a dead agent must not stop motion

@@ -1,7 +1,9 @@
 #ifndef MOTOR_H
 #define MOTOR_H
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <utility>
 
@@ -36,8 +38,6 @@ template <size_t N> struct Frame {
   std::array<Command, N> commands;
 };
 
-constexpr double magnitude(double v) { return v < 0.0 ? -v : v; }
-
 // duty is a fraction of the rail, not of the motor's rating: a 6V motor on
 // a 12V driver sees its rated voltage at half duty and twice it at full
 struct Supply {
@@ -58,7 +58,7 @@ constexpr Command command_for(Name name, double velocity) {
           velocity > 0.0   ? Direction::FORWARD
           : velocity < 0.0 ? Direction::REVERSE
                            : Direction::STOP,
-          magnitude(velocity)};
+          std::abs(velocity)};
 }
 
 // motors wired to move as one: no geometry to invert, just an effort in
@@ -67,7 +67,7 @@ constexpr Command command_for(Name name, double velocity) {
 // TODO: add a support for voltage limit like for PID?
 template <auto Names> constexpr Frame<Names.size()> ganged(double effort) {
   return [effort]<size_t... I>(std::index_sequence<I...>) {
-    const double clamped = effort < -1.0 ? -1.0 : effort > 1.0 ? 1.0 : effort;
+    const double clamped = std::clamp(effort, -1.0, 1.0);
 
     return Frame<Names.size()>{{command_for(Names[I], clamped)...}};
   }(std::make_index_sequence<Names.size()>{});

@@ -242,8 +242,10 @@ constexpr auto latest(Channel &channel) {
 }
 
 template <uint32_t PeriodMs, typename Channel>
-constexpr auto held(Channel &channel) {
-  return pipeline<held_source<PeriodMs, Channel>>{{&channel, std::nullopt}, {}};
+constexpr auto held(
+    Channel &channel,
+    std::optional<typename Channel::value_type> initial = std::nullopt) {
+  return pipeline<held_source<PeriodMs, Channel>>{{&channel, initial}, {}};
 }
 
 template <uint32_t StackBytes, UBaseType_t Priority, typename... Pipes>

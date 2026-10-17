@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -10,6 +11,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "arrays.h"
 #include "motor.h"
 #include "pid.h"
 
@@ -71,19 +73,6 @@ struct WheelVelocity {
 template <Style S>
 using WheelVelocities = std::array<WheelVelocity, motor_count<S>>;
 
-// std::views::transform loses the size N of the array
-// So collecting back into an array is impossible
-// This helper method circumvents that
-// Rust has the same issue which is why array::map exists (outside of
-// Iterator::map)
-template <typename T, size_t N, std::invocable<const T &> F>
-constexpr auto map(const std::array<T, N> &in, F f)
-    -> std::array<std::invoke_result_t<F, const T &>, N> {
-  return [&]<size_t... I>(std::index_sequence<I...>) {
-    return std::array<std::invoke_result_t<F, const T &>, N>{f(in[I])...};
-  }(std::make_index_sequence<N>{});
-}
-
 constexpr auto wheel_velocity(const Wheel &wheel, const Twist &twist)
     -> WheelVelocity {
   return {.name = wheel.name,
@@ -94,9 +83,126 @@ constexpr auto wheel_velocity(const Wheel &wheel, const Twist &twist)
 
 template <Style S>
 constexpr auto inverse_kinematics(const Twist &twist) -> WheelVelocities<S> {
-  return map(wheels<S>(), [&twist](const Wheel &wheel) {
+  return Arrays::map(wheels<S>(), [&twist](const Wheel &wheel) {
     return wheel_velocity(wheel, twist);
   });
+}
+
+template <size_t N>
+constexpr double velocity_of(const std::array<WheelVelocity, N> &velocities,
+                             Motor::Name name) {
+  const auto it = std::ranges::find(velocities, name, &WheelVelocity::name);
+
+  return it != velocities.end() ? it->angular_velocity : 0.0;
+}
+
+constexpr Twist operator+(const Twist &a, const Twist &b) {
+  return {a.linear_x + b.linear_x, a.linear_y + b.linear_y,
+          a.angular_z + b.angular_z};
+}
+
+constexpr Twist operator*(const Twist &twist, double k) {
+  return {twist.linear_x * k, twist.linear_y * k, twist.angular_z * k};
+}
+
+// the body twist one rad/s of this wheel contributes, i.e. one column of the
+// pseudo-inverse of H
+struct Contribution {
+  Motor::Name name;
+  Twist twist;
+};
+
+namespace detail {
+using Matrix3 = std::array<std::array<double, 3>, 3>;
+
+constexpr std::array<double, 3> coefficients(const Wheel &wheel) {
+  return {wheel.linear_x, wheel.linear_y, wheel.angular_z};
+}
+
+consteval double determinant(const Matrix3 &m) {
+  return m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) -
+         m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
+         m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+}
+
+consteval Matrix3 inverse(const Matrix3 &m) {
+  const double det = determinant(m);
+
+  // wheels that cannot tell two motions apart -- two identical rows, say --
+  // have no forward kinematics, and that should not build
+  if (det == 0.0) {
+    std::unreachable();
+  }
+
+  const auto cofactor = [&m](size_t r, size_t c) {
+    const size_t r0 = (r + 1) % 3, r1 = (r + 2) % 3;
+    const size_t c0 = (c + 1) % 3, c1 = (c + 2) % 3;
+
+    return m[r0][c0] * m[r1][c1] - m[r0][c1] * m[r1][c0];
+  };
+
+  Matrix3 out{};
+
+  for (size_t r = 0; r < 3; ++r) {
+    for (size_t c = 0; c < 3; ++c) {
+      out[r][c] = cofactor(c, r) / det;
+    }
+  }
+
+  return out;
+}
+
+// a nonholonomic base has a motion no wheel produces, so H^T H is singular in
+// that axis. A unit on its diagonal leaves the other block untouched and makes
+// the inverse exist, and since H^T is zero in that row the axis comes out zero
+consteval Matrix3 normal(const auto &rows) {
+  Matrix3 m{};
+
+  for (const Wheel &wheel : rows) {
+    const auto h = coefficients(wheel);
+
+    for (size_t r = 0; r < 3; ++r) {
+      for (size_t c = 0; c < 3; ++c) {
+        m[r][c] += h[r] * h[c];
+      }
+    }
+  }
+
+  for (size_t axis = 0; axis < 3; ++axis) {
+    if (m[axis][axis] == 0.0) {
+      m[axis][axis] = 1.0;
+    }
+  }
+
+  return m;
+}
+} // namespace detail
+
+template <Style S> consteval auto contributions() {
+  constexpr auto rows = wheels<S>();
+  constexpr auto inv = detail::inverse(detail::normal(rows));
+
+  return Arrays::map(rows, [&inv](const Wheel &wheel) {
+    const auto h = detail::coefficients(wheel);
+    const auto axis = [&](size_t r) {
+      return inv[r][0] * h[0] + inv[r][1] * h[1] + inv[r][2] * h[2];
+    };
+
+    return Contribution{wheel.name, {axis(0), axis(1), axis(2)}};
+  });
+}
+
+// least squares: with more wheels than the body has freedoms -- a skid steer,
+// a mecanum -- a slipping wheel is outvoted rather than trusted
+template <Style S>
+constexpr auto forward_kinematics(const WheelVelocities<S> &measured)
+    -> Twist {
+  constexpr auto columns = contributions<S>();
+
+  return std::ranges::fold_left(
+      columns, Twist{}, [&measured](const Twist &acc, const Contribution &c) {
+        return acc + c.twist * velocity_of(measured, c.name);
+      });
 }
 
 // Scale every wheel by the same factor to keep their relative ratio in-tact
@@ -106,9 +212,9 @@ constexpr auto desaturate(const std::array<WheelVelocity, N> &velocities,
   const double peak = std::ranges::fold_left(
       velocities | std::views::transform(&WheelVelocity::angular_velocity),
       limit,
-      [](double acc, double v) { return std::max(acc, Motor::magnitude(v)); });
+      [](double acc, double v) { return std::max(acc, std::abs(v)); });
 
-  return map(velocities, [scale = limit / peak](const WheelVelocity &wheel) {
+  return Arrays::map(velocities, [scale = limit / peak](const WheelVelocity &wheel) {
     return WheelVelocity{wheel.name, wheel.angular_velocity * scale};
   });
 }
@@ -143,14 +249,6 @@ template <Style S> struct Regulated {
   Regulators<S> regulators;
   Frame<S> frame;
 };
-
-template <size_t N>
-constexpr double velocity_of(const std::array<WheelVelocity, N> &velocities,
-                             Motor::Name name) {
-  const auto it = std::ranges::find(velocities, name, &WheelVelocity::name);
-
-  return it != velocities.end() ? it->angular_velocity : 0.0;
-}
 
 // a stopped wheel coasts instead of fighting to hold zero, and drops its
 // integral so the next command starts clean

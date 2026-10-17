@@ -51,24 +51,6 @@ concept Claiming = requires {
   requires std::same_as<std::ranges::range_value_t<decltype(T::claims)>, Claim>;
 };
 
-// a device that owns a sub-device owns its claims too: an L298N driver holds a
-// PWM, a DW1000 holds an SPI, and the config has to see all of it
-template <size_t... Ns>
-consteval auto concat(const std::array<Claim, Ns> &...arrays) {
-  std::array<Claim, (0 + ... + Ns)> all{};
-  size_t next = 0;
-
-  const auto append = [&all, &next](const auto &claims) {
-    for (const Claim &claim : claims) {
-      all[next++] = claim;
-    }
-  };
-
-  (append(arrays), ...);
-
-  return all;
-}
-
 template <Claiming... Decls> consteval auto claims_of() {
   constexpr size_t total = (0 + ... + Decls::claims.size());
 
@@ -86,18 +68,6 @@ template <Claiming... Decls> consteval auto claims_of() {
   return all;
 }
 
-template <typename Name, size_t N>
-consteval bool unique_names(const std::array<Name, N> &names) {
-  for (size_t i = 0; i < N; ++i) {
-    for (size_t j = i + 1; j < N; ++j) {
-      if (names[i] == names[j]) {
-        return false;
-      }
-    }
-  }
-
-  return true;
-}
 } // namespace HAL
 
 #endif

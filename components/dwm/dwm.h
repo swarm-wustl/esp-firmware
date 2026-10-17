@@ -1,6 +1,7 @@
 #ifndef DWM_H
 #define DWM_H
 
+#include "arrays.h"
 #include "assembly.h"
 #include "system.h"
 #include "dwm_data.h"
@@ -246,7 +247,7 @@ class DWM {
 
 public:
   static constexpr auto claims =
-      HAL::concat(Pins.claims(), GPIO::claims, SPI::claims);
+      Arrays::concat(Pins.claims(), GPIO::claims, SPI::claims);
 
   using needs = Swarm::needs<Bus>;
 
