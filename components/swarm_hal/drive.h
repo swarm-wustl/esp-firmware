@@ -168,6 +168,9 @@ consteval Matrix3 normal(const auto &rows) {
     }
   }
 
+  // allow the matrix to be invertible,
+  // since diag(a, b, c)^-1 = diag(1/a, 1/b, 1/c)
+  // and 1/0 is obivously undefined..
   for (size_t axis = 0; axis < 3; ++axis) {
     if (m[axis][axis] == 0.0) {
       m[axis][axis] = 1.0;
@@ -185,6 +188,7 @@ template <Style S> consteval auto contributions() {
   return Arrays::map(rows, [&inv](const Wheel &wheel) {
     const auto h = detail::coefficients(wheel);
     const auto axis = [&](size_t r) {
+      // pseudo-inverse formula: (H^TH)-1*H^T (Moore-Penrose)
       return inv[r][0] * h[0] + inv[r][1] * h[1] + inv[r][2] * h[2];
     };
 
@@ -195,8 +199,7 @@ template <Style S> consteval auto contributions() {
 // least squares: with more wheels than the body has freedoms -- a skid steer,
 // a mecanum -- a slipping wheel is outvoted rather than trusted
 template <Style S>
-constexpr auto forward_kinematics(const WheelVelocities<S> &measured)
-    -> Twist {
+constexpr auto forward_kinematics(const WheelVelocities<S> &measured) -> Twist {
   constexpr auto columns = contributions<S>();
 
   return std::ranges::fold_left(
@@ -211,12 +214,12 @@ constexpr auto desaturate(const std::array<WheelVelocity, N> &velocities,
                           double limit) -> std::array<WheelVelocity, N> {
   const double peak = std::ranges::fold_left(
       velocities | std::views::transform(&WheelVelocity::angular_velocity),
-      limit,
-      [](double acc, double v) { return std::max(acc, std::abs(v)); });
+      limit, [](double acc, double v) { return std::max(acc, std::abs(v)); });
 
-  return Arrays::map(velocities, [scale = limit / peak](const WheelVelocity &wheel) {
-    return WheelVelocity{wheel.name, wheel.angular_velocity * scale};
-  });
+  return Arrays::map(
+      velocities, [scale = limit / peak](const WheelVelocity &wheel) {
+        return WheelVelocity{wheel.name, wheel.angular_velocity * scale};
+      });
 }
 
 struct Control {
@@ -242,8 +245,7 @@ consteval Control control(Motor::Supply supply, double max_wheel_speed,
   return out;
 }
 
-template <Style S>
-using Regulators = std::array<Pid::State, motor_count<S>>;
+template <Style S> using Regulators = std::array<Pid::State, motor_count<S>>;
 
 template <Style S> struct Regulated {
   Regulators<S> regulators;
