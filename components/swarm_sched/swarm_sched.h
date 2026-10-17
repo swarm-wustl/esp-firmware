@@ -100,6 +100,25 @@ template <uint32_t PeriodMs, typename Channel> struct latest_source {
   }
 };
 
+// a setpoint stands until the next one replaces it, and a closed loop has to
+// act on it every period, not only on the period a new one arrives
+template <uint32_t PeriodMs, typename Channel> struct held_source {
+  static constexpr uint32_t period_ms = PeriodMs;
+
+  Channel *channel;
+  std::optional<typename Channel::value_type> held;
+
+  template <typename F> void poll(F &&emit) {
+    while (auto msg = channel->pop(0)) {
+      held = msg;
+    }
+
+    if (held) {
+      emit(*held);
+    }
+  }
+};
+
 template <typename F, bool Terminal> struct stage {
   static constexpr bool terminal = Terminal;
 
@@ -220,6 +239,11 @@ constexpr auto from(Channel &channel) {
 template <uint32_t PeriodMs, typename Channel>
 constexpr auto latest(Channel &channel) {
   return pipeline<latest_source<PeriodMs, Channel>>{{&channel}, {}};
+}
+
+template <uint32_t PeriodMs, typename Channel>
+constexpr auto held(Channel &channel) {
+  return pipeline<held_source<PeriodMs, Channel>>{{&channel, std::nullopt}, {}};
 }
 
 template <uint32_t StackBytes, UBaseType_t Priority, typename... Pipes>

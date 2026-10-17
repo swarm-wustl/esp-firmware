@@ -16,6 +16,8 @@
 
 #include "freertos/FreeRTOS.h"
 
+#include <numbers>
+
 static const char *TAG = "main";
 
 SWARM_ROS_MESSAGE(geometry_msgs, msg, Twist)
@@ -111,19 +113,40 @@ using Node =
 
 using CmdChannel = Sched::channel<Drive::Twist, 4>;
 using UmcChannel = Sched::channel<double, 4>;
+using SpeedMailbox = Sched::channel<Drive::WheelVelocities<STYLE>, 1>;
 
 // motion is arithmetic plus two GPIO writes, so it shares the fast task
 constexpr uint32_t MOTION_PERIOD_MS = 5;
+
+// 20ms at X4 is ~150 counts per period at top speed, so the measured velocity
+// is not mostly quantisation noise the way it would be at 5ms
+constexpr uint32_t DRIVE_PERIOD_MS = 20;
+
+// FIT0485 is a 6V motor on a 12V rail, so the loop never asks for more than
+// half duty
+// TODO: the rail sags with the battery; measure it under load
+constexpr Motor::Supply WHEEL_SUPPLY{.rated = 6.0, .rail = 12.0};
+
+// FIT0485 is listed at 75rpm no-load at 6V; the feedforward only has to be
+// close, the integral takes up the rest
+// TODO: measure at the rated voltage, and tune the gains
+constexpr double MAX_WHEEL_SPEED = 75.0 * 2.0 * std::numbers::pi / 60.0;
+
+constexpr auto CONTROL =
+    Drive::control(WHEEL_SUPPLY, MAX_WHEEL_SPEED, DRIVE_PERIOD_MS / 1000.0,
+                   Pid::gains(0.05, 0.5, 0.0));
 constexpr uint32_t EXECUTOR_PERIOD_MS = 10;
 constexpr uint32_t ODOMETRY_PERIOD_MS = 500;
 constexpr uint32_t POLL_PERIOD_MS = 100;
 
 // bring-up: flip to false on the responder board
+// TODO: make part of idf.py menuconfig
 constexpr bool kInitiator = true;
 } // namespace HW
 
 static HW::CmdChannel commands;
 static HW::UmcChannel umc_commands;
+static HW::SpeedMailbox wheel_speeds;
 static ROS::session<HW::Node> session;
 
 static constexpr const char *label(Motor::Name name) {
@@ -184,12 +207,27 @@ extern "C" void app_main(void) {
 #endif
 
   static auto motion = Sched::make_task<4096, configMAX_PRIORITIES - 2>(
-      Sched::latest<HW::MOTION_PERIOD_MS>(commands) |
+      Sched::held<HW::DRIVE_PERIOD_MS>(commands) |
           Sched::then(Drive::inverse_kinematics<HW::STYLE>) |
-          Sched::then(Drive::to_commands<HW::STYLE>) |
-          Sched::to([&motors](const Drive::Frame<HW::STYLE> &frame) {
-            motors.run(frame);
-          }),
+          Sched::to(
+              [&motors, &encoders, regulators = Drive::Regulators<HW::STYLE>{}](
+                  const Drive::WheelVelocities<HW::STYLE> &targets) mutable {
+                const auto measured = Drive::map(
+                    encoders.advance(), [](const Encoder::Reading &r) {
+                      return Drive::WheelVelocity{
+                          r.name, Encoder::rad_per_second(HW::EncoderBank::spec,
+                                                          r.counts,
+                                                          HW::CONTROL.period)};
+                    });
+
+                const auto [next, frame] =
+                    Drive::regulate<HW::STYLE, HW::CONTROL>(regulators, targets,
+                                                            measured);
+                regulators = next;
+
+                motors.run(frame);
+                wheel_speeds.overwrite(measured);
+              }),
       Sched::latest<HW::MOTION_PERIOD_MS>(umc_commands) |
           Sched::then(Motor::ganged<HW::UmcDriver::motors>) |
           Sched::to([&umc](const auto &frame) {
@@ -203,15 +241,11 @@ extern "C" void app_main(void) {
           }));
 
   static auto odometry = Sched::make_task<4096, configMAX_PRIORITIES - 4>(
-      Sched::every<HW::ODOMETRY_PERIOD_MS> |
-      Sched::then([&encoders] { return encoders.advance(); }) |
-      Sched::to([](const auto &deltas) {
-        constexpr double seconds = HW::ODOMETRY_PERIOD_MS / 1000.0;
-
-        for (const Encoder::Reading &wheel : deltas) {
-          ESP_LOGI(TAG, "%s %+5ld counts %+7.2f rpm", label(wheel.name),
-                   static_cast<long>(wheel.counts),
-                   Encoder::rpm(HW::EncoderBank::spec, wheel.counts, seconds));
+      Sched::latest<HW::ODOMETRY_PERIOD_MS>(wheel_speeds) |
+      Sched::to([](const Drive::WheelVelocities<HW::STYLE> &speeds) {
+        for (const Drive::WheelVelocity &wheel : speeds) {
+          ESP_LOGI(TAG, "%s %+7.2f rad/s", label(wheel.name),
+                   wheel.angular_velocity);
         }
       }));
 

@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "motor.h"
+#include "pid.h"
 
 namespace Drive {
 enum class Style : uint8_t { DIFFERENTIAL, ACKERMANN, OMNI, MECANUM };
@@ -101,7 +102,7 @@ constexpr auto inverse_kinematics(const Twist &twist) -> WheelVelocities<S> {
 // Scale every wheel by the same factor to keep their relative ratio in-tact
 template <size_t N>
 constexpr auto desaturate(const std::array<WheelVelocity, N> &velocities,
-                          double limit = 1.0) -> std::array<WheelVelocity, N> {
+                          double limit) -> std::array<WheelVelocity, N> {
   const double peak = std::ranges::fold_left(
       velocities | std::views::transform(&WheelVelocity::angular_velocity),
       limit,
@@ -112,11 +113,81 @@ constexpr auto desaturate(const std::array<WheelVelocity, N> &velocities,
   });
 }
 
+struct Control {
+  Motor::Supply supply;
+  double max_wheel_speed; // rad/s at the rated voltage
+  double period;          // s
+  Pid::Gains gains;
+};
+
+constexpr bool usable(const Control &control) {
+  return Motor::usable(control.supply) && control.max_wheel_speed > 0.0 &&
+         control.period > 0.0 && Pid::usable(control.gains);
+}
+
+consteval Control control(Motor::Supply supply, double max_wheel_speed,
+                          double period, Pid::Gains gains) {
+  const Control out{supply, max_wheel_speed, period, gains};
+
+  if (!usable(out)) {
+    std::unreachable();
+  }
+
+  return out;
+}
+
 template <Style S>
-constexpr auto to_commands(const WheelVelocities<S> &velocities) -> Frame<S> {
-  return {map(desaturate(velocities), [](const WheelVelocity &wheel) {
-    return Motor::command_for(wheel.name, wheel.angular_velocity);
-  })};
+using Regulators = std::array<Pid::State, motor_count<S>>;
+
+template <Style S> struct Regulated {
+  Regulators<S> regulators;
+  Frame<S> frame;
+};
+
+template <size_t N>
+constexpr double velocity_of(const std::array<WheelVelocity, N> &velocities,
+                             Motor::Name name) {
+  const auto it = std::ranges::find(velocities, name, &WheelVelocity::name);
+
+  return it != velocities.end() ? it->angular_velocity : 0.0;
+}
+
+// a stopped wheel coasts instead of fighting to hold zero, and drops its
+// integral so the next command starts clean
+constexpr auto regulate_wheel(const Control &control, const Pid::State &state,
+                              double target, double measured) -> Pid::Step {
+  if (target == 0.0) {
+    return {.state = {.integral = 0.0, .measured = measured}, .output = 0.0};
+  }
+
+  const double limit = control.supply.duty_limit();
+
+  return Pid::step(control.gains, state,
+                   {.setpoint = target,
+                    .measured = measured,
+                    .feedforward = target / control.max_wheel_speed * limit},
+                   control.period, limit);
+}
+
+// targets are capped at the wheel's top speed before the loop sees them: an
+// unreachable setpoint would wind the integral up and break the wheel ratio
+// desaturate exists to keep
+template <Style S, Control C>
+  requires(usable(C))
+constexpr auto regulate(const Regulators<S> &regulators,
+                        const WheelVelocities<S> &targets,
+                        const WheelVelocities<S> &measured) -> Regulated<S> {
+  const auto capped = desaturate(targets, C.max_wheel_speed);
+
+  return [&]<size_t... I>(std::index_sequence<I...>) {
+    const std::array steps{
+        regulate_wheel(C, regulators[I], capped[I].angular_velocity,
+                       velocity_of(measured, capped[I].name))...};
+
+    return Regulated<S>{
+        .regulators = {steps[I].state...},
+        .frame = {{Motor::command_for(capped[I].name, steps[I].output)...}}};
+  }(std::make_index_sequence<motor_count<S>>{});
 }
 
 } // namespace Drive
