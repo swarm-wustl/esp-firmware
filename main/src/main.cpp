@@ -114,7 +114,7 @@ void uwb_worker_task(void *pvParameters) {
     auto *dwm = static_cast<DWM *>(pvParameters);
 
     s_uwb_task_handle = xTaskGetCurrentTaskHandle();
-
+    dwm->start_responder(); // Prepare to receive poll frames
     ESP_LOGI(TAG, "UWB Worker Task ready and sleeping...");
 
     while (true) {

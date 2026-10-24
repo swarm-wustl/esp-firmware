@@ -33,6 +33,8 @@ enum class DWMRegisterID : uint8_t {
 
 enum class RangingRole { Idle, Initiator, Responder };
 
+
+
 enum class InitiatorState {
     Idle,
     WaitingForReply,
@@ -412,11 +414,20 @@ public:
 
 ///Interupt Handling and Helpers
 
+std::expected<void, HAL::SpiError> set_interrupt_mask(uint32_t mask_bits) {
+    // Write full 32-bit register or target bits in SYS_MASK
+    return write_sub_value(dw1000::SYS_MASK, 0, mask_bits, 4);
+}
 
     // Trigger initiating a range sequence asynchronously
   std::expected<void, HAL::SpiError> start_range() {
   role_ = RangingRole::Initiator;
   init_state_ = InitiatorState::WaitingForReply;
+
+  if (auto r = set_interrupt_mask(dw1000::TXFRS | dw1000::RXFCG); !r) {
+        return std::unexpected(r.error());
+  }
+
 
   std::array<std::byte, 1> poll{RANGE_POLL};
   if (auto r = transmit_async(poll); !r) { // Triggers TX, does not block
@@ -430,6 +441,10 @@ public:
   std::expected<void, HAL::SpiError> start_responder() {
       role_ = RangingRole::Responder;
       resp_state_ = ResponderState::WaitingForPoll;
+      if (auto r = set_interrupt_mask(dw1000::RXFCG | dw1000::TXFRS); !r) {
+        return std::unexpected(r.error());
+    }
+
       return  enable_rx(); // Enable receiver and wait for ISR
   }
 
@@ -439,89 +454,110 @@ public:
     uint64_t status = read_sys_status();
 
     if (role_ == RangingRole::Initiator) {
-        handle_initiator_irq(status);
+      return handle_initiator_irq(status);
     } else if (role_ == RangingRole::Responder) {
-        handle_responder_irq(status);
+      return  handle_responder_irq(status);
     }
 
-    clear_status(status); // Write-1-To-Clear (W1C)
+    return clear_status(status); // Write-1-To-Clear (W1C)
 }
 
+
 std::expected<void, HAL::SpiError> handle_initiator_irq(uint64_t status) {
-    if (is_tx_done(status) && init_state_ == InitiatorState::WaitingForReply) {
+    auto tx_done = is_tx_done(status);
+    auto rx_done = is_rx_done(status);
+
+    // 1. Poll frame transmitted -> Start listening for Reply
+    if (tx_done && *tx_done && init_state_ == InitiatorState::WaitingForReply) {
         t_poll_tx_ = get_tx_timestamp();
-        enable_rx(); // Transition hardware to listening state
-        return;
+        return enable_rx();
     }
 
-    if (is_rx_done(status)) {
-        if (init_state_ == InitiatorState::WaitingForReply) {
-            std::array<std::byte, 1> reply{};
-            if (read_rx_buffer(reply) && reply[0] == RANGE_REPLY) {
-                t_reply_rx_ = get_rx_timestamp();
-                init_state_ = InitiatorState::WaitingForFinalFrame;
-                enable_rx();
-            } else {
-                init_state_ = InitiatorState::Idle; // Handle error/unexpected frame
-            }
-        } 
-        else if (init_state_ == InitiatorState::WaitingForFinalFrame) {
-            std::array<std::byte, 9> final_frame{};
-            if (read_rx_buffer(final_frame) && final_frame[0] == RANGE_REPLY) {
-                uint64_t t_reply = 0;
+    // 2. Reply frame received -> Compute T_round & transmit Final frame containing T_round
+    if (rx_done && *rx_done && init_state_ == InitiatorState::WaitingForReply) {
+        std::array<std::byte, 1> reply{};
+        if (read_rx_buffer(reply) && reply[0] == RANGE_REPLY) {
+            t_reply_rx_ = get_rx_timestamp();
+
+            if (t_poll_tx_ && t_reply_rx_) {
+                uint64_t t_round = (*t_reply_rx_ - *t_poll_tx_).count();
+
+                // Pack 64-bit T_round into 9-byte FINAL frame [Header (1 byte) | T_round (8 bytes)]
+                std::array<std::byte, 9> final_frame{RANGE_FINAL};
                 for (int i = 0; i < 8; ++i) {
-                    t_reply |= static_cast<uint64_t>(
-                        std::to_integer<uint8_t>(final_frame[1 + i])) << (8 * i);
+                    final_frame[1 + i] = static_cast<std::byte>((t_round >> (8 * i)) & 0xFF);
                 }
 
-                if (t_poll_tx_ && t_reply_rx_) {
-                    uint64_t t_round = (*t_reply_rx_ - *t_poll_tx_).count();
-                    double tof = (static_cast<double>(t_round) - static_cast<double>(t_reply)) / 2.0;
-                    double distance = tof * SECONDS_PER_TICK * SPEED_OF_LIGHT;
-                    
-                    // Distance calculated successfully
-                    on_range_complete(distance);
-                }
+                init_state_ = InitiatorState::SendingFinalFrame;
+                return transmit_async(final_frame);
             }
-            init_state_ = InitiatorState::Idle;
         }
+        init_state_ = InitiatorState::Idle;
     }
+
+    // 3. Final frame finished transmitting -> Cycle complete
+    if (tx_done && *tx_done && init_state_ == InitiatorState::SendingFinalFrame) {
+        init_state_ = InitiatorState::Idle;
+    }
+
+    return {};
 }
 
 std::expected<void, HAL::SpiError> handle_responder_irq(uint64_t status) {
-    if (is_rx_done(status) && resp_state_ == ResponderState::WaitingForPoll) {
+    auto tx_done = is_tx_done(status);
+    auto rx_done = is_rx_done(status);
+
+    // 1. Poll received -> Record t_poll_rx and send immediate Reply
+    if (rx_done && *rx_done && resp_state_ == ResponderState::WaitingForPoll) {
         std::array<std::byte, 1> poll{};
         if (read_rx_buffer(poll) && poll[0] == RANGE_POLL) {
             t_poll_rx_ = get_rx_timestamp();
-            
-            // Immediate response
+
             std::array<std::byte, 1> reply{RANGE_REPLY};
-            transmit_async(reply);
-            resp_state_ = ResponderState::SendingFinalFrame;
+            if (auto r = transmit_async(reply); !r) {
+                return std::unexpected(r.error());
+            }
+            resp_state_ = ResponderState::WaitingForFinalFrame;
         }
-    } 
-    else if (is_tx_done(status) && resp_state_ == ResponderState::SendingFinalFrame) {
+    }
+    // 2. Reply frame finished transmitting -> Record t_reply_tx, calculate T_reply, enable RX for Final
+    else if (tx_done && *tx_done && resp_state_ == ResponderState::WaitingForFinalFrame) {
         auto t_reply_tx = get_tx_timestamp();
         if (t_reply_tx && t_poll_rx_) {
-            uint64_t t_reply = (*t_reply_tx - *t_poll_rx_).count();
-            
-            std::array<std::byte, 9> final_frame{RANGE_REPLY};
-            for (int i = 0; i < 8; ++i) {
-                final_frame[1 + i] = std::byte((t_reply >> (8 * i)) & 0xFF);
-            }
-            
-            transmit_async(final_frame);
+            t_reply_ = (*t_reply_tx - *t_poll_rx_).count();
+            return enable_rx(); // Wait for Final frame from Initiator
         }
         resp_state_ = ResponderState::WaitingForPoll;
-        enable_rx(); // Return to listening mode
     }
+    // 3. Final frame received -> Unroll T_round, calculate ToF/Distance on Anchor, and dispatch
+    else if (rx_done && *rx_done && resp_state_ == ResponderState::WaitingForFinalFrame) {
+        std::array<std::byte, 9> final_frame{};
+        if (read_rx_buffer(final_frame) && final_frame[0] == RANGE_FINAL) {
+            uint64_t t_round = 0;
+            for (int i = 0; i < 8; ++i) {
+                t_round |= static_cast<uint64_t>(
+                    std::to_integer<uint8_t>(final_frame[1 + i])) << (8 * i);
+            }
+
+            // Perform final ToF and distance calculation on Anchor/Responder
+            double tof = (static_cast<double>(t_round) - static_cast<double>(t_reply_)) / 2.0;
+            double distance = tof * SECONDS_PER_TICK * SPEED_OF_LIGHT;
+
+            on_range_complete(distance);
+        }
+
+        resp_state_ = ResponderState::WaitingForPoll;
+        enable_rx(); // Return to listening state for next poll
+    }
+
+    return {};
 }
 
 std::expected<bool, HAL::SpiError> is_tx_done(uint64_t status) {
     return (status & dw1000::TXFRS) != 0;
 }
 std::expected<bool, HAL::SpiError> is_rx_done(uint64_t status) {
-    return (status & dw1000::RXFRS) != 0;
+    return (status & dw1000::RXFCG) != 0;
 }
 
 
@@ -608,17 +644,6 @@ std::expected<void, HAL::SpiError> enable_rx() {
         .and_then([this] { return set_tx_bit_rate(BitRate::MBPS_68); })
         .and_then(
             [this] { return set_tx_preamble_length(PreambleLength::LEN_128); });
-        .and_then([this] {
-            //Set SYS_MASK to enable interrupts
-            if (_type == TAG){
-              write_sub_value(dw1000::SYS_MASK, 0, dw1000::TXFRS,
-                                            1);
-            }
-            write_sub_value(dw1000::SYS_MASK, 0, dw1000::RXFCG,
-                                 1);
-                                 
-        })
-
   }
 
  
@@ -646,12 +671,12 @@ std::expected<void, HAL::SpiError> enable_rx() {
   std::expected<bool, HAL::SpiError> add_network_device(DWMDevice* device, bool shortAddress) {
     bool   addDevice = true;
     for (int i  = 0; i < _networkDevicesNumber;i++){
-        if(_networkDevices[i].isAddressEqual(device) && !shortAddress) {
+        if(this->_networkDevices[i].isAddressEqual(device) && !shortAddress) {
         //the device already exists
         addDevice = false;
         return false;
       }
-      else if(_networkDevices[i].isShortAddressEqual(device) && shortAddress) {
+      else if(this->_networkDevices[i].isShortAddressEqual(device) && shortAddress) {
         //the device already exists
         addDevice = false;
         return false;
@@ -659,9 +684,9 @@ std::expected<void, HAL::SpiError> enable_rx() {
     }
     if(addDevice) {
 		device->setRange(0);
-		memcpy(&_networkDevices[_networkDevicesNumber], device, sizeof(DWMDevice));
-		_networkDevices[_networkDevicesNumber].setIndex(_networkDevicesNumber);
-		_networkDevicesNumber++;
+		memcpy(&this->_networkDevices[_networkDevicesNumber], device, sizeof(DWMDevice));
+		this->_networkDevices[_networkDevicesNumber].setIndex(_networkDevicesNumber);
+		_networkDevicesNumber = _networkDevicesNumber + 1;
 		return true;
 	}
 	
@@ -843,9 +868,10 @@ private:
   static constexpr double SECONDS_PER_TICK = 1.0 / 63'897'600'000.0;
   static constexpr double SPEED_OF_LIGHT = 299'792'458.0;
   static constexpr std::byte POLL{0x0};
-  static constexpr std::byte POLL_ACK{0x03}
+  static constexpr std::byte POLL_ACK{0x03};
   static constexpr std::byte RANGE_POLL{0x01};
   static constexpr std::byte RANGE_REPLY{0x02};
+constexpr std::byte RANGE_FINAL{0x03};
 
   // sub-addressed SPI header (manual 2.2.1.2): 1 octet non-indexed, 2 for an
   // offset <= 0x7F, 3 with the extended-address flag for larger offsets
@@ -871,13 +897,9 @@ private:
     ResponderState resp_state_{ResponderState::Idle};
 
     // Timestamp storage across states
-    std::optional<Timestamp> t_poll_tx_;
-    std::optional<Timestamp> t_poll_rx_;
-    std::optional<Timestamp> t_reply_rx_;
-
-    // Helper interrupt handlers
-    void handle_initiator_irq(uint64_t status_flags);
-    void handle_responder_irq(uint64_t status_flags);
+    std::optional<DWMTimestamp> t_poll_tx_;
+    std::optional<DWMTimestamp> t_poll_rx_;
+    std::optional<DWMTimestamp> t_reply_rx_;
 
 
 
@@ -1027,18 +1049,13 @@ private:
     });
   }
 
-  enum class DeviceRole {
-    TAG,
-    ANCHOR
-};
 
-  MAX_DEVICES = 10;
+  static constexpr size_t MAX_DEVICES = 10;
 
 
-  DeviceRole _type;
   SPI spi_;
   GPIO gpio_;
-  DWMDevice[MAX_DEVICES] _networkDevices;
+  DWMDevice _networkDevices[MAX_DEVICES];
   volatile uint8_t _networkDevicesNumber = 0;
   uint8_t rst_pin_{};
   uint8_t irq_pin_{};
