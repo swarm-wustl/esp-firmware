@@ -104,8 +104,8 @@ using Dwm = DWM<SPI, GPIO, DWM_PINS, SpiBus>;
 // until the real pair goes in
 // TODO: replace with the UMC header's SDA/SCL and spawn the task
 constexpr auto I2C_PINS =
-    HAL::pins(HAL::NamedPin{"sda", GPIO_NUM_2, HAL::Use::Shared},
-              HAL::NamedPin{"scl", GPIO_NUM_0, HAL::Use::Shared});
+    HAL::pins(HAL::NamedPin{"sda", GPIO_NUM_18, HAL::Use::Shared},
+              HAL::NamedPin{"scl", GPIO_NUM_14, HAL::Use::Shared});
 
 using I2cBus = ESP32::I2cBus<I2C_PINS>;
 using I2C = ESP32::I2C<I2cBus>;
