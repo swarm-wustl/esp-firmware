@@ -290,13 +290,16 @@ extern "C" void app_main(void) {
 
   imu.on_start([] {
     HW::Mpu &sensor = *imu_device;
+    while(true){
 
-    if (auto id = sensor.who_am_i()) {
-      ESP_LOGI(TAG, "MPU6050 id: 0x%02X", *id);
-    } else {
-      ESP_LOGE(TAG, "MPU6050 id read failed");
+      if (auto id = sensor.who_am_i()) {
+        ESP_LOGI(TAG, "MPU6050 id: 0x%02X", *id);
+        break;
+      } else {
+        ESP_LOGW(TAG, "MPU6050 id read failed; retrying");
+        vTaskDelay(pdMS_TO_TICKS(1000));
+      }
 
-      return false;
     }
 
     if (!sensor.configure()) {
@@ -322,6 +325,7 @@ extern "C" void app_main(void) {
   ros.spawn("uros");
   motion.spawn("motion");
   odometry.spawn("odometry");
+  imu.spawn("imu");
 
   if constexpr (HW::kInitiator) {
     [[maybe_unused]] static auto ranging =
