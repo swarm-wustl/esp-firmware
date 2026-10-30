@@ -1,6 +1,7 @@
 #include "base.h"
 #include "differential_drive.h"
 #include "unity.h"
+#include "watchdog.h"
 
 #include <array>
 #include <cmath>
@@ -200,6 +201,33 @@ TEST_CASE("control: a zero twist coasts and clears the integral", "[control]") {
 
   for (const Pid::State &regulator : sim.state().regulators) {
     TEST_ASSERT_EQUAL_DOUBLE(0.0, regulator.integral);
+  }
+
+  TEST_ASSERT_DOUBLE_WITHIN(0.01, 0.0, sim.speed(0));
+  TEST_ASSERT_DOUBLE_WITHIN(0.01, 0.0, sim.speed(1));
+}
+
+TEST_CASE("control: losing the command stream coasts the robot to a stop",
+          "[control]") {
+  constexpr Watchdog::Policy<Drive::Twist> policy{
+      .safe = {}, .timeout_ms = 500, .period_ms = 20};
+
+  Sim sim{{.strength = 0.85}};
+
+  sim.run(forward(3.0), 2.0);
+
+  Watchdog::Feed<Drive::Twist> feed{forward(3.0), 0};
+
+  for (size_t i = 0; i < 24; ++i) {
+    feed = Watchdog::observe(feed, std::optional<Drive::Twist>{}, policy);
+    sim.tick(feed.value, Heading::Encoders);
+  }
+
+  TEST_ASSERT_DOUBLE_WITHIN(0.1, 3.0, sim.speed(0));
+
+  for (size_t i = 0; i < 100; ++i) {
+    feed = Watchdog::observe(feed, std::optional<Drive::Twist>{}, policy);
+    sim.tick(feed.value, Heading::Encoders);
   }
 
   TEST_ASSERT_DOUBLE_WITHIN(0.01, 0.0, sim.speed(0));

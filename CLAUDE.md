@@ -118,6 +118,19 @@ That is both subscriptions libmicroros was built for
 libmicroros rebuilt. Publishers are full the same way: `uwb/range` and
 `odom/pose` (`RMW_UXRCE_MAX_PUBLISHERS 2`).
 
+## The cmd_vel watchdog
+
+`Sched::watched<Period, Timeout>(channel, safe)` holds the newest message like
+`held`, but falls back to `safe` after `Timeout` ms of silence and recovers on
+the next message. The pure part is `Watchdog::observe` in
+`components/swarm_hal/watchdog.h`, generic over the value and tested in the
+`host` tier. `cmd_vel` is guarded this way with a zero twist, so a publisher has
+to stream rather than send once:
+
+```sh
+ros2 topic pub -r 10 /<CONFIG_SWARM_ROS_NAMESPACE>/cmd_vel geometry_msgs/Twist '{linear: {x: 0.2}}'
+```
+
 ## The IMU
 
 The MPU6050 hangs off the same I2C bus as the UMC. The split is the usual one:
@@ -203,7 +216,7 @@ patch applied yet.
 
 Tests live in `components/dwm/test/`, `components/mpu6050/test/` and `components/swarm_hal/test/` (tagged Unity `TEST_CASE`s) and split into two tiers, launched via `test/run.py` (which builds the app then hands off to `pytest-embedded`). Run from inside the container:
 
-- `./test/run.py host` — pure value-type, mock-bus and kinematics unit tests (`[dwm_data]`, `[dwm_mock]`, `[drive]`, `[motor]`, `[pid]`, `[odometry]`, `[control]`, `[imu]`, `[mpu6050]`), built for the `linux` target and run natively, no board
+- `./test/run.py host` — pure value-type, mock-bus and kinematics unit tests (`[dwm_data]`, `[dwm_mock]`, `[drive]`, `[motor]`, `[pid]`, `[odometry]`, `[control]`, `[watchdog]`, `[imu]`, `[mpu6050]`), built for the `linux` target and run natively, no board
 - `./test/run.py device` — on-device integration tests (`[dwm_reg]`, `[dwm]`) needing a real DW1000; pytest flashes and runs over serial
 - extra args pass through to pytest, e.g. `./test/run.py host -s`
 

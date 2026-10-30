@@ -2,6 +2,7 @@
 #define SWARM_SCHED_H
 
 #include "queue.h"
+#include "watchdog.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -116,6 +117,38 @@ template <uint32_t PeriodMs, typename Channel> struct held_source {
     if (held) {
       emit(*held);
     }
+  }
+};
+
+// a held setpoint is only safe while whoever set it is still there: if the
+// channel goes quiet for TimeoutMs, the source falls back to `safe` until the
+// next message
+template <uint32_t PeriodMs, uint32_t TimeoutMs, typename Channel>
+struct watched_source {
+  static_assert(TimeoutMs > PeriodMs,
+                "a timeout within one period would expire between messages");
+
+  using value_type = typename Channel::value_type;
+
+  static constexpr uint32_t period_ms = PeriodMs;
+
+  Channel *channel;
+  value_type safe;
+  Watchdog::Feed<value_type> feed;
+
+  template <typename F> void poll(F &&emit) {
+    std::optional<value_type> newest;
+
+    while (auto msg = channel->pop(0)) {
+      newest = msg;
+    }
+
+    feed = Watchdog::observe(feed, newest,
+                             {.safe = safe,
+                              .timeout_ms = TimeoutMs,
+                              .period_ms = PeriodMs});
+
+    emit(feed.value);
   }
 };
 
@@ -246,6 +279,12 @@ constexpr auto held(
     Channel &channel,
     std::optional<typename Channel::value_type> initial = std::nullopt) {
   return pipeline<held_source<PeriodMs, Channel>>{{&channel, initial}, {}};
+}
+
+template <uint32_t PeriodMs, uint32_t TimeoutMs, typename Channel>
+constexpr auto watched(Channel &channel, typename Channel::value_type safe) {
+  return pipeline<watched_source<PeriodMs, TimeoutMs, Channel>>{
+      {&channel, safe, {safe, 0}}, {}};
 }
 
 template <uint32_t StackBytes, UBaseType_t Priority, typename... Pipes>

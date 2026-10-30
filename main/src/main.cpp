@@ -192,6 +192,11 @@ constexpr uint32_t MOTION_PERIOD_MS = 5;
 // is not mostly quantisation noise the way it would be at 5ms
 constexpr uint32_t DRIVE_PERIOD_MS = 20;
 
+// a robot that has lost its server must not keep driving while the others plan
+// around it. Long enough to ride out a WiFi hiccup, so cmd_vel has to be
+// streamed faster than this
+constexpr uint32_t CMD_VEL_TIMEOUT_MS = 500;
+
 // FIT0485 is a 6V motor on a 12V rail, so the loop never asks for more than
 // half duty
 // TODO: the rail sags with the battery; measure it under load
@@ -278,7 +283,8 @@ extern "C" void app_main(void) {
   static auto motion = Sched::make_task<4096, configMAX_PRIORITIES - 2>(
       // the loop integrates odometry, so it has to run from boot rather than
       // from the first cmd_vel. A zero twist coasts the wheels while it does
-      Sched::held<HW::DRIVE_PERIOD_MS>(commands, Drive::Twist{}) |
+      Sched::watched<HW::DRIVE_PERIOD_MS, HW::CMD_VEL_TIMEOUT_MS>(
+          commands, Drive::Twist{}) |
           Sched::then(Drive::inverse_kinematics<HW::STYLE>) |
           Sched::to(
               [&motors, &encoders, state = Base::State<HW::STYLE>{}](
