@@ -118,6 +118,28 @@ That is both subscriptions libmicroros was built for
 libmicroros rebuilt. Publishers are full the same way: `uwb/range` and
 `odom/pose` (`RMW_UXRCE_MAX_PUBLISHERS 2`).
 
+## The IMU
+
+The MPU6050 hangs off the same I2C bus as the UMC. The split is the usual one:
+`components/swarm_hal/imu.h` is the pure core -- `Imu::Reading` (counts),
+`Imu::Sample` (g, dps, degC), the sensitivity derived from the selected full
+scale, and `Imu::Accumulator`, which averages readings taken at rest into the
+`Imu::Offsets` later samples are corrected by, keeping 1 g on whichever axis
+points up. `components/mpu6050/mpu6050.h` is the device: a register
+description (`Reg`, `Info<R>`, `Field`) a write to a read-only register cannot
+compile against, one `Config` whose sample rate and calibration interval derive
+from the DLPF setting, and a 14-octet burst that becomes a `Reading`. Nothing
+in either file touches IDF, so both run in the `host` tier over `MockI2C`.
+
+`ESP32::I2cBus<Pins, Port>` owns the port (Exclusive) and declares SDA/SCL as
+Shared, the same shape as `SpiBus`; `ESP32::I2C<Bus>` is one addressed device
+on it.
+
+TODO: the bus is declared on placeholder pins. NEWMCPCBV2 routes the UMC's
+SDA/SCL to pins the motors and the Makerfabs carrier already hold, so the imu
+task in `main.cpp` stays unspawned until the real pair goes in -- same
+situation as the ranging tasks.
+
 ## DW1000 references
 
 When answering questions about the DW1000 / register behavior, consult `docs/references.md`:
@@ -174,9 +196,9 @@ patch applied yet.
 
 ## Testing
 
-Tests live in `components/dwm/test/` and `components/swarm_hal/test/` (tagged Unity `TEST_CASE`s) and split into two tiers, launched via `test/run.py` (which builds the app then hands off to `pytest-embedded`). Run from inside the container:
+Tests live in `components/dwm/test/`, `components/mpu6050/test/` and `components/swarm_hal/test/` (tagged Unity `TEST_CASE`s) and split into two tiers, launched via `test/run.py` (which builds the app then hands off to `pytest-embedded`). Run from inside the container:
 
-- `./test/run.py host` — pure value-type, mock-SPI and kinematics unit tests (`[dwm_data]`, `[dwm_mock]`, `[drive]`, `[motor]`, `[pid]`, `[odometry]`), built for the `linux` target and run natively, no board
+- `./test/run.py host` — pure value-type, mock-bus and kinematics unit tests (`[dwm_data]`, `[dwm_mock]`, `[drive]`, `[motor]`, `[pid]`, `[odometry]`, `[imu]`, `[mpu6050]`), built for the `linux` target and run natively, no board
 - `./test/run.py device` — on-device integration tests (`[dwm_reg]`, `[dwm]`) needing a real DW1000; pytest flashes and runs over serial
 - extra args pass through to pytest, e.g. `./test/run.py host -s`
 
