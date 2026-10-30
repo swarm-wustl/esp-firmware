@@ -38,13 +38,13 @@ enum class RangingRole { Idle, Initiator, Responder };
 enum class InitiatorState {
     Idle,
     WaitingForReply,
-    WaitingForFinalFrame
+    SendingFinalFrame
 };
 
 enum class ResponderState {
     Idle,
     WaitingForPoll,
-    SendingFinalFrame
+    WaitingForFinalFrame,
 };
 
 class DWMTimestamp {
@@ -357,6 +357,9 @@ public:
     MBPS_68 = 0b10
   };
 
+  double get_range(){
+    return distance_;
+  }
   // hidden friend: ADL finds it for the nested enum, so callers write
   // to_string_view(br) the same way they do for PRF
   friend constexpr std::string_view to_string_view(BitRate br) noexcept {
@@ -451,7 +454,12 @@ std::expected<void, HAL::SpiError> set_interrupt_mask(uint32_t mask_bits) {
   // Call from worker task upon ISR notification
 
   std::expected<void, HAL::SpiError> handle_interrupt() {
-    uint64_t status = read_sys_status();
+    auto status_res = read_sys_status();
+    if (status_res.has_value() == false) {
+        // Handle SPI error (e.g., status_res.error())
+        return std::unexpected(status_res.error()); // Propagate the error
+    }
+    uint64_t status = *status_res; // or status_res.value()
 
     if (role_ == RangingRole::Initiator) {
       return handle_initiator_irq(status);
@@ -506,7 +514,7 @@ std::expected<void, HAL::SpiError> handle_initiator_irq(uint64_t status) {
 std::expected<void, HAL::SpiError> handle_responder_irq(uint64_t status) {
     auto tx_done = is_tx_done(status);
     auto rx_done = is_rx_done(status);
-
+    uint64_t t_reply_ = 0;
     // 1. Poll received -> Record t_poll_rx and send immediate Reply
     if (rx_done && *rx_done && resp_state_ == ResponderState::WaitingForPoll) {
         std::array<std::byte, 1> poll{};
@@ -523,6 +531,7 @@ std::expected<void, HAL::SpiError> handle_responder_irq(uint64_t status) {
     // 2. Reply frame finished transmitting -> Record t_reply_tx, calculate T_reply, enable RX for Final
     else if (tx_done && *tx_done && resp_state_ == ResponderState::WaitingForFinalFrame) {
         auto t_reply_tx = get_tx_timestamp();
+        
         if (t_reply_tx && t_poll_rx_) {
             t_reply_ = (*t_reply_tx - *t_poll_rx_).count();
             return enable_rx(); // Wait for Final frame from Initiator
@@ -544,12 +553,23 @@ std::expected<void, HAL::SpiError> handle_responder_irq(uint64_t status) {
             double distance = tof * SECONDS_PER_TICK * SPEED_OF_LIGHT;
 
             on_range_complete(distance);
+
         }
 
         resp_state_ = ResponderState::WaitingForPoll;
         enable_rx(); // Return to listening state for next poll
     }
 
+    return {};
+}
+
+
+std::expected<void, HAL::SpiError> on_range_complete(double distance) {
+    // Placeholder for user-defined callback or event dispatch
+    // For example, you could log the distance or notify another component
+    // In this example, we simply print the distance to the console (if available)
+    // std::cout << "Range complete: " << distance << " meters" << std::endl;
+    this->distance_ = distance; // Store the distance in the class member variable
     return {};
 }
 
@@ -871,7 +891,7 @@ private:
   static constexpr std::byte POLL_ACK{0x03};
   static constexpr std::byte RANGE_POLL{0x01};
   static constexpr std::byte RANGE_REPLY{0x02};
-constexpr std::byte RANGE_FINAL{0x03};
+  static constexpr std::byte RANGE_FINAL{0x03};
 
   // sub-addressed SPI header (manual 2.2.1.2): 1 octet non-indexed, 2 for an
   // offset <= 0x7F, 3 with the extended-address flag for larger offsets
@@ -897,9 +917,9 @@ constexpr std::byte RANGE_FINAL{0x03};
     ResponderState resp_state_{ResponderState::Idle};
 
     // Timestamp storage across states
-    std::optional<DWMTimestamp> t_poll_tx_;
-    std::optional<DWMTimestamp> t_poll_rx_;
-    std::optional<DWMTimestamp> t_reply_rx_;
+    std::expected<DWMTimestamp, HAL::SpiError> t_poll_tx_;
+    std::expected<DWMTimestamp, HAL::SpiError> t_poll_rx_;
+    std::expected<DWMTimestamp, HAL::SpiError> t_reply_rx_;
 
 
 
@@ -1052,7 +1072,7 @@ constexpr std::byte RANGE_FINAL{0x03};
 
   static constexpr size_t MAX_DEVICES = 10;
 
-
+  double distance_{0.0};
   SPI spi_;
   GPIO gpio_;
   DWMDevice _networkDevices[MAX_DEVICES];

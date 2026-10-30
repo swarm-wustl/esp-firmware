@@ -85,7 +85,7 @@ static auto onTwist = [](const geometry_msgs__msg__Twist &twist) {
 };
 
 
-static const char *TAG = "UWB_IRQ";
+static const char *UWB_TAG = "UWB_IRQ";
 
 // Configuration
 constexpr gpio_num_t kUwbIrqPin = GPIO_NUM_34;
@@ -111,18 +111,23 @@ extern "C" void IRAM_ATTR dwm_gpio_isr_handler(void *arg) {
 // 2. UWB WORKER TASK (Handles SPI & Response Logic)
 // =============================================================================
 void uwb_worker_task(void *pvParameters) {
-    auto *dwm = static_cast<DWM *>(pvParameters);
+    auto *dwm = static_cast<HW::Dwm *>(pvParameters);
 
     s_uwb_task_handle = xTaskGetCurrentTaskHandle();
     dwm->start_responder(); // Prepare to receive poll frames
-    ESP_LOGI(TAG, "UWB Worker Task ready and sleeping...");
+    ESP_LOGI(UWB_TAG, "UWB Worker Task ready and sleeping...");
 
     while (true) {
         // Wait indefinitely until GPIO ISR fires xTaskNotifyFromISR
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
-        // Process hardware flags, advance state machine, and clear IRQ line
+        ESP_LOGD(UWB_TAG, "Interrupt notification received");
         dwm->handle_interrupt();
+
+        // Example: Print a message after handling the interrupt
+        ESP_LOGI(UWB_TAG, "Processed UWB interrupt");
+        double range_m = dwm->get_range();
+        ESP_LOGI(UWB_TAG, "Measured Range: %.3f meters", range_m);
     }
 }
 
@@ -136,13 +141,13 @@ extern "C" void app_main(void) {
   auto &motors = peripherals.get<HW::MotorDriver>();
 
   if (auto id = dwm_sensor.get_device_id()) {
-    ESP_LOGI(TAG, "DW1000 id: 0x%08lX", static_cast<unsigned long>(*id));
+    ESP_LOGI(UWB_TAG, "DW1000 id: 0x%08lX", static_cast<unsigned long>(*id));
   } else {
-    ESP_LOGE(TAG, "DW1000 id read failed");
+    ESP_LOGE(UWB_TAG, "DW1000 id read failed");
   }
 
   if (auto r = dwm_sensor.configure(); r) {
-    ESP_LOGI(TAG, "DW1000 configured");
+    ESP_LOGI(UWB_TAG, "DW1000 configured");
   } else {
     ESP_LOGE(TAG, "DW1000 configure failed");
   }
