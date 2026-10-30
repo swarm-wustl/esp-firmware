@@ -45,6 +45,13 @@ public:
     return {};
   }
 
+  // xQueueOverwrite is only defined for a queue of length one
+  void overwrite(const Body &body)
+    requires(Capacity == 1)
+  {
+    xQueueOverwrite(handle, &body);
+  }
+
   [[nodiscard]] std::optional<Body> pop(TickType_t timeout = portMAX_DELAY) {
     Body body;
 

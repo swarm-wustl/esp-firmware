@@ -16,6 +16,7 @@
 #include <expected>
 #include <span>
 
+#include "arrays.h"
 #include "assembly.h"
 #include "driver/gpio.h"
 #include "encoder.h"
@@ -112,9 +113,9 @@ public:
   static constexpr int port = Port;
 
   static constexpr auto claims =
-      HAL::concat(Pins.claims(),
-                  std::array{HAL::Claim{HAL::Resource::I2cPort, Port,
-                                        HAL::Use::Exclusive}});
+      Arrays::concat(Pins.claims(),
+                     std::array{HAL::Claim{HAL::Resource::I2cPort, Port,
+                                           HAL::Use::Exclusive}});
 
   explicit I2cBus(Swarm::Assembly)
       : handle_{detail::i2c_open_bus(Port, Pins["sda"_p].number(),
