@@ -10,6 +10,7 @@
 
 #include "esp_log.h"
 
+#include <geometry_msgs/msg/pose_with_covariance_stamped.h>
 #include <geometry_msgs/msg/twist.h>
 #include <sensor_msgs/msg/range.h>
 #include <std_msgs/msg/float32.h>
@@ -17,10 +18,13 @@
 
 #include "freertos/FreeRTOS.h"
 
+#include <array>
+#include <cstddef>
 #include <numbers>
 
 static const char *TAG = "main";
 
+SWARM_ROS_MESSAGE(geometry_msgs, msg, PoseWithCovarianceStamped)
 SWARM_ROS_MESSAGE(geometry_msgs, msg, Twist)
 SWARM_ROS_MESSAGE(sensor_msgs, msg, Range)
 SWARM_ROS_MESSAGE(std_msgs, msg, Float32)
@@ -33,6 +37,39 @@ static void fill_range(sensor_msgs__msg__Range &msg, const double &meters) {
   msg.min_range = 0.0f;
   msg.max_range = 300.0f;
   msg.range = static_cast<float>(meters);
+}
+
+// row-major 6x6 over (x, y, z, roll, pitch, yaw). A planar base never measures
+// z, roll or pitch, so those are given a variance large enough that an EKF
+// ignores them rather than one of zero, which it would take as certainty
+// TODO: odometry drift grows with distance, so a constant is a placeholder.
+// Scale it with distance travelled once the EKF is up and its residuals show
+// how far off this is
+static constexpr std::array<double, 36> kPoseCovariance = [] {
+  constexpr std::array<double, 6> variance{0.01, 0.01, 1e6, 1e6, 1e6, 0.05};
+
+  std::array<double, 36> out{};
+
+  for (size_t i = 0; i < variance.size(); ++i) {
+    out[i * 6 + i] = variance[i];
+  }
+
+  return out;
+}();
+
+static void fill_pose(geometry_msgs__msg__PoseWithCovarianceStamped &msg,
+                      const Odometry::Pose &pose) {
+  const auto [z, w] = Odometry::heading(pose.theta);
+
+  msg.pose.pose.position.x = pose.x;
+  msg.pose.pose.position.y = pose.y;
+  msg.pose.pose.position.z = 0.0;
+  msg.pose.pose.orientation.x = 0.0;
+  msg.pose.pose.orientation.y = 0.0;
+  msg.pose.pose.orientation.z = z;
+  msg.pose.pose.orientation.w = w;
+
+  std::ranges::copy(kPoseCovariance, msg.pose.covariance);
 }
 
 namespace HW {
@@ -109,8 +146,14 @@ using UmcCmd = ROS::subscribes<std_msgs__msg__Float32, "umc/front">;
 using UwbRange = ROS::streams<sensor_msgs__msg__Range, "uwb/range", "uwb_link",
                               double, &fill_range>;
 
-using Node =
-    ROS::node<"base", CONFIG_SWARM_ROS_NAMESPACE, CmdVel, UmcCmd, UwbRange>;
+// integrated every control period on the robot, so a slow publish rate loses
+// nothing the way sampling a twist slowly would
+using OdomPose =
+    ROS::streams<geometry_msgs__msg__PoseWithCovarianceStamped, "odom/pose",
+                 "odom", Odometry::Pose, &fill_pose>;
+
+using Node = ROS::node<"base", CONFIG_SWARM_ROS_NAMESPACE, CmdVel, UmcCmd,
+                       UwbRange, OdomPose>;
 
 using CmdChannel = Sched::channel<Drive::Twist, 4>;
 using UmcChannel = Sched::channel<double, 4>;
@@ -137,7 +180,7 @@ constexpr auto CONTROL =
     Drive::control(WHEEL_SUPPLY, MAX_WHEEL_SPEED, DRIVE_PERIOD_MS / 1000.0,
                    Pid::gains(0.05, 0.5, 0.0));
 constexpr uint32_t EXECUTOR_PERIOD_MS = 10;
-constexpr uint32_t ODOMETRY_PERIOD_MS = 500;
+constexpr uint32_t ODOMETRY_PERIOD_MS = 200;
 constexpr uint32_t POLL_PERIOD_MS = 100;
 
 // bring-up: flip to false on the responder board
@@ -220,6 +263,9 @@ extern "C" void app_main(void) {
 
                 motors.run(frame);
 
+                // TODO: take angular_z from a gyro instead of the encoders --
+                // turning is where the wheels slip most, so it is where the
+                // encoder heading is worst
                 pose = Odometry::integrate(
                     pose, Drive::forward_kinematics<HW::STYLE>(measured),
                     HW::CONTROL.period);
@@ -240,8 +286,11 @@ extern "C" void app_main(void) {
   static auto odometry = Sched::make_task<4096, configMAX_PRIORITIES - 4>(
       Sched::latest<HW::ODOMETRY_PERIOD_MS>(poses) |
       Sched::to([](const Odometry::Pose &pose) {
-        ESP_LOGI(TAG, "pose x %+7.3f m  y %+7.3f m  theta %+6.3f rad", pose.x,
-                 pose.y, pose.theta);
+        // false until the session is up as well, so at warning level this
+        // would fire five times a second whenever the agent is away
+        if (!session.send<HW::OdomPose>(pose)) {
+          ESP_LOGD(TAG, "Dropped pose");
+        }
       }));
 
   // init runs on the uros task, not here: a dead agent must not stop motion
@@ -268,7 +317,8 @@ extern "C" void app_main(void) {
     }
 
     ESP_LOGI(TAG,
-             "micro-ROS session up: /%s/base subscribed to cmd_vel, umc/front",
+             "micro-ROS session up: /%s/base subscribed to cmd_vel, umc/front; "
+             "publishing odom/pose",
              CONFIG_SWARM_ROS_NAMESPACE);
 
     return true;

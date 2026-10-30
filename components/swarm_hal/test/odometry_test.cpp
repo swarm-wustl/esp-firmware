@@ -1,6 +1,7 @@
 #include "odometry.h"
 #include "unity.h"
 
+#include <cmath>
 #include <numbers>
 
 namespace {
@@ -49,6 +50,14 @@ TEST_CASE("odometry: many short steps land where one long step does",
   }
 
   check(Odometry::integrate(kOrigin, twist, 2.0), stepped);
+}
+
+TEST_CASE("odometry: a heading is a unit quaternion about z", "[odometry]") {
+  const auto [z, w] = Odometry::heading(kPi / 2.0);
+
+  TEST_ASSERT_DOUBLE_WITHIN(1e-9, std::sqrt(0.5), z);
+  TEST_ASSERT_DOUBLE_WITHIN(1e-9, std::sqrt(0.5), w);
+  TEST_ASSERT_DOUBLE_WITHIN(1e-9, 1.0, z * z + w * w);
 }
 
 TEST_CASE("odometry: heading wraps into [-pi, pi]", "[odometry]") {

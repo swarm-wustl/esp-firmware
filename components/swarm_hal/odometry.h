@@ -13,6 +13,17 @@ struct Pose {
   double theta; // rad, in [-pi, pi]
 };
 
+// a planar heading as a quaternion: a rotation about z alone, so x and y are
+// zero
+struct Heading {
+  double z;
+  double w;
+};
+
+constexpr Heading heading(double theta) {
+  return {.z = std::sin(theta / 2.0), .w = std::cos(theta / 2.0)};
+}
+
 constexpr double wrap(double angle) {
   return std::remainder(angle, 2.0 * std::numbers::pi);
 }
@@ -20,6 +31,8 @@ constexpr double wrap(double angle) {
 // a twist held for dt traces an arc, not a chord. Stepping along the chord
 // (x += v cos(theta) dt) drifts outward on every turn; the closed form is
 // exact for a constant twist, so the error is only how constant it really was
+// Basically, from the arc length and its angle, compute the radius and use that
+// instead of naive v*dt Euler-type integration.
 constexpr Pose integrate(const Pose &pose, const Drive::Twist &body,
                          double dt) {
   const double turn = body.angular_z * dt;

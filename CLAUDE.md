@@ -115,7 +115,8 @@ ros2 topic pub -1 /<CONFIG_SWARM_ROS_NAMESPACE>/umc/front std_msgs/Float32 '{dat
 
 That is both subscriptions libmicroros was built for
 (`RMW_UXRCE_MAX_SUBSCRIPTIONS 2`); a third needs `colcon.meta` raised and
-libmicroros rebuilt.
+libmicroros rebuilt. Publishers are full the same way: `uwb/range` and
+`odom/pose` (`RMW_UXRCE_MAX_PUBLISHERS 2`).
 
 ## DW1000 references
 
