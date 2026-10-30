@@ -3,6 +3,7 @@
 
 #include <cmath>
 #include <numbers>
+#include <optional>
 
 #include "drive.h"
 
@@ -26,6 +27,13 @@ constexpr Heading heading(double theta) {
 
 constexpr double wrap(double angle) {
   return std::remainder(angle, 2.0 * std::numbers::pi);
+}
+
+// wheels slip most while turning, so a gyro's rate outranks the encoders' when
+// there is one. Without it the encoders still give a heading, just a worse one
+constexpr Drive::Twist with_yaw_rate(const Drive::Twist &body,
+                                     std::optional<double> yaw_rate) {
+  return {body.linear_x, body.linear_y, yaw_rate.value_or(body.angular_z)};
 }
 
 // a twist held for dt traces an arc, not a chord. Stepping along the chord

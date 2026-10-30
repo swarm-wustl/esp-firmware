@@ -3,6 +3,7 @@
 
 #include <cmath>
 #include <numbers>
+#include <optional>
 
 namespace {
 constexpr double kPi = std::numbers::pi;
@@ -64,4 +65,22 @@ TEST_CASE("odometry: heading wraps into [-pi, pi]", "[odometry]") {
   const auto pose = Odometry::integrate({0.0, 0.0, 3.0}, {0.0, 0.0, 1.0}, 1.0);
 
   TEST_ASSERT_DOUBLE_WITHIN(1e-9, 4.0 - 2.0 * kPi, pose.theta);
+}
+
+TEST_CASE("odometry: a gyro rate replaces only the encoder's angular_z",
+          "[odometry]") {
+  const Drive::Twist body =
+      Odometry::with_yaw_rate({1.0, 2.0, 3.0}, std::optional{0.5});
+
+  TEST_ASSERT_DOUBLE_WITHIN(1e-9, 1.0, body.linear_x);
+  TEST_ASSERT_DOUBLE_WITHIN(1e-9, 2.0, body.linear_y);
+  TEST_ASSERT_DOUBLE_WITHIN(1e-9, 0.5, body.angular_z);
+}
+
+TEST_CASE("odometry: no gyro rate leaves the encoder's angular_z",
+          "[odometry]") {
+  const Drive::Twist body =
+      Odometry::with_yaw_rate({1.0, 2.0, 3.0}, std::nullopt);
+
+  TEST_ASSERT_DOUBLE_WITHIN(1e-9, 3.0, body.angular_z);
 }

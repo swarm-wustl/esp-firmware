@@ -182,6 +182,7 @@ using Node = ROS::node<"base", CONFIG_SWARM_ROS_NAMESPACE, CmdVel, UmcCmd,
 using CmdChannel = Sched::channel<Drive::Twist, 4>;
 using UmcChannel = Sched::channel<double, 4>;
 using PoseMailbox = Sched::channel<Odometry::Pose, 1>;
+using YawRateMailbox = Sched::channel<double, 1>;
 
 // motion is arithmetic plus two GPIO writes, so it shares the fast task
 constexpr uint32_t MOTION_PERIOD_MS = 5;
@@ -205,7 +206,10 @@ constexpr auto CONTROL =
                    Pid::gains(0.05, 0.5, 0.0));
 constexpr uint32_t EXECUTOR_PERIOD_MS = 10;
 constexpr uint32_t ODOMETRY_PERIOD_MS = 200;
-constexpr uint32_t IMU_PERIOD_MS = 100;
+
+// one yaw rate per control period, so the heading has no gaps to hold across
+constexpr uint32_t IMU_PERIOD_MS = DRIVE_PERIOD_MS;
+
 constexpr uint32_t POLL_PERIOD_MS = 100;
 
 // bring-up: flip to false on the responder board
@@ -216,6 +220,7 @@ constexpr bool kInitiator = true;
 static HW::CmdChannel commands;
 static HW::UmcChannel umc_commands;
 static HW::PoseMailbox poses;
+static HW::YawRateMailbox yaw_rates;
 static ROS::session<HW::Node> session;
 
 // on_start takes a plain function pointer, so the task body reaches the sensor
@@ -293,11 +298,13 @@ extern "C" void app_main(void) {
 
                 motors.run(frame);
 
-                // TODO: take angular_z from a gyro instead of the encoders --
-                // turning is where the wheels slip most, so it is where the
-                // encoder heading is worst
+                // I2C stays out of this loop: a stalled bus empties the mailbox
+                // and the heading falls back to the encoders
                 pose = Odometry::integrate(
-                    pose, Drive::forward_kinematics<HW::STYLE>(measured),
+                    pose,
+                    Odometry::with_yaw_rate(
+                        Drive::forward_kinematics<HW::STYLE>(measured),
+                        yaw_rates.pop(0)),
                     HW::CONTROL.period);
                 poses.overwrite(pose);
               }),
@@ -360,7 +367,11 @@ extern "C" void app_main(void) {
       Sched::every<HW::IMU_PERIOD_MS> |
       Sched::then([&imu_sensor] { return imu_sensor.read_sample(); }) |
       Sched::to([](const Imu::Sample &sample) {
-        ESP_LOGI(TAG, "gyro %+7.2f %+7.2f %+7.2f dps  accel %+6.3f %+6.3f "
+        // TODO: check the sign on the bench -- a part mounted upside down
+        // needs this negated, and Imu::Axis has no way to say so yet
+        yaw_rates.overwrite(Imu::yaw_rate(sample, HW::Mpu::spec.up));
+
+        ESP_LOGD(TAG, "gyro %+7.2f %+7.2f %+7.2f dps  accel %+6.3f %+6.3f "
                       "%+6.3f g  %.1f C",
                  sample.gyro.x, sample.gyro.y, sample.gyro.z, sample.accel.x,
                  sample.accel.y, sample.accel.z, sample.temperature_c);

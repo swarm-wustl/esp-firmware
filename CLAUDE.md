@@ -135,6 +135,11 @@ in either file touches IDF, so both run in the `host` tier over `MockI2C`.
 Shared, the same shape as `SpiBus`; `ESP32::I2C<Bus>` is one addressed device
 on it.
 
+The gyro's yaw rate replaces the encoders' `angular_z` in odometry. The imu task
+leaves it in a mailbox each control period and `motion` takes it without
+blocking, so an empty mailbox -- uncalibrated, bus down -- means that step's
+heading comes from the encoders. I2C never runs inside the control loop.
+
 TODO: the bus is declared on placeholder pins. NEWMCPCBV2 routes the UMC's
 SDA/SCL to pins the motors and the Makerfabs carrier already hold. The imu task
 in `main.cpp` is spawned anyway, but it will likely sit retrying `who_am_i`
