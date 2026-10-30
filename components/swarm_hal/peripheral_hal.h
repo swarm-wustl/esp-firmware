@@ -20,12 +20,21 @@ enum class PinMode : uint8_t { Input, Output };
 
 enum class SpiError : uint8_t { TransferFailed, Timeout };
 
+enum class I2cError : uint8_t { TransferFailed, Timeout, Nack };
+
 template <typename SPI>
 concept GenericSPIController =
     requires(SPI spi, std::span<std::byte> rx, std::span<const std::byte> tx) {
       {
         spi.transfer_halfduplex(tx, rx)
       } -> std::same_as<std::expected<void, SpiError>>;
+    };
+
+template <typename I2C>
+concept GenericI2CController =
+    requires(I2C i2c, std::span<std::byte> rx, std::span<const std::byte> tx) {
+      { i2c.write(tx) } -> std::same_as<std::expected<void, I2cError>>;
+      { i2c.write_read(tx, rx) } -> std::same_as<std::expected<void, I2cError>>;
     };
 
 template <typename PWM>

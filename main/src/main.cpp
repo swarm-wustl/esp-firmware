@@ -3,6 +3,7 @@
 #include "encoders.h"
 #include "esp32.h"
 #include "l298n.h"
+#include "mpu6050.h"
 #include "session.h"
 #include "swarm_sched.h"
 #include "system.h"
@@ -96,8 +97,31 @@ constexpr auto DWM_PINS = HAL::pins(HAL::NamedPin{"cs", GPIO_NUM_15},
 
 using Dwm = DWM<SPI, GPIO, DWM_PINS, SpiBus>;
 
-using Chassis =
-    Swarm::chassis<STYLE, MotorDriver, SpiBus, Dwm, EncoderBank, UmcDriver>;
+// placeholder pins, free of everything above and wired to nothing: the MPU6050
+// shares the UMC's I2C bus, whose SDA/SCL NEWMCPCBV2 routes to pins the motors
+// and the carrier have already spoken for. Both are strapping pins, so this
+// pair is declarable rather than usable -- the imu task below stays unspawned
+// until the real pair goes in
+// TODO: replace with the UMC header's SDA/SCL and spawn the task
+constexpr auto I2C_PINS =
+    HAL::pins(HAL::NamedPin{"sda", GPIO_NUM_18, HAL::Use::Shared},
+              HAL::NamedPin{"scl", GPIO_NUM_14, HAL::Use::Shared});
+
+using I2cBus = ESP32::I2cBus<I2C_PINS>;
+using I2C = ESP32::I2C<I2cBus>;
+
+// +-500 dps and +-4 g leave headroom over what a wheeled chassis does, and the
+// 44 Hz filter at 100 Hz output keeps the frame buzz out of the gyro
+constexpr auto IMU_CONFIG =
+    MPU6050::config({.gyro = Imu::GyroRange::Dps500,
+                     .accel = Imu::AccelRange::G4,
+                     .dlpf = MPU6050::Dlpf::Hz44,
+                     .sample_rate_divider = 9});
+
+using Mpu = MPU6050::Sensor<I2C, GPIO, IMU_CONFIG, I2cBus>;
+
+using Chassis = Swarm::chassis<STYLE, MotorDriver, SpiBus, Dwm, EncoderBank,
+                               UmcDriver, I2cBus, Mpu>;
 
 using CmdVel = ROS::subscribes<geometry_msgs__msg__Twist, "cmd_vel">;
 
@@ -116,6 +140,7 @@ using UmcChannel = Sched::channel<double, 4>;
 constexpr uint32_t MOTION_PERIOD_MS = 5;
 constexpr uint32_t EXECUTOR_PERIOD_MS = 10;
 constexpr uint32_t ODOMETRY_PERIOD_MS = 500;
+constexpr uint32_t IMU_PERIOD_MS = 100;
 constexpr uint32_t POLL_PERIOD_MS = 100;
 
 // bring-up: flip to false on the responder board
@@ -125,6 +150,10 @@ constexpr bool kInitiator = true;
 static HW::CmdChannel commands;
 static HW::UmcChannel umc_commands;
 static ROS::session<HW::Node> session;
+
+// on_start takes a plain function pointer, so the task body reaches the sensor
+// through this rather than capturing it
+static HW::Mpu *imu_device = nullptr;
 
 static constexpr const char *label(Motor::Name name) {
   switch (name) {
@@ -163,6 +192,7 @@ extern "C" void app_main(void) {
   auto &motors = peripherals.get<HW::MotorDriver>();
   auto &encoders = peripherals.get<HW::EncoderBank>();
   auto &umc = peripherals.get<HW::UmcDriver>();
+  auto &imu_sensor = peripherals.get<HW::Mpu>();
 
   // these two talk to the bus, so they report failure until the DW1000 is on
   // pins it is actually wired to
@@ -245,9 +275,58 @@ extern "C" void app_main(void) {
     return true;
   });
 
+  // the bias estimate assumes the robot is still, so calibration belongs in
+  // on_start rather than anywhere a command could already be moving it
+  static auto imu = Sched::make_task<4096, configMAX_PRIORITIES - 4>(
+      Sched::every<HW::IMU_PERIOD_MS> |
+      Sched::then([&imu_sensor] { return imu_sensor.read_sample(); }) |
+      Sched::to([](const Imu::Sample &sample) {
+        ESP_LOGI(TAG, "gyro %+7.2f %+7.2f %+7.2f dps  accel %+6.3f %+6.3f "
+                      "%+6.3f g  %.1f C",
+                 sample.gyro.x, sample.gyro.y, sample.gyro.z, sample.accel.x,
+                 sample.accel.y, sample.accel.z, sample.temperature_c);
+      }));
+
+  imu_device = &imu_sensor;
+
+  imu.on_start([] {
+    HW::Mpu &sensor = *imu_device;
+    while(true){
+
+      if (auto id = sensor.who_am_i()) {
+        ESP_LOGI(TAG, "MPU6050 id: 0x%02X", *id);
+        break;
+      } else {
+        ESP_LOGW(TAG, "MPU6050 id read failed; retrying");
+        vTaskDelay(pdMS_TO_TICKS(1000));
+      }
+
+    }
+
+    if (!sensor.configure()) {
+      ESP_LOGE(TAG, "MPU6050 configure failed");
+
+      return false;
+    }
+
+    ESP_LOGI(TAG, "MPU6050 calibrating -- hold still");
+
+    if (const auto offsets = sensor.calibrate()) {
+      ESP_LOGI(TAG, "MPU6050 gyro bias: %d %d %d counts", offsets->gyro.x,
+               offsets->gyro.y, offsets->gyro.z);
+    } else {
+      ESP_LOGE(TAG, "MPU6050 calibration failed");
+
+      return false;
+    }
+
+    return true;
+  });
+
   ros.spawn("uros");
   motion.spawn("motion");
   odometry.spawn("odometry");
+  imu.spawn("imu");
 
   if constexpr (HW::kInitiator) {
     [[maybe_unused]] static auto ranging =

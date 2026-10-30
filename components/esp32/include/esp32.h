@@ -5,6 +5,7 @@
 #include <memory>
 #include <tuple>
 
+#include <driver/i2c_master.h>
 #include <driver/pulse_cnt.h>
 #include <driver/spi_common.h>
 #include <driver/spi_master.h>
@@ -12,12 +13,17 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include <expected>
+#include <span>
+
 #include "assembly.h"
 #include "driver/gpio.h"
 #include "encoder.h"
 #include "swarm_hal.h"
 
 namespace ESP32 {
+using HAL::operator""_p;
+
 // the bus owns the peripheral: spi_bus_initialize/free happen once here, and
 // devices attach to it. SPI2_HOST is Exclusive -- a second initialize on the
 // same host fails at runtime and only gets logged
@@ -78,6 +84,85 @@ private:
   spi_device_handle_t dev_handle_{};
 
   void swap(SPI &other);
+};
+
+namespace detail {
+// the IDF calls live in i2c.cpp; the templates below only carry the
+// description, so nothing drags driver internals through the pin tables
+i2c_master_bus_handle_t i2c_open_bus(int port, int sda, int scl);
+void i2c_close_bus(i2c_master_bus_handle_t bus);
+
+i2c_master_dev_handle_t i2c_add_device(i2c_master_bus_handle_t bus,
+                                       uint8_t address, uint32_t speed_hz);
+void i2c_remove_device(i2c_master_dev_handle_t device);
+
+std::expected<void, HAL::I2cError> i2c_write(i2c_master_dev_handle_t device,
+                                             std::span<const std::byte> tx,
+                                             int timeout_ms);
+std::expected<void, HAL::I2cError>
+i2c_write_read(i2c_master_dev_handle_t device, std::span<const std::byte> tx,
+               std::span<std::byte> rx, int timeout_ms);
+} // namespace detail
+
+// one master port for every device on the two wires, same shape as SpiBus:
+// the port is Exclusive, SDA and SCL are Shared because that is the point of
+// a bus
+template <auto Pins, int Port = 0> class I2cBus {
+public:
+  static constexpr int port = Port;
+
+  static constexpr auto claims =
+      HAL::concat(Pins.claims(),
+                  std::array{HAL::Claim{HAL::Resource::I2cPort, Port,
+                                        HAL::Use::Exclusive}});
+
+  explicit I2cBus(Swarm::Assembly)
+      : handle_{detail::i2c_open_bus(Port, Pins["sda"_p].number(),
+                                     Pins["scl"_p].number())} {}
+
+  ~I2cBus() { detail::i2c_close_bus(handle_); }
+
+  I2cBus(const I2cBus &) = delete;
+  void operator=(const I2cBus &) = delete;
+  I2cBus(I2cBus &&) = delete;
+  void operator=(I2cBus &&) = delete;
+
+  i2c_master_bus_handle_t handle() const { return handle_; }
+
+private:
+  i2c_master_bus_handle_t handle_{};
+};
+
+template <typename Bus> class I2C {
+public:
+  static constexpr std::array<HAL::Claim, 0> claims{};
+
+  // 400 kHz fast mode: every part on the UMC bus supports it, and the MPU6050
+  // tolerates it on its 1 MHz-capable lines
+  static constexpr uint32_t speed_hz = 400'000;
+  static constexpr int timeout_ms = 1000;
+
+  I2C(Swarm::Assembly, Bus &bus, uint8_t address)
+      : device_{detail::i2c_add_device(bus.handle(), address, speed_hz)} {}
+
+  ~I2C() { detail::i2c_remove_device(device_); }
+
+  I2C(const I2C &) = delete;
+  void operator=(const I2C &) = delete;
+  I2C(I2C &&) = delete;
+  void operator=(I2C &&) = delete;
+
+  std::expected<void, HAL::I2cError> write(std::span<const std::byte> tx) {
+    return detail::i2c_write(device_, tx, timeout_ms);
+  }
+
+  std::expected<void, HAL::I2cError> write_read(std::span<const std::byte> tx,
+                                                std::span<std::byte> rx) {
+    return detail::i2c_write_read(device_, tx, rx, timeout_ms);
+  }
+
+private:
+  i2c_master_dev_handle_t device_{};
 };
 
 class GPIO {
