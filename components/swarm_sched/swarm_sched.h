@@ -20,6 +20,8 @@
 namespace Sched {
 template <typename Body, size_t Capacity> using channel = Queue<Body, Capacity>;
 
+using signal = Signal;
+
 namespace detail {
 template <typename T> struct is_expected : std::false_type {};
 
@@ -46,11 +48,19 @@ constexpr decltype(auto) invoke_stage(F &fn, V &&value) {
   }
 }
 
-consteval uint32_t gcd(uint32_t a, uint32_t b) {
+constexpr uint32_t gcd(uint32_t a, uint32_t b) {
   return b == 0 ? a : gcd(b, a % b);
 }
 
-consteval uint32_t min_of(uint32_t a, uint32_t b) { return a < b ? a : b; }
+constexpr uint32_t min_of(uint32_t a, uint32_t b) { return a < b ? a : b; }
+
+// the tick counter wraps, so a deadline already behind `now` shows up as a huge
+// unsigned distance
+constexpr TickType_t ticks_until(TickType_t now, TickType_t deadline) {
+  const TickType_t distance = deadline - now;
+
+  return distance > portMAX_DELAY / 2 ? 0 : distance;
+}
 } // namespace detail
 
 // a period alone is not a source -- a pipeline carries one too, and nothing
@@ -152,6 +162,23 @@ struct watched_source {
   }
 };
 
+// no period: the task blocks on the signal and runs the pipeline as soon as it
+// is raised, which is the whole reason to prefer this over polling a queue
+struct signal_source {
+  static constexpr uint32_t period_ms = 0;
+
+  signal *raised;
+
+  [[nodiscard]] bool wait(TickType_t timeout) { return raised->wait(timeout); }
+
+  template <typename F> void poll(F &&emit) { emit(std::monostate{}); }
+};
+
+template <typename S>
+concept Awaited = Source<S> && requires(S source, TickType_t timeout) {
+  { source.wait(timeout) } -> std::same_as<bool>;
+};
+
 template <typename F, bool Terminal> struct stage {
   static constexpr bool terminal = Terminal;
 
@@ -177,6 +204,7 @@ template <Source Src, Stage... Stages> class pipeline {
 public:
   static constexpr uint32_t period_ms = Src::period_ms;
   static constexpr size_t stages = sizeof...(Stages);
+  static constexpr bool awaited = Awaited<Src>;
 
   constexpr pipeline(Src source, std::tuple<Stages...> stages)
       : source_(std::move(source)), stages_(std::move(stages)) {}
@@ -185,6 +213,12 @@ public:
     source_.poll([this](auto &&value) {
       step<0>(std::forward<decltype(value)>(value));
     });
+  }
+
+  [[nodiscard]] bool wait(TickType_t timeout)
+    requires awaited
+  {
+    return source_.wait(timeout);
   }
 
   [[nodiscard]] uint32_t drops() const { return drops_; }
@@ -287,6 +321,10 @@ constexpr auto watched(Channel &channel, typename Channel::value_type safe) {
       {&channel, safe, {safe, 0}}, {}};
 }
 
+constexpr auto on(signal &raised) {
+  return pipeline<signal_source>{signal_source{&raised}, {}};
+}
+
 template <uint32_t StackBytes, UBaseType_t Priority, typename... Pipes>
 class task {
 public:
@@ -299,15 +337,21 @@ public:
 
   static constexpr uint32_t shortest_ms = [] {
     uint32_t m = UINT32_MAX;
-    ((m = detail::min_of(m, Pipes::period_ms)), ...);
+    ((m = Pipes::period_ms > 0 ? detail::min_of(m, Pipes::period_ms) : m), ...);
     return m;
   }();
+
+  static constexpr bool periodic = ((Pipes::period_ms > 0) || ...);
+  static constexpr size_t awaited = (size_t{Pipes::awaited} + ... + 0);
 
   static_assert(sizeof...(Pipes) > 0, "a task with no pipelines does nothing");
   static_assert(((Pipes::stages > 0) && ...),
                 "a pipeline with no stages polls its source and throws every "
                 "value away -- give it a `to`");
-  static_assert(base_ms == shortest_ms,
+  static_assert(awaited <= 1,
+                "a task blocks on one thing at a time -- share one signal "
+                "between the interrupts, or give each pipeline its own task");
+  static_assert(not periodic || base_ms == shortest_ms,
                 "every period in a task must be a multiple of the shortest one "
                 "-- otherwise the derived wake period collapses toward 1ms. "
                 "Adjust the period or give the pipeline its own task");
@@ -337,6 +381,17 @@ public:
       return;
     }
 
+    if constexpr (awaited > 0) {
+      serve();
+    } else {
+      keep_time();
+    }
+  }
+
+  [[nodiscard]] uint32_t overruns() const { return overruns_; }
+
+private:
+  void keep_time() {
     TickType_t last = xTaskGetTickCount();
     uint32_t tick = 0;
 
@@ -349,14 +404,46 @@ public:
     }
   }
 
-  [[nodiscard]] uint32_t overruns() const { return overruns_; }
+  // the wait is bounded by the next period, so a periodic pipeline sharing this
+  // task keeps its rate with no interrupt arriving at all
+  void serve() {
+    const TickType_t period = pdMS_TO_TICKS(base_ms);
 
-private:
+    TickType_t deadline = xTaskGetTickCount() + period;
+    uint32_t tick = 0;
+
+    while (true) {
+      const TickType_t timeout =
+          periodic ? detail::ticks_until(xTaskGetTickCount(), deadline)
+                   : portMAX_DELAY;
+
+      std::apply([&](auto &...pipe) { (await(pipe, timeout), ...); }, pipes_);
+
+      if (periodic &&
+          detail::ticks_until(xTaskGetTickCount(), deadline) == 0) {
+        deadline += period;
+        ++tick;
+
+        std::apply([&](auto &...pipe) { (dispatch(pipe, tick), ...); }, pipes_);
+      }
+    }
+  }
+
+  template <typename Pipe> void await(Pipe &pipe, TickType_t timeout) {
+    if constexpr (Pipe::awaited) {
+      if (pipe.wait(timeout)) {
+        pipe.run();
+      }
+    }
+  }
+
   template <typename Pipe> void dispatch(Pipe &pipe, uint32_t tick) {
-    constexpr uint32_t divisor = Pipe::period_ms / base_ms;
+    if constexpr (not Pipe::awaited) {
+      constexpr uint32_t divisor = Pipe::period_ms / base_ms;
 
-    if (tick % divisor == 0) {
-      pipe.run();
+      if (tick % divisor == 0) {
+        pipe.run();
+      }
     }
   }
 

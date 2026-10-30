@@ -322,6 +322,10 @@ public:
     return 0;
   }
 
+  template <HAL::InterruptSignal Signal> void raise_on_irq(Signal &signal) {
+    gpio_.raise_on_rising_edge(Pins["irq"_p], signal);
+  }
+
   std::expected<uint32_t, HAL::SpiError> get_device_id() {
     return get_reg_view<DWMRegisterID::DEV_ID>().read().transform(
         [](uint64_t raw) { return static_cast<uint32_t>(raw); });

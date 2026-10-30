@@ -131,6 +131,32 @@ to stream rather than send once:
 ros2 topic pub -r 10 /<CONFIG_SWARM_ROS_NAMESPACE>/cmd_vel geometry_msgs/Twist '{linear: {x: 0.2}}'
 ```
 
+## Interrupts
+
+`Sched::on(signal)` is a pipeline source with no period: the task blocks on a
+`Sched::signal` and runs the pipeline as soon as it is raised. The ISR does
+nothing but raise it, because a register read over SPI can't happen in one.
+`ESP32::GPIO::raise_on_rising_edge(pin, signal)` is the hardware half, and
+`DWM::raise_on_irq(signal)` points it at the radio's own pin. A task may hold one `on` pipeline next to periodic ones, and they all run on that one task,
+so an initiator's kick and its IRQ handler can share a device without a lock:
+
+```cpp
+static Sched::signal uwb_irq;
+
+dwm_sensor.raise_on_irq(uwb_irq);
+
+static auto ranging = Sched::make_task<4096, configMAX_PRIORITIES - 3>(
+    Sched::every<HW::POLL_PERIOD_MS> |
+        Sched::to([&dwm_sensor] { return dwm_sensor.start_range(); }),
+    Sched::on(uwb_irq) |
+        Sched::to([&dwm_sensor] { return dwm_sensor.handle_interrupt(); }));
+```
+
+The signal is binary, so edges landing while the handler runs collapse into one:
+a handler reads the status register rather than counting wake-ups. The trigger is
+an edge, so a handler that leaves a status bit set holds the line high and no
+later event wakes it. Clear what you read.
+
 ## The IMU
 
 The MPU6050 hangs off the same I2C bus as the UMC. The split is the usual one:
@@ -214,9 +240,9 @@ patch applied yet.
 
 ## Testing
 
-Tests live in `components/dwm/test/`, `components/mpu6050/test/` and `components/swarm_hal/test/` (tagged Unity `TEST_CASE`s) and split into two tiers, launched via `test/run.py` (which builds the app then hands off to `pytest-embedded`). Run from inside the container:
+Tests live in `components/dwm/test/`, `components/mpu6050/test/`, `components/swarm_hal/test/` and `components/swarm_sched/test/` (tagged Unity `TEST_CASE`s) and split into two tiers, launched via `test/run.py` (which builds the app then hands off to `pytest-embedded`). Run from inside the container:
 
-- `./test/run.py host` — pure value-type, mock-bus and kinematics unit tests (`[dwm_data]`, `[dwm_mock]`, `[drive]`, `[motor]`, `[pid]`, `[odometry]`, `[control]`, `[watchdog]`, `[imu]`, `[mpu6050]`), built for the `linux` target and run natively, no board
+- `./test/run.py host` — pure value-type, mock-bus and kinematics unit tests (`[dwm_data]`, `[dwm_mock]`, `[drive]`, `[motor]`, `[pid]`, `[odometry]`, `[control]`, `[watchdog]`, `[imu]`, `[mpu6050]`, `[sched]`), built for the `linux` target and run natively, no board
 - `./test/run.py device` — on-device integration tests (`[dwm_reg]`, `[dwm]`) needing a real DW1000; pytest flashes and runs over serial
 - extra args pass through to pytest, e.g. `./test/run.py host -s`
 

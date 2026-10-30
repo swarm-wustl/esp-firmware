@@ -13,7 +13,7 @@ set(EXTRA_COMPONENT_DIRS "../components")
 # This can be overridden from CMake cache:
 # - when invoking CMake directly: cmake -D TEST_COMPONENTS="xxxxx" ..
 #
-set(TEST_COMPONENTS "dwm;encoders;mpu6050;swarm_hal" CACHE STRING "List of components to test")
+set(TEST_COMPONENTS "dwm;encoders;mpu6050;swarm_hal;swarm_sched" CACHE STRING "List of components to test")
 
 # On the host (linux) target, build only the closure the pure/mock tests need.
 # The default "build every discovered component" pulls in micro-ROS, which
@@ -23,8 +23,9 @@ set(TEST_COMPONENTS "dwm;encoders;mpu6050;swarm_hal" CACHE STRING "List of compo
 # relying on COMPONENTS to filter it out afterwards.
 if("${IDF_TARGET}" STREQUAL "linux")
     set(EXTRA_COMPONENT_DIRS "../components/dwm" "../components/encoders"
-                             "../components/mpu6050" "../components/swarm_hal")
-    set(COMPONENTS main dwm encoders mpu6050 swarm_hal)
+                             "../components/mpu6050" "../components/swarm_hal"
+                             "../components/swarm_queue" "../components/swarm_sched")
+    set(COMPONENTS main dwm encoders mpu6050 swarm_hal swarm_queue swarm_sched)
 endif()
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
