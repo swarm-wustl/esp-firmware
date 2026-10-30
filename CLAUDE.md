@@ -136,9 +136,9 @@ Shared, the same shape as `SpiBus`; `ESP32::I2C<Bus>` is one addressed device
 on it.
 
 TODO: the bus is declared on placeholder pins. NEWMCPCBV2 routes the UMC's
-SDA/SCL to pins the motors and the Makerfabs carrier already hold, so the imu
-task in `main.cpp` stays unspawned until the real pair goes in -- same
-situation as the ranging tasks.
+SDA/SCL to pins the motors and the Makerfabs carrier already hold. The imu task
+in `main.cpp` is spawned anyway, but it will likely sit retrying `who_am_i`
+until the real pair goes in.
 
 ## DW1000 references
 

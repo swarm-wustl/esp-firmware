@@ -140,9 +140,9 @@ using Dwm = DWM<SPI, GPIO, DWM_PINS, SpiBus>;
 // placeholder pins, free of everything above and wired to nothing: the MPU6050
 // shares the UMC's I2C bus, whose SDA/SCL NEWMCPCBV2 routes to pins the motors
 // and the carrier have already spoken for. Both are strapping pins, so this
-// pair is declarable rather than usable -- the imu task below stays unspawned
+// pair is declarable rather than usable -- the imu task below may not work
 // until the real pair goes in
-// TODO: replace with the UMC header's SDA/SCL and spawn the task
+// TODO: replace with the UMC header's SDA/SCL
 constexpr auto I2C_PINS =
     HAL::pins(HAL::NamedPin{"sda", GPIO_NUM_18, HAL::Use::Shared},
               HAL::NamedPin{"scl", GPIO_NUM_14, HAL::Use::Shared});
@@ -405,6 +405,7 @@ extern "C" void app_main(void) {
   ros.spawn("uros");
   motion.spawn("motion");
   odometry.spawn("odometry");
+  // may not work until I2C_PINS are corrected: expect who_am_i retries
   imu.spawn("imu");
 
   if constexpr (HW::kInitiator) {
