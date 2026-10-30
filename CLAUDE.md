@@ -203,7 +203,7 @@ patch applied yet.
 
 Tests live in `components/dwm/test/`, `components/mpu6050/test/` and `components/swarm_hal/test/` (tagged Unity `TEST_CASE`s) and split into two tiers, launched via `test/run.py` (which builds the app then hands off to `pytest-embedded`). Run from inside the container:
 
-- `./test/run.py host` — pure value-type, mock-bus and kinematics unit tests (`[dwm_data]`, `[dwm_mock]`, `[drive]`, `[motor]`, `[pid]`, `[odometry]`, `[imu]`, `[mpu6050]`), built for the `linux` target and run natively, no board
+- `./test/run.py host` — pure value-type, mock-bus and kinematics unit tests (`[dwm_data]`, `[dwm_mock]`, `[drive]`, `[motor]`, `[pid]`, `[odometry]`, `[control]`, `[imu]`, `[mpu6050]`), built for the `linux` target and run natively, no board
 - `./test/run.py device` — on-device integration tests (`[dwm_reg]`, `[dwm]`) needing a real DW1000; pytest flashes and runs over serial
 - extra args pass through to pytest, e.g. `./test/run.py host -s`
 

@@ -1,3 +1,4 @@
+#include "base.h"
 #include "differential_drive.h"
 #include "dwm.h"
 #include "encoders.h"
@@ -280,8 +281,7 @@ extern "C" void app_main(void) {
       Sched::held<HW::DRIVE_PERIOD_MS>(commands, Drive::Twist{}) |
           Sched::then(Drive::inverse_kinematics<HW::STYLE>) |
           Sched::to(
-              [&motors, &encoders, regulators = Drive::Regulators<HW::STYLE>{},
-               pose = Odometry::Pose{}](
+              [&motors, &encoders, state = Base::State<HW::STYLE>{}](
                   const Drive::WheelVelocities<HW::STYLE> &targets) mutable {
                 const auto measured = Arrays::map(
                     encoders.advance(), [](const Encoder::Reading &r) {
@@ -291,22 +291,14 @@ extern "C" void app_main(void) {
                                                           HW::CONTROL.period)};
                     });
 
-                const auto [next, frame] =
-                    Drive::regulate<HW::STYLE, HW::CONTROL>(regulators, targets,
-                                                            measured);
-                regulators = next;
-
-                motors.run(frame);
-
                 // I2C stays out of this loop: a stalled bus empties the mailbox
                 // and the heading falls back to the encoders
-                pose = Odometry::integrate(
-                    pose,
-                    Odometry::with_yaw_rate(
-                        Drive::forward_kinematics<HW::STYLE>(measured),
-                        yaw_rates.pop(0)),
-                    HW::CONTROL.period);
-                poses.overwrite(pose);
+                const auto [next, frame] = Base::step<HW::STYLE, HW::CONTROL>(
+                    state, targets, measured, yaw_rates.pop(0));
+                state = next;
+
+                motors.run(frame);
+                poses.overwrite(state.pose);
               }),
       Sched::latest<HW::MOTION_PERIOD_MS>(umc_commands) |
           Sched::then(Motor::ganged<HW::UmcDriver::motors>) |
