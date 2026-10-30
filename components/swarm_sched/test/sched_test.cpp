@@ -108,3 +108,66 @@ TEST_CASE("sched: periods keep running beside an interrupt", "[sched]") {
 
   TEST_ASSERT_INT_WITHIN(2, 20, ticks.load());
 }
+
+TEST_CASE("sched: on_start runs before the first pipeline", "[sched]") {
+  static Sched::signal raised;
+  static std::atomic<int> order{0};
+  static std::atomic<int> started_at{0};
+  static std::atomic<int> ran_at{0};
+
+  static std::atomic<int> calls{0};
+
+  static auto worker = Sched::make_task<4096, configMAX_PRIORITIES - 2>(
+      Sched::on_start([] {
+        ++calls;
+        started_at = ++order;
+        return true;
+      }) |
+      Sched::on(raised) | Sched::to([] { ran_at = ++order; }));
+
+  raised.raise();
+  worker.spawn("sched_start");
+  pause_ms(kPeriodMs);
+
+  TEST_ASSERT_EQUAL_INT(1, calls.load());
+  TEST_ASSERT_EQUAL_INT(1, started_at.load());
+  TEST_ASSERT_EQUAL_INT(2, ran_at.load());
+}
+
+TEST_CASE("sched: a failed on_start abandons the task", "[sched]") {
+  static std::atomic<int> second_setup{0};
+  static std::atomic<int> ticks{0};
+
+  static auto worker = Sched::make_task<4096, configMAX_PRIORITIES - 2>(
+      Sched::on_start([] { return false; }) | Sched::every<kPeriodMs> |
+          Sched::to([] { ++ticks; }),
+      Sched::on_start([] {
+        ++second_setup;
+        return true;
+      }) | Sched::every<kPeriodMs> |
+          Sched::to([] { ++ticks; }));
+
+  worker.spawn("sched_abandon");
+  pause_ms(3 * kPeriodMs);
+
+  TEST_ASSERT_EQUAL_INT(0, second_setup.load());
+  TEST_ASSERT_EQUAL_INT(0, ticks.load());
+}
+
+TEST_CASE("sched: on_start takes an expected<void, E>", "[sched]") {
+  auto ok = Sched::on_start([]() -> std::expected<void, int> { return {}; }) |
+            Sched::every<kPeriodMs> | Sched::to([] {});
+  auto bad = Sched::on_start([]() -> std::expected<void, int> {
+               return std::unexpected{1};
+             }) |
+             Sched::every<kPeriodMs> | Sched::to([] {});
+
+  TEST_ASSERT_TRUE(ok.start());
+  TEST_ASSERT_FALSE(bad.start());
+}
+
+TEST_CASE("sched: a pipeline with no on_start starts", "[sched]") {
+  auto pipe = Sched::every<kPeriodMs> | Sched::to([] {});
+
+  TEST_ASSERT_TRUE(pipe.start());
+}

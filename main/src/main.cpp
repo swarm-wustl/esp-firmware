@@ -229,10 +229,6 @@ static HW::PoseMailbox poses;
 static HW::YawRateMailbox yaw_rates;
 static ROS::session<HW::Node> session;
 
-// on_start takes a plain function pointer, so the task body reaches the sensor
-// through this rather than capturing it
-static HW::Mpu *imu_device = nullptr;
-
 static auto onTwist = [](const geometry_msgs__msg__Twist &twist) {
   const Drive::Twist body{twist.linear.x, twist.linear.y, twist.angular.z};
 
@@ -331,37 +327,65 @@ extern "C" void app_main(void) {
   // init runs on the uros task, not here: a dead agent must not stop motion
   // from spawning
   static auto ros = Sched::make_task<16000, configMAX_PRIORITIES - 1>(
+      // a false from on_start deletes the task, so one lost handshake used to
+      // cost cmd_vel until the next power cycle. init() unwinds itself on
+      // failure, so retrying is just a delay
+      Sched::on_start([] {
+        // TODO: this should really be encapsulated and part of ros declaration.
+        // See how streams includes the callback in its template parameters
+        while (!session.init() || !session.on<HW::CmdVel>(onTwist) ||
+               !session.on<HW::UmcCmd>(onUmc)) {
+          session.fini();
+
+          ESP_LOGW(TAG, "micro-ROS session init failed; retrying agent %s:%s",
+                   CONFIG_MICRO_ROS_AGENT_IP, CONFIG_MICRO_ROS_AGENT_PORT);
+
+          vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+
+        ESP_LOGI(TAG,
+                 "micro-ROS session up: /%s/base subscribed to cmd_vel, "
+                 "umc/front; publishing odom/pose",
+                 CONFIG_SWARM_ROS_NAMESPACE);
+
+        return true;
+      }) |
       Sched::every<HW::EXECUTOR_PERIOD_MS> |
       Sched::to([] { return session.poll(); }));
-
-  // TODO: encapsulate this
-  // a false from on_start deletes the task, so one lost handshake used to cost
-  // cmd_vel until the next power cycle. init() unwinds itself on failure, so
-  // retrying is just a delay
-  ros.on_start([] {
-    // TODO: this should really be encapsulated and part of ros declaration.
-    // See how streams includes the callback in its template parameters
-    while (!session.init() || !session.on<HW::CmdVel>(onTwist) ||
-           !session.on<HW::UmcCmd>(onUmc)) {
-      session.fini();
-
-      ESP_LOGW(TAG, "micro-ROS session init failed; retrying agent %s:%s",
-               CONFIG_MICRO_ROS_AGENT_IP, CONFIG_MICRO_ROS_AGENT_PORT);
-
-      vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-
-    ESP_LOGI(TAG,
-             "micro-ROS session up: /%s/base subscribed to cmd_vel, umc/front; "
-             "publishing odom/pose",
-             CONFIG_SWARM_ROS_NAMESPACE);
-
-    return true;
-  });
 
   // the bias estimate assumes the robot is still, so calibration belongs in
   // on_start rather than anywhere a command could already be moving it
   static auto imu = Sched::make_task<4096, configMAX_PRIORITIES - 4>(
+      Sched::on_start([&imu_sensor] {
+        while (true) {
+          if (auto id = imu_sensor.who_am_i()) {
+            ESP_LOGI(TAG, "MPU6050 id: 0x%02X", *id);
+            break;
+          } else {
+            ESP_LOGW(TAG, "MPU6050 id read failed; retrying");
+            vTaskDelay(pdMS_TO_TICKS(1000));
+          }
+        }
+
+        if (!imu_sensor.configure()) {
+          ESP_LOGE(TAG, "MPU6050 configure failed");
+
+          return false;
+        }
+
+        ESP_LOGI(TAG, "MPU6050 calibrating -- hold still");
+
+        if (const auto offsets = imu_sensor.calibrate()) {
+          ESP_LOGI(TAG, "MPU6050 gyro bias: %d %d %d counts", offsets->gyro.x,
+                   offsets->gyro.y, offsets->gyro.z);
+        } else {
+          ESP_LOGE(TAG, "MPU6050 calibration failed");
+
+          return false;
+        }
+
+        return true;
+      }) |
       Sched::every<HW::IMU_PERIOD_MS> |
       Sched::then([&imu_sensor] { return imu_sensor.read_sample(); }) |
       Sched::to([](const Imu::Sample &sample) {
@@ -374,42 +398,6 @@ extern "C" void app_main(void) {
                  sample.gyro.x, sample.gyro.y, sample.gyro.z, sample.accel.x,
                  sample.accel.y, sample.accel.z, sample.temperature_c);
       }));
-
-  imu_device = &imu_sensor;
-
-  imu.on_start([] {
-    HW::Mpu &sensor = *imu_device;
-    while(true){
-
-      if (auto id = sensor.who_am_i()) {
-        ESP_LOGI(TAG, "MPU6050 id: 0x%02X", *id);
-        break;
-      } else {
-        ESP_LOGW(TAG, "MPU6050 id read failed; retrying");
-        vTaskDelay(pdMS_TO_TICKS(1000));
-      }
-
-    }
-
-    if (!sensor.configure()) {
-      ESP_LOGE(TAG, "MPU6050 configure failed");
-
-      return false;
-    }
-
-    ESP_LOGI(TAG, "MPU6050 calibrating -- hold still");
-
-    if (const auto offsets = sensor.calibrate()) {
-      ESP_LOGI(TAG, "MPU6050 gyro bias: %d %d %d counts", offsets->gyro.x,
-               offsets->gyro.y, offsets->gyro.z);
-    } else {
-      ESP_LOGE(TAG, "MPU6050 calibration failed");
-
-      return false;
-    }
-
-    return true;
-  });
 
   ros.spawn("uros");
   motion.spawn("motion");

@@ -153,10 +153,9 @@ struct watched_source {
       newest = msg;
     }
 
-    feed = Watchdog::observe(feed, newest,
-                             {.safe = safe,
-                              .timeout_ms = TimeoutMs,
-                              .period_ms = PeriodMs});
+    feed = Watchdog::observe(
+        feed, newest,
+        {.safe = safe, .timeout_ms = TimeoutMs, .period_ms = PeriodMs});
 
     emit(feed.value);
   }
@@ -177,6 +176,25 @@ struct signal_source {
 template <typename S>
 concept Awaited = Source<S> && requires(S source, TickType_t timeout) {
   { source.wait(timeout) } -> std::same_as<bool>;
+};
+
+template <Source Src, typename F> struct started_source {
+  static constexpr uint32_t period_ms = Src::period_ms;
+
+  F fn;
+  Src source;
+
+  [[nodiscard]] bool start() { return static_cast<bool>(fn()); }
+
+  [[nodiscard]] bool wait(TickType_t timeout)
+    requires Awaited<Src>
+  {
+    return source.wait(timeout);
+  }
+
+  template <typename E> void poll(E &&emit) {
+    source.poll(std::forward<E>(emit));
+  }
 };
 
 template <typename F, bool Terminal> struct stage {
@@ -200,6 +218,24 @@ template <typename F> constexpr auto to(F fn) {
   return stage<F, true>{std::move(fn)};
 }
 
+template <typename F> struct startup {
+  F fn;
+};
+
+// Either a boolean or a expected<void, E>
+template <typename R>
+concept StartResult = std::same_as<std::decay_t<R>, bool> ||
+                      (detail::yields_nothing_v<R> && not std::is_void_v<R>);
+
+// run once on the task itself, before its loop -- for work that must happen
+// where the pipelines run rather than on the caller's task. A falsy result
+// abandons the task
+template <typename F>
+  requires StartResult<std::invoke_result_t<F &>>
+constexpr auto on_start(F fn) {
+  return startup<F>{std::move(fn)};
+}
+
 template <Source Src, Stage... Stages> class pipeline {
 public:
   static constexpr uint32_t period_ms = Src::period_ms;
@@ -221,7 +257,20 @@ public:
     return source_.wait(timeout);
   }
 
+  [[nodiscard]] bool start() {
+    if constexpr (requires { source_.start(); }) {
+      return source_.start();
+    } else {
+      return true;
+    }
+  }
+
   [[nodiscard]] uint32_t drops() const { return drops_; }
+
+  template <typename F> constexpr auto started_by(F fn) && {
+    return pipeline<started_source<Src, F>>{{std::move(fn), std::move(source_)},
+                                            {}};
+  }
 
   template <Stage Next> constexpr auto append(Next next) && {
     static_assert(not ends_in_sink,
@@ -294,6 +343,13 @@ constexpr auto operator|(pipeline<Src, Stages...> pipe, Next next) {
   return std::move(pipe).append(std::move(next));
 }
 
+// the bare pipeline on the right is what puts this before the source: stages
+// attach to the left, so once one exists this overload no longer matches
+template <typename F, Source Src>
+constexpr auto operator|(startup<F> setup, pipeline<Src> pipe) {
+  return std::move(pipe).started_by(std::move(setup.fn));
+}
+
 template <uint32_t PeriodMs>
 inline constexpr auto every =
     pipeline<timer_source<PeriodMs>>{timer_source<PeriodMs>{}, {}};
@@ -309,9 +365,9 @@ constexpr auto latest(Channel &channel) {
 }
 
 template <uint32_t PeriodMs, typename Channel>
-constexpr auto held(
-    Channel &channel,
-    std::optional<typename Channel::value_type> initial = std::nullopt) {
+constexpr auto
+held(Channel &channel,
+     std::optional<typename Channel::value_type> initial = std::nullopt) {
   return pipeline<held_source<PeriodMs, Channel>>{{&channel, initial}, {}};
 }
 
@@ -356,14 +412,7 @@ public:
                 "-- otherwise the derived wake period collapses toward 1ms. "
                 "Adjust the period or give the pipeline its own task");
 
-  using setup_fn = bool (*)();
-
   constexpr explicit task(Pipes... pipes) : pipes_(std::move(pipes)...) {}
-
-  // run once on the task itself, before the loop -- for work that must happen
-  // where the pipelines run rather than on the caller's task. Returning false
-  // abandons the task
-  void on_start(setup_fn setup) { setup_ = setup; }
 
   // the task body dereferences `this`, so the object has to outlive the task --
   // static storage, not a local
@@ -377,7 +426,8 @@ public:
   }
 
   void run() {
-    if (setup_ != nullptr && !setup_()) {
+    if (!std::apply([](auto &...pipe) { return (pipe.start() && ...); },
+                    pipes_)) {
       return;
     }
 
@@ -419,8 +469,7 @@ private:
 
       std::apply([&](auto &...pipe) { (await(pipe, timeout), ...); }, pipes_);
 
-      if (periodic &&
-          detail::ticks_until(xTaskGetTickCount(), deadline) == 0) {
+      if (periodic && detail::ticks_until(xTaskGetTickCount(), deadline) == 0) {
         deadline += period;
         ++tick;
 
@@ -448,7 +497,6 @@ private:
   }
 
   std::tuple<Pipes...> pipes_;
-  setup_fn setup_ = nullptr;
   uint32_t overruns_ = 0;
 };
 

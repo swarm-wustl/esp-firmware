@@ -152,6 +152,16 @@ static auto ranging = Sched::make_task<4096, configMAX_PRIORITIES - 3>(
         Sched::to([&dwm_sensor] { return dwm_sensor.handle_interrupt(); }));
 ```
 
+Setup that has to run on the task goes in front of a source, and each pipeline in
+the task carries its own. They run in declaration order before the loop, and a
+falsy result abandons the task:
+
+```cpp
+Sched::on_start([&dwm_sensor] { return dwm_sensor.start_responder(); }) |
+    Sched::on(uwb_irq) |
+    Sched::to([&dwm_sensor] { return dwm_sensor.handle_interrupt(); })
+```
+
 The signal is binary, so edges landing while the handler runs collapse into one:
 a handler reads the status register rather than counting wake-ups. The trigger is
 an edge, so a handler that leaves a status bit set holds the line high and no
