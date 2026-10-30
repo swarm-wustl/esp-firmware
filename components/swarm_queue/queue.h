@@ -3,6 +3,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include <concepts>
 #include <expected>
 #include <optional>
@@ -66,6 +67,38 @@ private:
   StaticQueue_t control{};
   alignas(Body) uint8_t storage[Capacity * sizeof(Body)]{};
   QueueHandle_t handle;
+};
+
+// a wake-up with no payload, raised from an ISR. Binary, so edges that land
+// while the waiter is busy collapse into one -- the waiter has to read whatever
+// status the hardware latched, not count wake-ups
+class Signal {
+public:
+  Signal() : handle(xSemaphoreCreateBinaryStatic(&control)) {}
+
+  ~Signal() { vSemaphoreDelete(handle); }
+
+  Signal(const Signal &) = delete;
+  Signal &operator=(const Signal &) = delete;
+  Signal(Signal &&) = delete;
+  Signal &operator=(Signal &&) = delete;
+
+  void raise() { xSemaphoreGive(handle); }
+
+  void raise_from_isr() {
+    BaseType_t woken = pdFALSE;
+
+    xSemaphoreGiveFromISR(handle, &woken);
+    portYIELD_FROM_ISR(woken);
+  }
+
+  [[nodiscard]] bool wait(TickType_t timeout = portMAX_DELAY) {
+    return xSemaphoreTake(handle, timeout) == pdTRUE;
+  }
+
+private:
+  StaticSemaphore_t control{};
+  SemaphoreHandle_t handle;
 };
 
 #endif
