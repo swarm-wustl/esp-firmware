@@ -7,6 +7,13 @@
 #include "session.h"
 #include "swarm_sched.h"
 #include "system.h"
+#include "sdkconfig.h"
+
+#ifdef CONFIG_K_INITIATOR
+  constexpr bool K_INITIATOR = true;
+#else
+  constexpr bool K_INITIATOR = false;
+#endif
 
 #include "esp_log.h"
 
@@ -143,8 +150,6 @@ constexpr uint32_t ODOMETRY_PERIOD_MS = 500;
 constexpr uint32_t IMU_PERIOD_MS = 100;
 constexpr uint32_t POLL_PERIOD_MS = 100;
 
-// bring-up: flip to false on the responder board
-constexpr bool kInitiator = true;
 } // namespace HW
 
 static HW::CmdChannel commands;
@@ -328,7 +333,8 @@ extern "C" void app_main(void) {
   odometry.spawn("odometry");
   imu.spawn("imu");
 
-  if constexpr (HW::kInitiator) {
+  if constexpr (K_INITIATOR) {
+    ESP_LOGI(TAG, "k initiator true");
     [[maybe_unused]] static auto ranging =
         Sched::make_task<4096, configMAX_PRIORITIES - 3>(
             Sched::every<HW::POLL_PERIOD_MS> |
@@ -341,6 +347,7 @@ extern "C" void app_main(void) {
 
     // ranging.spawn("ranging");
   } else {
+    ESP_LOGI(TAG, "k initiator false");
     // the responder measures t_reply on its own crystal and drift multiplies
     // it, so this task must not be preempted between rx(poll) and tx(reply)
     [[maybe_unused]] static auto responding =
