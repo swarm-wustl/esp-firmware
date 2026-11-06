@@ -41,6 +41,16 @@ static void fill_range(sensor_msgs__msg__Range &msg, const double &meters) {
   msg.range = static_cast<float>(meters);
 }
 
+static Drive::Twist read_twist(const geometry_msgs__msg__Twist &msg) {
+  return {msg.linear.x, msg.linear.y, msg.angular.z};
+}
+
+static double read_effort(const std_msgs__msg__Float32 &msg) {
+  ESP_LOGI(TAG, "umc/front: %+.2f", static_cast<double>(msg.data));
+
+  return msg.data;
+}
+
 // row-major 6x6 over (x, y, z, roll, pitch, yaw). A planar base never measures
 // z, roll or pitch, so those are given a variance large enough that an EKF
 // ignores them rather than one of zero, which it would take as certainty
@@ -164,9 +174,11 @@ using Mpu = MPU6050::Sensor<I2C, GPIO, IMU_CONFIG, I2cBus>;
 using Chassis = Swarm::chassis<STYLE, MotorDriver, SpiBus, Dwm, EncoderBank,
                                UmcDriver, I2cBus, Mpu>;
 
-using CmdVel = ROS::subscribes<geometry_msgs__msg__Twist, "cmd_vel">;
+using CmdVel = ROS::receives<geometry_msgs__msg__Twist, "cmd_vel", Drive::Twist,
+                             &read_twist>;
 
-using UmcCmd = ROS::subscribes<std_msgs__msg__Float32, "umc/front">;
+using UmcCmd =
+    ROS::receives<std_msgs__msg__Float32, "umc/front", double, &read_effort>;
 
 using UwbRange = ROS::streams<sensor_msgs__msg__Range, "uwb/range", "uwb_link",
                               double, &fill_range>;
@@ -180,8 +192,6 @@ using OdomPose =
 using Node = ROS::node<"base", CONFIG_SWARM_ROS_NAMESPACE, CmdVel, UmcCmd,
                        UwbRange, OdomPose>;
 
-using CmdChannel = Sched::channel<Drive::Twist, 4>;
-using UmcChannel = Sched::channel<double, 4>;
 using PoseMailbox = Sched::channel<Odometry::Pose, 1>;
 using YawRateMailbox = Sched::channel<double, 1>;
 
@@ -223,29 +233,9 @@ constexpr uint32_t POLL_PERIOD_MS = 100;
 constexpr bool kInitiator = true;
 } // namespace HW
 
-static HW::CmdChannel commands;
-static HW::UmcChannel umc_commands;
 static HW::PoseMailbox poses;
 static HW::YawRateMailbox yaw_rates;
 static ROS::session<HW::Node> session;
-
-static auto onTwist = [](const geometry_msgs__msg__Twist &twist) {
-  const Drive::Twist body{twist.linear.x, twist.linear.y, twist.angular.z};
-
-  if (!commands.push(body, 0)) {
-    ESP_LOGW(TAG, "Dropped twist: command channel full");
-  }
-};
-
-// TODO: maybe make a clean wrapper to handle channel pushing, instead of
-// needing onTwist, onUmc, etc. dont like having these separate.
-static auto onUmc = [](const std_msgs__msg__Float32 &effort) {
-  ESP_LOGI(TAG, "umc/front: %+.2f", static_cast<double>(effort.data));
-
-  if (!umc_commands.push(effort.data, 0)) {
-    ESP_LOGW(TAG, "Dropped UMC effort: command channel full");
-  }
-};
 
 extern "C" void app_main(void) {
   ESP_LOGI(TAG, "FreeRTOS tick: %d Hz", CONFIG_FREERTOS_HZ);
@@ -280,7 +270,7 @@ extern "C" void app_main(void) {
       // the loop integrates odometry, so it has to run from boot rather than
       // from the first cmd_vel. A zero twist coasts the wheels while it does
       Sched::watched<HW::DRIVE_PERIOD_MS, HW::CMD_VEL_TIMEOUT_MS>(
-          commands, Drive::Twist{}) |
+          session.inbox<HW::CmdVel>(), Drive::Twist{}) |
           Sched::then(Drive::inverse_kinematics<HW::STYLE>) |
           Sched::to(
               [&motors, &encoders, state = Base::State<HW::STYLE>{}](
@@ -302,7 +292,7 @@ extern "C" void app_main(void) {
                 motors.run(frame);
                 poses.overwrite(state.pose);
               }),
-      Sched::latest<HW::MOTION_PERIOD_MS>(umc_commands) |
+      Sched::latest<HW::MOTION_PERIOD_MS>(session.inbox<HW::UmcCmd>()) |
           Sched::then(Motor::ganged<HW::UmcDriver::motors>) |
           Sched::to([&umc](const auto &frame) {
             for (const Motor::Command &cmd : frame.commands) {
@@ -327,31 +317,7 @@ extern "C" void app_main(void) {
   // init runs on the uros task, not here: a dead agent must not stop motion
   // from spawning
   static auto ros = Sched::make_task<16000, configMAX_PRIORITIES - 1>(
-      // a false from on_start deletes the task, so one lost handshake used to
-      // cost cmd_vel until the next power cycle. init() unwinds itself on
-      // failure, so retrying is just a delay
-      Sched::on_start([] {
-        // TODO: this should really be encapsulated and part of ros declaration.
-        // See how streams includes the callback in its template parameters
-        while (!session.init() || !session.on<HW::CmdVel>(onTwist) ||
-               !session.on<HW::UmcCmd>(onUmc)) {
-          session.fini();
-
-          ESP_LOGW(TAG, "micro-ROS session init failed; retrying agent %s:%s",
-                   CONFIG_MICRO_ROS_AGENT_IP, CONFIG_MICRO_ROS_AGENT_PORT);
-
-          vTaskDelay(pdMS_TO_TICKS(1000));
-        }
-
-        ESP_LOGI(TAG,
-                 "micro-ROS session up: /%s/base subscribed to cmd_vel, "
-                 "umc/front; publishing odom/pose",
-                 CONFIG_SWARM_ROS_NAMESPACE);
-
-        return true;
-      }) |
-      Sched::every<HW::EXECUTOR_PERIOD_MS> |
-      Sched::to([] { return session.poll(); }));
+      ROS::serve<HW::EXECUTOR_PERIOD_MS>(session));
 
   // the bias estimate assumes the robot is still, so calibration belongs in
   // on_start rather than anywhere a command could already be moving it

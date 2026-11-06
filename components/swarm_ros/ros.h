@@ -8,6 +8,7 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
 namespace ROS {
 template <size_t N> struct name {
@@ -51,17 +52,27 @@ constexpr const rmw_qos_profile_t *profile_for(QoS qos) {
                               : &rmw_qos_profile_sensor_data;
 }
 
-struct subscription_kind {};
+struct receive_kind {};
 struct publisher_kind {};
 struct stream_kind {};
 
-template <Described Msg, name Topic, QoS Q = QoS::SENSOR_DATA>
-struct subscribes {
-  using kind = subscription_kind;
+// the inbound mirror of streams: the session reads each message into a payload
+// and pushes it onto a channel it owns, so a consumer on another task only ever
+// sees a plain value
+template <Described Msg, name Topic, typename Payload, auto Read,
+          size_t Depth = 4, QoS Q = QoS::SENSOR_DATA>
+struct receives {
+  using kind = receive_kind;
   using message_type = Msg;
+  using payload_type = Payload;
 
   static constexpr auto topic = Topic;
+  static constexpr auto read = Read;
+  static constexpr size_t depth = Depth;
   static constexpr QoS qos = Q;
+
+  static_assert(std::is_invocable_r_v<Payload, decltype(Read), const Msg &>,
+                "Read must be callable as Read(message) -> Payload");
 };
 
 template <Described Msg, name Topic, QoS Q = QoS::SENSOR_DATA>
@@ -94,7 +105,7 @@ struct streams {
 };
 
 template <typename T>
-concept Subscribes = std::same_as<typename T::kind, subscription_kind>;
+concept Receives = std::same_as<typename T::kind, receive_kind>;
 
 template <typename T>
 concept Publishes = std::same_as<typename T::kind, publisher_kind>;
@@ -103,7 +114,7 @@ template <typename T>
 concept Streams = std::same_as<typename T::kind, stream_kind>;
 
 template <typename T>
-concept Declaration = Subscribes<T> || Publishes<T> || Streams<T>;
+concept Declaration = Receives<T> || Publishes<T> || Streams<T>;
 
 namespace detail {
 template <Declaration... Decls> consteval bool topics_unique() {
@@ -138,7 +149,7 @@ template <name Name, name Namespace, Declaration... Decls> struct node {
   static constexpr auto node_namespace = Namespace;
 
   static constexpr size_t subscriptions =
-      (0 + ... + (Subscribes<Decls> ? 1 : 0));
+      (0 + ... + (Receives<Decls> ? 1 : 0));
   static constexpr size_t publishers =
       (0 + ... + ((Publishes<Decls> || Streams<Decls>) ? 1 : 0));
 
