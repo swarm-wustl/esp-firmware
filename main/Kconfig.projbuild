@@ -1,0 +1,7 @@
+menu "My Application Settings"
+
+  config K_INITIATOR
+    bool "Ultrawide band test initiator"
+    default n
+
+endmenu
