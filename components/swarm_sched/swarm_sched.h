@@ -218,6 +218,8 @@ template <typename F> constexpr auto to(F fn) {
   return stage<F, true>{std::move(fn)};
 }
 
+// Isn't a Source or Stage, so this doesn't get pattern matched in the global
+// operator| functions. This makes the chaining we want work properly.
 template <typename F> struct startup {
   F fn;
 };
