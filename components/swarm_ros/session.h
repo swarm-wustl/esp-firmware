@@ -3,6 +3,9 @@
 
 #include "queue.h"
 #include "ros.h"
+#include "swarm_sched.h"
+
+#include "esp_log.h"
 
 #ifdef CONFIG_MICRO_ROS_ESP_XRCE_DDS_MIDDLEWARE
 #include <rmw_microros/rmw_microros.h>
@@ -29,7 +32,6 @@ enum class Error : uint8_t {
   node,
   executor,
   entity,
-  handler,
   publish,
   spin,
 };
@@ -39,11 +41,14 @@ bool check(rcl_ret_t status, const char *what);
 namespace detail {
 template <Declaration Decl> struct entity;
 
-template <Subscribes Decl> struct entity<Decl> {
+template <Receives Decl> struct entity<Decl> {
   using declaration = Decl;
+  using channel_type = Sched::channel<typename Decl::payload_type, Decl::depth>;
 
   rcl_subscription_t handle{};
   typename Decl::message_type storage{};
+  channel_type channel{};
+  uint32_t dropped = 0;
   bool created = false;
 };
 
@@ -185,27 +190,18 @@ public:
     stage_ = stage::none;
   }
 
-  template <Subscribes Decl, typename Handler>
-    requires declared<Decl> &&
-             std::invocable<Handler, const typename Decl::message_type &>
-  [[nodiscard]] std::expected<void, Error> on(Handler &handler) {
-    auto &e = std::get<detail::entity<Decl>>(entities);
+  // outlives fini(), so a consumer can hold it across reconnects and simply
+  // sees nothing while the session is down
+  template <Receives Decl>
+    requires declared<Decl>
+  [[nodiscard]] auto &inbox() {
+    return std::get<detail::entity<Decl>>(entities).channel;
+  }
 
-    const bool added = check(
-        rclc_executor_add_subscription_with_context(
-            &executor, &e.handle, &e.storage,
-            [](const void *msg, void *context) {
-              (*static_cast<Handler *>(context))(
-                  *static_cast<const typename Decl::message_type *>(msg));
-            },
-            &handler, ON_NEW_DATA),
-        "add subscription");
-
-    if (!added) {
-      return std::unexpected{Error::handler};
-    }
-
-    return {};
+  template <Receives Decl>
+    requires declared<Decl>
+  [[nodiscard]] uint32_t drops() const {
+    return std::get<detail::entity<Decl>>(entities).dropped;
   }
 
   // callable from any task: a queue push, no rcl contact. Timeout 0, so a
@@ -287,13 +283,32 @@ private:
     const rosidl_message_type_support_t *type_support =
         message<typename Decl::message_type>::type_support();
 
-    if constexpr (Subscribes<Decl>) {
+    if constexpr (Receives<Decl>) {
       e.created =
           check(rclc_subscription_init(&e.handle, &handle, type_support,
                                        Decl::topic, profile_for(Decl::qos)),
                 Decl::topic);
 
-      return e.created;
+      // timeout 0: the executor must not stall on a consumer that fell behind
+      return e.created &&
+             check(rclc_executor_add_subscription_with_context(
+                       &executor, &e.handle, &e.storage,
+                       [](const void *msg, void *context) {
+                         auto &self = *static_cast<Entity *>(context);
+
+                         if (!self.channel.push(
+                                 Decl::read(*static_cast<
+                                            const typename Decl::message_type *>(
+                                     msg)),
+                                 0)) {
+                           ++self.dropped;
+
+                           ESP_LOGW("ros", "Dropped %s: channel full",
+                                    static_cast<const char *>(Decl::topic));
+                         }
+                       },
+                       &e, ON_NEW_DATA),
+                   "add subscription");
     } else {
       if (!check(rclc_publisher_init(&e.handle, &handle, type_support,
                                      Decl::topic, profile_for(Decl::qos)),
@@ -321,7 +336,7 @@ private:
       return;
     }
 
-    if constexpr (Subscribes<Decl>) {
+    if constexpr (Receives<Decl>) {
       rcl_subscription_fini(&e.handle, &handle);
     } else {
       rcl_publisher_fini(&e.handle, &handle);
@@ -374,6 +389,34 @@ private:
   bool synchronised = true;
   stage stage_ = stage::none;
 };
+
+// a false from on_start deletes the task, so one lost handshake used to cost
+// cmd_vel until the next power cycle. init() unwinds itself on failure, so
+// retrying is just a delay
+template <uint32_t PeriodMs, name Name, name Namespace, Declaration... Decls>
+auto serve(session<node<Name, Namespace, Decls...>> &s) {
+  return Sched::on_start([&s] {
+           while (!s.init()) {
+             ESP_LOGW("ros", "session init failed; retrying agent %s:%s",
+                      CONFIG_MICRO_ROS_AGENT_IP, CONFIG_MICRO_ROS_AGENT_PORT);
+
+             vTaskDelay(pdMS_TO_TICKS(1000));
+           }
+
+           ESP_LOGI("ros", "session up: /%s/%s",
+                    static_cast<const char *>(Namespace),
+                    static_cast<const char *>(Name));
+
+           ([] {
+             ESP_LOGI("ros", "  %s %s",
+                      Receives<Decls> ? "subscribed to" : "publishing",
+                      static_cast<const char *>(Decls::topic));
+           }(), ...);
+
+           return true;
+         }) |
+         Sched::every<PeriodMs> | Sched::to([&s] { return s.poll(); });
+}
 } // namespace ROS
 
 #endif

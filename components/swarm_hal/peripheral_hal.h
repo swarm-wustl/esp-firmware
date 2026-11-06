@@ -44,6 +44,11 @@ concept GenericPWMController =
       { pwm.set_duty_ratio(channel, ratio) } -> std::same_as<void>;
     };
 
+template <typename S>
+concept InterruptSignal = requires(S signal) {
+  { signal.raise_from_isr() } -> std::same_as<void>;
+};
+
 template <typename GPIO>
 concept GenericGPIOController =
     requires(GPIO gpio, Pin pin, PinMode mode, Voltage voltage, int ms) {

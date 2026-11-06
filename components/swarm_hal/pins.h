@@ -6,6 +6,7 @@
 #include <string_view>
 #include <utility>
 
+#include "arrays.h"
 #include "resources.h"
 
 namespace HAL {
@@ -89,11 +90,26 @@ consteval auto pins(Entries... es) {
 
   // a repeated label would make the lookup silently resolve to whichever
   // entry came first while still claiming both pins
-  if (unique_names(labels)) {
+  if (Arrays::distinct(labels)) {
     return PinSet<sizeof...(Entries)>{{es...}};
   }
 
   std::unreachable();
+}
+
+template <auto Table, fixed_string L> consteval auto pin_column() {
+  return [&]<size_t... I>(std::index_sequence<I...>) {
+    return std::array<Pin, sizeof...(I)>{Table[I].pins()[L]...};
+  }(std::make_index_sequence<Table.size()>{});
+}
+
+// a row of a pin table takes its pins plus whatever one channel it names -- a
+// PWM channel, a PCNT unit
+template <auto Table, typename F> consteval auto row_claims(F channel) {
+  return [&]<size_t... I>(std::index_sequence<I...>) {
+    return Arrays::concat(Arrays::concat(Table[I].pins().claims(),
+                                         std::array{channel(Table[I])})...);
+  }(std::make_index_sequence<Table.size()>{});
 }
 } // namespace HAL
 

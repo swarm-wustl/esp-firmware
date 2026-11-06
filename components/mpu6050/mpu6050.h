@@ -8,6 +8,7 @@
 #include <span>
 #include <utility>
 
+#include "arrays.h"
 #include "assembly.h"
 #include "imu.h"
 #include "peripheral_hal.h"
@@ -139,7 +140,7 @@ template <HAL::GenericI2CController I2C, HAL::GenericGPIOController GPIO,
           Config Cfg, typename Bus, Address Addr = Address::Low>
 class Sensor {
 public:
-  static constexpr auto claims = HAL::concat(I2C::claims, GPIO::claims);
+  static constexpr auto claims = Arrays::concat(I2C::claims, GPIO::claims);
 
   using needs = Swarm::needs<Bus>;
 

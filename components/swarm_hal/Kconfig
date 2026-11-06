@@ -1,0 +1,13 @@
+menu "My Robot Dimensions"
+
+    config K_WHEEL_RADIUS_MM
+        int "Wheel radius (mm)"
+        range 1 500
+        default 33
+
+    config K_HALF_TRACK_MM
+        int "Half track, center to wheel (mm)"
+        range 1 1000
+        default 75
+
+endmenu

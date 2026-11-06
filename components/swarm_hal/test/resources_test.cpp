@@ -84,8 +84,8 @@ TEST_CASE("claims: shared claims coexist, mixing with exclusive does not",
 }
 
 TEST_CASE("roster: names must be unique", "[resources]") {
-  static_assert(HAL::unique_names(kDifferentialRoster));
-  static_assert(!HAL::unique_names(kDuplicated));
+  static_assert(Arrays::distinct(kDifferentialRoster));
+  static_assert(!Arrays::distinct(kDuplicated));
   TEST_ASSERT_TRUE(true);
 }
 

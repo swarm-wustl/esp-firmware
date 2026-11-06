@@ -16,6 +16,7 @@
 #include <expected>
 #include <span>
 
+#include "arrays.h"
 #include "assembly.h"
 #include "driver/gpio.h"
 #include "encoder.h"
@@ -112,9 +113,9 @@ public:
   static constexpr int port = Port;
 
   static constexpr auto claims =
-      HAL::concat(Pins.claims(),
-                  std::array{HAL::Claim{HAL::Resource::I2cPort, Port,
-                                        HAL::Use::Exclusive}});
+      Arrays::concat(Pins.claims(),
+                     std::array{HAL::Claim{HAL::Resource::I2cPort, Port,
+                                           HAL::Use::Exclusive}});
 
   explicit I2cBus(Swarm::Assembly)
       : handle_{detail::i2c_open_bus(Port, Pins["sda"_p].number(),
@@ -165,6 +166,10 @@ private:
   i2c_master_dev_handle_t device_{};
 };
 
+namespace detail {
+void gpio_on_rising_edge(int pin, void (*isr)(void *), void *arg);
+} // namespace detail
+
 class GPIO {
 public:
   // an accessor, not an owner: it takes no hardware of its own, but it is
@@ -188,6 +193,15 @@ public:
   void set_level(HAL::Pin pin, HAL::Voltage level) {
     gpio_set_level(static_cast<gpio_num_t>(pin.number()), HAL::to_level(level));
   }
+  // the bus can't be touched from an ISR, so all an edge can do is wake a task
+  template <HAL::InterruptSignal Signal>
+  void raise_on_rising_edge(HAL::Pin pin, Signal &signal) {
+    detail::gpio_on_rising_edge(
+        pin.number(),
+        [](void *arg) { static_cast<Signal *>(arg)->raise_from_isr(); },
+        &signal);
+  }
+
   void delay_ms(int ms) {
     // a nonzero delay must be at least one tick, else pdMS_TO_TICKS rounds sub-
     // tick values to 0 -> vTaskDelay(0) never yields -> idle task starves

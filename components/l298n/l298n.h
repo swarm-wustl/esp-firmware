@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <utility>
 
+#include "arrays.h"
 #include "assembly.h"
 #include "motor.h"
 #include "swarm_hal.h"
@@ -26,47 +27,12 @@ struct MotorPins {
   }
 };
 
-template <auto Table, HAL::fixed_string L> consteval auto pin_column() {
-  return [&]<size_t... I>(std::index_sequence<I...>) {
-    return std::array<HAL::Pin, sizeof...(I)>{
-        Table[I].pins()[L]...};
-  }(std::make_index_sequence<Table.size()>{});
-}
-
-template <size_t N>
-consteval auto roster_of(const std::array<MotorPins, N> &pins) {
-  std::array<Motor::Name, N> names{};
-
-  for (size_t i = 0; i < N; ++i) {
-    names[i] = pins[i].name;
-  }
-
-  return names;
-}
-
-template <size_t N>
-consteval auto claims_of(const std::array<MotorPins, N> &table) {
-  std::array<HAL::Claim, N * 4> claims{};
-  size_t next = 0;
-
-  for (const MotorPins &motor : table) {
-    for (const HAL::Claim &claim : motor.pins().claims()) {
-      claims[next++] = claim;
-    }
-
-    claims[next++] = {HAL::Resource::PwmChannel, motor.pwm_channel,
-                      HAL::Use::Exclusive};
-  }
-
-  return claims;
-}
-
 template <std::same_as<MotorPins>... Pins> consteval auto motors(Pins... pins) {
   const std::array table{pins...};
 
   // two rows naming the same motor are not a constant expression, so the
   // declaration fails to build
-  if (HAL::unique_names(roster_of(table))) {
+  if (Arrays::distinct(Arrays::map(table, &MotorPins::name))) {
     return table;
   }
 
@@ -78,10 +44,15 @@ template <HAL::GenericGPIOController GPIO, HAL::GenericPWMController PWM,
   requires HAL::Claiming<PWM>
 class MotorDriver {
 public:
-  static constexpr auto motors = roster_of(Pins);
+  static constexpr auto motors = Arrays::map(Pins, &MotorPins::name);
 
   // the LEDC timer belongs to the PWM this driver owns
-  static constexpr auto claims = HAL::concat(claims_of(Pins), PWM::claims);
+  static constexpr auto claims = Arrays::concat(
+      HAL::row_claims<Pins>([](const MotorPins &motor) {
+        return HAL::Claim{HAL::Resource::PwmChannel, motor.pwm_channel,
+                          HAL::Use::Exclusive};
+      }),
+      PWM::claims);
 
   explicit MotorDriver(Swarm::Assembly assembly)
       : gpio_{assembly}, pwm_{assembly} {
@@ -115,9 +86,9 @@ public:
 private:
   // resolved once, at compile time: a label the declaration does not carry is
   // a build error, and nothing here can name a pin that was never claimed
-  static constexpr auto kInA = pin_column<Pins, "in_a">();
-  static constexpr auto kInB = pin_column<Pins, "in_b">();
-  static constexpr auto kEnable = pin_column<Pins, "enable">();
+  static constexpr auto kInA = HAL::pin_column<Pins, "in_a">();
+  static constexpr auto kInB = HAL::pin_column<Pins, "in_b">();
+  static constexpr auto kEnable = HAL::pin_column<Pins, "enable">();
 
   GPIO gpio_;
   PWM pwm_;

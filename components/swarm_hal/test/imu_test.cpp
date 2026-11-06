@@ -80,3 +80,12 @@ TEST_CASE("accumulator: no samples means no offsets", "[imu]") {
   TEST_ASSERT_EQUAL_UINT32(0, accumulator.count());
   TEST_ASSERT_EQUAL_INT16(0, accumulator.offsets(Imu::AccelRange::G2).accel.z);
 }
+
+TEST_CASE("imu: yaw rate is the up axis in rad/s", "[imu]") {
+  const Imu::Sample sample{.gyro = {.x = 180.0, .y = 360.0, .z = 90.0}};
+
+  TEST_ASSERT_DOUBLE_WITHIN(1e-9, std::numbers::pi / 2.0,
+                            Imu::yaw_rate(sample, Imu::Axis::Z));
+  TEST_ASSERT_DOUBLE_WITHIN(1e-9, 2.0 * std::numbers::pi,
+                            Imu::yaw_rate(sample, Imu::Axis::Y));
+}

@@ -1,9 +1,11 @@
+#include "base.h"
 #include "differential_drive.h"
 #include "dwm.h"
 #include "encoders.h"
 #include "esp32.h"
 #include "l298n.h"
 #include "mpu6050.h"
+#include "odometry.h"
 #include "session.h"
 #include "swarm_sched.h"
 #include "system.h"
@@ -17,6 +19,7 @@
 
 #include "esp_log.h"
 
+#include <geometry_msgs/msg/pose_with_covariance_stamped.h>
 #include <geometry_msgs/msg/twist.h>
 #include <sensor_msgs/msg/range.h>
 #include <std_msgs/msg/float32.h>
@@ -24,8 +27,13 @@
 
 #include "freertos/FreeRTOS.h"
 
+#include <array>
+#include <cstddef>
+#include <numbers>
+
 static const char *TAG = "main";
 
+SWARM_ROS_MESSAGE(geometry_msgs, msg, PoseWithCovarianceStamped)
 SWARM_ROS_MESSAGE(geometry_msgs, msg, Twist)
 SWARM_ROS_MESSAGE(sensor_msgs, msg, Range)
 SWARM_ROS_MESSAGE(std_msgs, msg, Float32)
@@ -38,6 +46,49 @@ static void fill_range(sensor_msgs__msg__Range &msg, const double &meters) {
   msg.min_range = 0.0f;
   msg.max_range = 300.0f;
   msg.range = static_cast<float>(meters);
+}
+
+static Drive::Twist read_twist(const geometry_msgs__msg__Twist &msg) {
+  return {msg.linear.x, msg.linear.y, msg.angular.z};
+}
+
+static double read_effort(const std_msgs__msg__Float32 &msg) {
+  ESP_LOGI(TAG, "umc/front: %+.2f", static_cast<double>(msg.data));
+
+  return msg.data;
+}
+
+// row-major 6x6 over (x, y, z, roll, pitch, yaw). A planar base never measures
+// z, roll or pitch, so those are given a variance large enough that an EKF
+// ignores them rather than one of zero, which it would take as certainty
+// TODO: odometry drift grows with distance, so a constant is a placeholder.
+// Scale it with distance travelled once the EKF is up and its residuals show
+// how far off this is
+static constexpr std::array<double, 36> kPoseCovariance = [] {
+  constexpr std::array<double, 6> variance{0.01, 0.01, 1e6, 1e6, 1e6, 0.05};
+
+  std::array<double, 36> out{};
+
+  for (size_t i = 0; i < variance.size(); ++i) {
+    out[i * 6 + i] = variance[i];
+  }
+
+  return out;
+}();
+
+static void fill_pose(geometry_msgs__msg__PoseWithCovarianceStamped &msg,
+                      const Odometry::Pose &pose) {
+  const auto [z, w] = Odometry::heading(pose.theta);
+
+  msg.pose.pose.position.x = pose.x;
+  msg.pose.pose.position.y = pose.y;
+  msg.pose.pose.position.z = 0.0;
+  msg.pose.pose.orientation.x = 0.0;
+  msg.pose.pose.orientation.y = 0.0;
+  msg.pose.pose.orientation.z = z;
+  msg.pose.pose.orientation.w = w;
+
+  std::ranges::copy(kPoseCovariance, msg.pose.covariance);
 }
 
 namespace HW {
@@ -107,9 +158,9 @@ using Dwm = DWM<SPI, GPIO, DWM_PINS, SpiBus>;
 // placeholder pins, free of everything above and wired to nothing: the MPU6050
 // shares the UMC's I2C bus, whose SDA/SCL NEWMCPCBV2 routes to pins the motors
 // and the carrier have already spoken for. Both are strapping pins, so this
-// pair is declarable rather than usable -- the imu task below stays unspawned
+// pair is declarable rather than usable -- the imu task below may not work
 // until the real pair goes in
-// TODO: replace with the UMC header's SDA/SCL and spawn the task
+// TODO: replace with the UMC header's SDA/SCL
 constexpr auto I2C_PINS =
     HAL::pins(HAL::NamedPin{"sda", GPIO_NUM_18, HAL::Use::Shared},
               HAL::NamedPin{"scl", GPIO_NUM_14, HAL::Use::Shared});
@@ -130,64 +181,64 @@ using Mpu = MPU6050::Sensor<I2C, GPIO, IMU_CONFIG, I2cBus>;
 using Chassis = Swarm::chassis<STYLE, MotorDriver, SpiBus, Dwm, EncoderBank,
                                UmcDriver, I2cBus, Mpu>;
 
-using CmdVel = ROS::subscribes<geometry_msgs__msg__Twist, "cmd_vel">;
+using CmdVel = ROS::receives<geometry_msgs__msg__Twist, "cmd_vel", Drive::Twist,
+                             &read_twist>;
 
-using UmcCmd = ROS::subscribes<std_msgs__msg__Float32, "umc/front">;
+using UmcCmd =
+    ROS::receives<std_msgs__msg__Float32, "umc/front", double, &read_effort>;
 
 using UwbRange = ROS::streams<sensor_msgs__msg__Range, "uwb/range", "uwb_link",
                               double, &fill_range>;
 
-using Node =
-    ROS::node<"base", CONFIG_SWARM_ROS_NAMESPACE, CmdVel, UmcCmd, UwbRange>;
+// integrated every control period on the robot, so a slow publish rate loses
+// nothing the way sampling a twist slowly would
+using OdomPose =
+    ROS::streams<geometry_msgs__msg__PoseWithCovarianceStamped, "odom/pose",
+                 "odom", Odometry::Pose, &fill_pose>;
 
-using CmdChannel = Sched::channel<Drive::Twist, 4>;
-using UmcChannel = Sched::channel<double, 4>;
+using Node = ROS::node<"base", CONFIG_SWARM_ROS_NAMESPACE, CmdVel, UmcCmd,
+                       UwbRange, OdomPose>;
+
+using PoseMailbox = Sched::channel<Odometry::Pose, 1>;
+using YawRateMailbox = Sched::channel<double, 1>;
 
 // motion is arithmetic plus two GPIO writes, so it shares the fast task
 constexpr uint32_t MOTION_PERIOD_MS = 5;
-constexpr uint32_t EXECUTOR_PERIOD_MS = 10;
-constexpr uint32_t ODOMETRY_PERIOD_MS = 500;
-constexpr uint32_t IMU_PERIOD_MS = 100;
-constexpr uint32_t POLL_PERIOD_MS = 100;
 
+// 20ms at X4 is ~150 counts per period at top speed, so the measured velocity
+// is not mostly quantisation noise the way it would be at 5ms
+constexpr uint32_t DRIVE_PERIOD_MS = 20;
+
+// a robot that has lost its server must not keep driving while the others plan
+// around it. Long enough to ride out a WiFi hiccup, so cmd_vel has to be
+// streamed faster than this
+constexpr uint32_t CMD_VEL_TIMEOUT_MS = 500;
+
+// FIT0485 is a 6V motor on a 12V rail, so the loop never asks for more than
+// half duty
+// TODO: the rail sags with the battery; measure it under load
+constexpr Motor::Supply WHEEL_SUPPLY{.rated = 6.0, .rail = 12.0};
+
+// FIT0485 is listed at 75rpm no-load at 6V; the feedforward only has to be
+// close, the integral takes up the rest
+// TODO: measure at the rated voltage, and tune the gains
+constexpr double MAX_WHEEL_SPEED = 75.0 * 2.0 * std::numbers::pi / 60.0;
+
+constexpr auto CONTROL =
+    Drive::control(WHEEL_SUPPLY, MAX_WHEEL_SPEED, DRIVE_PERIOD_MS / 1000.0,
+                   Pid::gains(0.05, 0.5, 0.0));
+constexpr uint32_t EXECUTOR_PERIOD_MS = 10;
+constexpr uint32_t ODOMETRY_PERIOD_MS = 200;
+
+// one yaw rate per control period, so the heading has no gaps to hold across
+constexpr uint32_t IMU_PERIOD_MS = DRIVE_PERIOD_MS;
+
+constexpr uint32_t POLL_PERIOD_MS = 100;
 } // namespace HW
 
-static HW::CmdChannel commands;
-static HW::UmcChannel umc_commands;
+static HW::PoseMailbox poses;
+static HW::YawRateMailbox yaw_rates;
 static ROS::session<HW::Node> session;
-
-// on_start takes a plain function pointer, so the task body reaches the sensor
-// through this rather than capturing it
-static HW::Mpu *imu_device = nullptr;
-
-static constexpr const char *label(Motor::Name name) {
-  switch (name) {
-  case Motor::Name::LEFT:
-    return "left";
-  case Motor::Name::RIGHT:
-    return "right";
-  default:
-    return "motor";
-  }
-}
-
-static auto onTwist = [](const geometry_msgs__msg__Twist &twist) {
-  const Drive::Twist body{twist.linear.x, twist.linear.y, twist.angular.z};
-
-  if (!commands.push(body, 0)) {
-    ESP_LOGW(TAG, "Dropped twist: command channel full");
-  }
-};
-
-// TODO: maybe make a clean wrapper to handle channel pushing, instead of
-// needing onTwist, onUmc, etc. dont like having these separate.
-static auto onUmc = [](const std_msgs__msg__Float32 &effort) {
-  ESP_LOGI(TAG, "umc/front: %+.2f", static_cast<double>(effort.data));
-
-  if (!umc_commands.push(effort.data, 0)) {
-    ESP_LOGW(TAG, "Dropped UMC effort: command channel full");
-  }
-};
 
 extern "C" void app_main(void) {
   ESP_LOGI(TAG, "FreeRTOS tick: %d Hz", CONFIG_FREERTOS_HZ);
@@ -219,13 +270,32 @@ extern "C" void app_main(void) {
 #endif
 
   static auto motion = Sched::make_task<4096, configMAX_PRIORITIES - 2>(
-      Sched::latest<HW::MOTION_PERIOD_MS>(commands) |
+      // the loop integrates odometry, so it has to run from boot rather than
+      // from the first cmd_vel. A zero twist coasts the wheels while it does
+      Sched::watched<HW::DRIVE_PERIOD_MS, HW::CMD_VEL_TIMEOUT_MS>(
+          session.inbox<HW::CmdVel>(), Drive::Twist{}) |
           Sched::then(Drive::inverse_kinematics<HW::STYLE>) |
-          Sched::then(Drive::to_commands<HW::STYLE>) |
-          Sched::to([&motors](const Drive::Frame<HW::STYLE> &frame) {
-            motors.run(frame);
-          }),
-      Sched::latest<HW::MOTION_PERIOD_MS>(umc_commands) |
+          Sched::to(
+              [&motors, &encoders, state = Base::State<HW::STYLE>{}](
+                  const Drive::WheelVelocities<HW::STYLE> &targets) mutable {
+                const auto measured = Arrays::map(
+                    encoders.advance(), [](const Encoder::Reading &r) {
+                      return Drive::WheelVelocity{
+                          r.name, Encoder::rad_per_second(HW::EncoderBank::spec,
+                                                          r.counts,
+                                                          HW::CONTROL.period)};
+                    });
+
+                // I2C stays out of this loop: a stalled bus empties the mailbox
+                // and the heading falls back to the encoders
+                const auto [next, frame] = Base::step<HW::STYLE, HW::CONTROL>(
+                    state, targets, measured, yaw_rates.pop(0));
+                state = next;
+
+                motors.run(frame);
+                poses.overwrite(state.pose);
+              }),
+      Sched::latest<HW::MOTION_PERIOD_MS>(session.inbox<HW::UmcCmd>()) |
           Sched::then(Motor::ganged<HW::UmcDriver::motors>) |
           Sched::to([&umc](const auto &frame) {
             for (const Motor::Command &cmd : frame.commands) {
@@ -238,99 +308,70 @@ extern "C" void app_main(void) {
           }));
 
   static auto odometry = Sched::make_task<4096, configMAX_PRIORITIES - 4>(
-      Sched::every<HW::ODOMETRY_PERIOD_MS> |
-      Sched::then([&encoders] { return encoders.advance(); }) |
-      Sched::to([](const auto &deltas) {
-        constexpr double seconds = HW::ODOMETRY_PERIOD_MS / 1000.0;
-
-        for (const Encoder::Reading &wheel : deltas) {
-          ESP_LOGI(TAG, "%s %+5ld counts %+7.2f rpm", label(wheel.name),
-                   static_cast<long>(wheel.counts),
-                   Encoder::rpm(HW::EncoderBank::spec, wheel.counts, seconds));
+      Sched::latest<HW::ODOMETRY_PERIOD_MS>(poses) |
+      Sched::to([](const Odometry::Pose &pose) {
+        // false until the session is up as well, so at warning level this
+        // would fire five times a second whenever the agent is away
+        if (!session.send<HW::OdomPose>(pose)) {
+          ESP_LOGD(TAG, "Dropped pose");
         }
       }));
 
   // init runs on the uros task, not here: a dead agent must not stop motion
   // from spawning
   static auto ros = Sched::make_task<16000, configMAX_PRIORITIES - 1>(
-      Sched::every<HW::EXECUTOR_PERIOD_MS> |
-      Sched::to([] { return session.poll(); }));
-
-  // TODO: encapsulate this
-  // a false from on_start deletes the task, so one lost handshake used to cost
-  // cmd_vel until the next power cycle. init() unwinds itself on failure, so
-  // retrying is just a delay
-  ros.on_start([] {
-    // TODO: this should really be encapsulated and part of ros declaration.
-    // See how streams includes the callback in its template parameters
-    while (!session.init() || !session.on<HW::CmdVel>(onTwist) ||
-           !session.on<HW::UmcCmd>(onUmc)) {
-      session.fini();
-
-      ESP_LOGW(TAG, "micro-ROS session init failed; retrying agent %s:%s",
-               CONFIG_MICRO_ROS_AGENT_IP, CONFIG_MICRO_ROS_AGENT_PORT);
-
-      vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-
-    ESP_LOGI(TAG,
-             "micro-ROS session up: /%s/base subscribed to cmd_vel, umc/front",
-             CONFIG_SWARM_ROS_NAMESPACE);
-
-    return true;
-  });
+      ROS::serve<HW::EXECUTOR_PERIOD_MS>(session));
 
   // the bias estimate assumes the robot is still, so calibration belongs in
   // on_start rather than anywhere a command could already be moving it
   static auto imu = Sched::make_task<4096, configMAX_PRIORITIES - 4>(
+      Sched::on_start([&imu_sensor] {
+        while (true) {
+          if (auto id = imu_sensor.who_am_i()) {
+            ESP_LOGI(TAG, "MPU6050 id: 0x%02X", *id);
+            break;
+          } else {
+            ESP_LOGW(TAG, "MPU6050 id read failed; retrying");
+            vTaskDelay(pdMS_TO_TICKS(1000));
+          }
+        }
+
+        if (!imu_sensor.configure()) {
+          ESP_LOGE(TAG, "MPU6050 configure failed");
+
+          return false;
+        }
+
+        ESP_LOGI(TAG, "MPU6050 calibrating -- hold still");
+
+        if (const auto offsets = imu_sensor.calibrate()) {
+          ESP_LOGI(TAG, "MPU6050 gyro bias: %d %d %d counts", offsets->gyro.x,
+                   offsets->gyro.y, offsets->gyro.z);
+        } else {
+          ESP_LOGE(TAG, "MPU6050 calibration failed");
+
+          return false;
+        }
+
+        return true;
+      }) |
       Sched::every<HW::IMU_PERIOD_MS> |
       Sched::then([&imu_sensor] { return imu_sensor.read_sample(); }) |
       Sched::to([](const Imu::Sample &sample) {
-        ESP_LOGI(TAG, "gyro %+7.2f %+7.2f %+7.2f dps  accel %+6.3f %+6.3f "
+        // TODO: check the sign on the bench -- a part mounted upside down
+        // needs this negated, and Imu::Axis has no way to say so yet
+        yaw_rates.overwrite(Imu::yaw_rate(sample, HW::Mpu::spec.up));
+
+        ESP_LOGD(TAG, "gyro %+7.2f %+7.2f %+7.2f dps  accel %+6.3f %+6.3f "
                       "%+6.3f g  %.1f C",
                  sample.gyro.x, sample.gyro.y, sample.gyro.z, sample.accel.x,
                  sample.accel.y, sample.accel.z, sample.temperature_c);
       }));
 
-  imu_device = &imu_sensor;
-
-  imu.on_start([] {
-    HW::Mpu &sensor = *imu_device;
-    while(true){
-
-      if (auto id = sensor.who_am_i()) {
-        ESP_LOGI(TAG, "MPU6050 id: 0x%02X", *id);
-        break;
-      } else {
-        ESP_LOGW(TAG, "MPU6050 id read failed; retrying");
-        vTaskDelay(pdMS_TO_TICKS(1000));
-      }
-
-    }
-
-    if (!sensor.configure()) {
-      ESP_LOGE(TAG, "MPU6050 configure failed");
-
-      return false;
-    }
-
-    ESP_LOGI(TAG, "MPU6050 calibrating -- hold still");
-
-    if (const auto offsets = sensor.calibrate()) {
-      ESP_LOGI(TAG, "MPU6050 gyro bias: %d %d %d counts", offsets->gyro.x,
-               offsets->gyro.y, offsets->gyro.z);
-    } else {
-      ESP_LOGE(TAG, "MPU6050 calibration failed");
-
-      return false;
-    }
-
-    return true;
-  });
-
   ros.spawn("uros");
   motion.spawn("motion");
   odometry.spawn("odometry");
+  // may not work until I2C_PINS are corrected: expect who_am_i retries
   imu.spawn("imu");
 
   if constexpr (K_INITIATOR) {

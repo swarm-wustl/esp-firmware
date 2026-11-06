@@ -4,3 +4,8 @@ CONFIG_UNITY_ENABLE_64BIT=y
 # backtrace on each failure
 CONFIG_UNITY_ENABLE_BACKTRACE_ON_FAIL=y
 
+
+# the kinematics tests are written against a 0.5 m wheel and half track, not
+# whatever the robot is set to
+CONFIG_K_WHEEL_RADIUS_MM=500
+CONFIG_K_HALF_TRACK_MM=500

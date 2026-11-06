@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <numbers>
 #include <utility>
 
 namespace Imu {
@@ -65,14 +66,14 @@ constexpr double lsb_per_g(AccelRange range) {
   return kHalfScaleCounts / full_scale(range);
 }
 
-constexpr int16_t component(const Axes &axes, Axis axis) {
+template <typename V> constexpr auto component(const V &v, Axis axis) {
   switch (axis) {
   case Axis::X:
-    return axes.x;
+    return v.x;
   case Axis::Y:
-    return axes.y;
+    return v.y;
   case Axis::Z:
-    return axes.z;
+    return v.z;
   }
 
   std::unreachable();
@@ -93,6 +94,10 @@ constexpr Sample convert(const Reading &reading, const Offsets &offsets,
   return {scaled(reading.accel, offsets.accel, lsb_per_g(accel)),
           scaled(reading.gyro, offsets.gyro, lsb_per_dps(gyro)),
           celsius(reading.temperature)};
+}
+
+constexpr double yaw_rate(const Sample &sample, Axis up) {
+  return component(sample.gyro, up) * std::numbers::pi / 180.0;
 }
 
 constexpr int16_t saturate(int32_t value) {
