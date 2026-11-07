@@ -116,7 +116,24 @@ ros2 topic pub -1 /<CONFIG_SWARM_ROS_NAMESPACE>/umc/front std_msgs/Float32 '{dat
 That is both subscriptions libmicroros was built for
 (`RMW_UXRCE_MAX_SUBSCRIPTIONS 2`); a third needs `colcon.meta` raised and
 libmicroros rebuilt. Publishers are full the same way: `uwb/range` and
-`odom/pose` (`RMW_UXRCE_MAX_PUBLISHERS 2`).
+`odom/twist` (`RMW_UXRCE_MAX_PUBLISHERS 2`).
+
+## Odometry
+
+The board publishes velocity, not pose: `geometry_msgs/TwistWithCovarianceStamped`
+on `odom/twist`, frame `base_link`, at 5 Hz. Velocity error doesn't grow with
+distance, so a constant covariance (`Robot::kTwistCovariance`) is honest, and
+the EKF does the integrating -- its `odometry/filtered` is the
+`nav_msgs/Odometry` everything downstream consumes. Two constraints shaped it:
+
+- each message is the *mean* twist over the period, `Odometry::twist_between`
+  (the exact inverse of `Odometry::integrate`) applied to consecutive poses, so
+  an EKF integrating at 5 Hz retraces what the control loop integrated at 50 Hz
+  rather than extrapolating one sample
+- `nav_msgs/Odometry` is ~720 octets and the XRCE UDP MTU is 512; a best-effort
+  stream cannot fragment, so it would fail at `rcl_publish`. The twist message
+  is ~364. Check any new streamed type against that limit -- the sim, on full
+  DDS, will never show it
 
 ## The cmd_vel watchdog
 
@@ -193,6 +210,36 @@ TODO: the bus is declared on placeholder pins. NEWMCPCBV2 routes the UMC's
 SDA/SCL to pins the motors and the Makerfabs carrier already hold. The imu task
 in `main.cpp` is spawned anyway, but it will likely sit retrying `who_am_i`
 until the real pair goes in.
+
+## The sim
+
+`scripts/sim.sh [ns...]` runs one simulated base per namespace plus a Foxglove
+bridge on `ws://localhost:8765` (Lichtblick works). `sim/sim_base.cpp` is an
+rclcpp node that runs the firmware's own motion loop -- `Watchdog::observe`,
+`Drive::inverse_kinematics`, `Robot::drive` -- against `sim/world.h`, a plant
+with motor lag, motor mismatch, wheel slip and a gyro. Only the plant is new
+code; its kinematics are written out independently on purpose, so a sign error
+shared by controller and world can't cancel.
+
+What makes that work is `main/src/robot.h`: everything about the robot that
+isn't wiring (style, control constants, periods, topic and frame names,
+covariance, the message helpers). `main.cpp` and the sim both include it, so
+it must stay free of IDF and ROS headers. The message helpers are templates
+because the micro-ROS C structs and the rclcpp classes share field names. A
+constant the sim needs belongs there, not restated in `sim/`.
+
+- the sim builds `sdkconfig.h` from `sdkconfig` itself (`sim/CMakeLists.txt`),
+  so wheel geometry and the default namespace match the board's
+- the image is humble to match the agent, with g++ 13 from the toolchain PPA:
+  `swarm_hal` needs `std::unreachable` and `ranges::fold_left`, which jammy's
+  g++ 11 lacks
+- the sim is on `ROS_DOMAIN_ID=42` (`SIM_DOMAIN`): DDS discovery crosses
+  containers, so on domain 0 a simulated `swarm_1` publishes over the real one
+- `sim/truth` and the `<ns>/truth` TF frame are ground truth, sim-only, and
+  `sim/odom` is the pose the firmware integrates but doesn't publish. The
+  static `map -> odom` in `sim.sh` exists because the 3D panel only lists TF
+  frames; drop it once an EKF publishes one
+- untested here: Sched timing, the micro-ROS session, the ESP32 drivers
 
 ## DW1000 references
 

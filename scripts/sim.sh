@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 
 
-# Runs fake robots (sim/fake_base.py) that speak the firmware's topics, plus a
-# Foxglove bridge on ws://localhost:8765 to watch them.
+# Runs simulated robots (sim/sim_base.cpp) that speak the firmware's topics,
+# plus a Foxglove bridge on ws://localhost:8765 to watch them. The node runs the
+# firmware's own control loop and odometry against a simulated plant, built
+# fresh into build_sim/ on every start.
 #
 #   scripts/sim.sh                  one robot, namespaced from sdkconfig
 #   scripts/sim.sh swarm_1 swarm_2  one robot per namespace
@@ -10,8 +12,8 @@
 #   scripts/sim.sh shell            bash in the running sim, for ros2 topic etc.
 #   scripts/sim.sh build            (re)build the sim image
 #
-# Wheel geometry and the default namespace come out of sdkconfig, so the fake
-# can't drift from the firmware.
+# Wheel geometry and the default namespace come out of sdkconfig, through the
+# same headers the firmware compiles, so the sim can't drift from the board.
 #
 # The sim runs on its own ROS_DOMAIN_ID (SIM_DOMAIN, default 42): DDS discovery
 # crosses containers, so a fake swarm_1 on domain 0 would publish over the
@@ -20,7 +22,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-IMAGE="swarm-sim:latest"
+IMAGE="swarm-sim:humble"
 DOCKERFILE="$REPO/docker/sim/Dockerfile"
 NAME="swarm-sim"
 DOMAIN="${SIM_DOMAIN:-42}"
@@ -35,11 +37,7 @@ config() {
 }
 
 NAMESPACE="$(config SWARM_ROS_NAMESPACE)"
-RADIUS_MM="$(config K_WHEEL_RADIUS_MM)"
-HALF_TRACK_MM="$(config K_HALF_TRACK_MM)"
 [ -n "$NAMESPACE" ] || die "no CONFIG_SWARM_ROS_NAMESPACE in sdkconfig"
-[ -n "$RADIUS_MM" ] && [ -n "$HALF_TRACK_MM" ] ||
-  die "no CONFIG_K_WHEEL_RADIUS_MM / CONFIG_K_HALF_TRACK_MM in sdkconfig"
 
 build_image() {
   docker build "$@" -t "$IMAGE" -f "$DOCKERFILE" "$(dirname "$DOCKERFILE")"
@@ -69,9 +67,7 @@ namespaces=("$@")
 
 robots=""
 for ns in "${namespaces[@]}"; do
-  robots+="python3 /sim/fake_base.py --ros-args -r __ns:=/$ns \
-    -p wheel_radius:=$(awk "BEGIN{print $RADIUS_MM/1000}") \
-    -p half_track:=$(awk "BEGIN{print $HALF_TRACK_MM/1000}") & "
+  robots+="build_sim/sim_base --ros-args -r __ns:=/$ns & "
 done
 
 # the 3D panel only offers frames it has seen in TF, and the firmware publishes
@@ -86,6 +82,8 @@ exec docker run --rm -it --init \
   --name "$NAME" \
   -p 8765:8765 \
   -e ROS_DOMAIN_ID="$DOMAIN" \
-  -v "$REPO/sim:/sim:ro" \
-  "$IMAGE" bash -lc ". /opt/ros/humble/setup.bash && $robots \
+  -v "$REPO:/workspace" -w /workspace \
+  "$IMAGE" bash -lc ". /opt/ros/humble/setup.bash && \
+    cmake -S sim -B build_sim >/dev/null && cmake --build build_sim -j && \
+    $robots \
     exec ros2 run foxglove_bridge foxglove_bridge --ros-args -p port:=8765"
