@@ -247,6 +247,17 @@ constant the sim needs belongs there, not restated in `sim/`.
   robot their TF collides; `sim.sh` warns
 - untested here: Sched timing, the micro-ROS session, the ESP32 drivers
 
+## Host nodes
+
+`host/` holds the nodes that run off the robot and only speak topics, so the
+same code drives the sim and the board. `host/go_to_goal.py` steers one robot
+to a point on `odometry/filtered`: goal on `goal` (the sim remaps it to the 3D
+panel's `/move_base_simple/goal`, so a click sends every robot), `cmd_vel` at
+10 Hz. The goal is moved into the odometry frame through TF, so it keeps
+working once `map -> odom` is a real correction. It stops with an explicit zero
+twist and goes quiet; the board's watchdog is the fallback, not the brake.
+`command()` is the pure control law, importable without a running graph.
+
 ## DW1000 references
 
 When answering questions about the DW1000 / register behavior, consult `docs/references.md`:

@@ -72,6 +72,10 @@ for ns in "${namespaces[@]}"; do
   robots+="build_sim/sim_base --ros-args -r __ns:=/$ns & "
   robots+="ros2 run robot_localization ekf_node --ros-args -r __ns:=/$ns \
     --params-file sim/ekf.yaml & "
+  # the 3D panel's pose tool publishes on /move_base_simple/goal, so a click
+  # sends every robot there
+  robots+="python3 host/go_to_goal.py --ros-args -r __ns:=/$ns \
+    -r goal:=/move_base_simple/goal & "
 done
 
 # TODO: every robot's frames are plain odom and base_link, so a second robot's
