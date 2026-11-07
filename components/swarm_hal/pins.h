@@ -23,6 +23,14 @@ template <fixed_string S> constexpr auto operator""_p() { return S; }
 
 // the only way to name a pin. Its constructor is private to PinSet, so every
 // Pin in the program came out of a declaration that also published the claim
+//
+// TODO: that only holds by convention. operator[] works on any PinSet, so a
+// free-standing HAL::pins(...) that no declared peripheral publishes still
+// mints Pins whose claims never reach a system's conflict check. Close it by
+// minting from the key instead: a device publishes `pins` (or `pin_rows` for a
+// table), claims_of folds them in, and Swarm::pin<"cs">(Assembly<T>) becomes
+// the only friend of operator[]. Devices that need a pin after construction
+// keep their key as a [[no_unique_address]] member
 class Pin {
 public:
   constexpr int number() const { return number_; }
