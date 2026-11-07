@@ -65,14 +65,25 @@ docker image inspect "$IMAGE" >/dev/null 2>&1 || build_image
 namespaces=("$@")
 [ "${#namespaces[@]}" -gt 0 ] || namespaces=("$NAMESPACE")
 
+# each robot gets its own local EKF (sim/ekf.yaml), the filter that will run
+# against the real board too
 robots=""
 for ns in "${namespaces[@]}"; do
   robots+="build_sim/sim_base --ros-args -r __ns:=/$ns & "
+  robots+="ros2 run robot_localization ekf_node --ros-args -r __ns:=/$ns \
+    --params-file sim/ekf.yaml & "
 done
+
+# TODO: every robot's frames are plain odom and base_link, so a second robot's
+# EKF publishes over the first one's TF. Namespace the frames in robot.h
+if [ "${#namespaces[@]}" -gt 1 ]; then
+  echo "sim.sh: warning: ${#namespaces[@]} robots share odom/base_link;" \
+    "TF will flicker between them" >&2
+fi
 
 # the 3D panel only offers frames it has seen in TF, and the firmware publishes
 # none, so odom would be undisplayable without a tree to hang it from
-# TODO: drop once an EKF publishes map -> odom
+# TODO: drop once the global EKF publishes map -> odom
 robots+="ros2 run tf2_ros static_transform_publisher \
   --frame-id map --child-frame-id odom >/dev/null 2>&1 & "
 

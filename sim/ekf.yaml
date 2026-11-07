@@ -1,0 +1,24 @@
+# the local filter: odom -> base_link from the board's twist alone. Nothing
+# absolute goes in, so it drifts like dead reckoning but never jumps; the
+# global filter that fuses UWB will own map -> odom
+/**:
+  ros__parameters:
+    frequency: 30.0
+    two_d_mode: true
+    publish_tf: true
+
+    odom_frame: odom
+    base_link_frame: base_link
+    world_frame: odom
+
+    # Robot::ODOM_TOPIC, relative so it resolves inside each robot's namespace
+    twist0: odom/twist
+    # x y z / roll pitch yaw / vx vy vz / vroll vpitch vyaw / ax ay az. vy is
+    # fused, not skipped: the board reports it as a confident zero, which is
+    # how the filter learns a differential base cannot slide sideways
+    twist0_config: [false, false, false,
+                    false, false, false,
+                    true,  true,  false,
+                    false, false, true,
+                    false, false, false]
+    twist0_queue_size: 10

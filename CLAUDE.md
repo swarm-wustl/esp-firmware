@@ -239,6 +239,12 @@ constant the sim needs belongs there, not restated in `sim/`.
   `sim/odom` is the pose the firmware integrates but doesn't publish. The
   static `map -> odom` in `sim.sh` exists because the 3D panel only lists TF
   frames; drop it once an EKF publishes one
+- each robot also runs robot_localization's local EKF (`sim/ekf.yaml`):
+  `odom/twist` in, `odometry/filtered` and `odom -> base_link` out. It is the
+  filter meant for the real board too, and it subscribes best-effort, which
+  is what makes it compatible with micro-ROS's publisher
+- every robot's frames are plain `odom`/`base_link`, so with more than one
+  robot their TF collides; `sim.sh` warns
 - untested here: Sched timing, the micro-ROS session, the ESP32 drivers
 
 ## DW1000 references
