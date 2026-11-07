@@ -27,8 +27,8 @@ struct MotorPins {
   }
 };
 
-template <std::same_as<MotorPins>... Pins> consteval auto motors(Pins... pins) {
-  const std::array table{pins...};
+template <std::same_as<MotorPins>... Rows> consteval auto motors(Rows... rows) {
+  const std::array table{rows...};
 
   // two rows naming the same motor are not a constant expression, so the
   // declaration fails to build
@@ -40,15 +40,15 @@ template <std::same_as<MotorPins>... Pins> consteval auto motors(Pins... pins) {
 }
 
 template <HAL::GenericGPIOController GPIO, HAL::GenericPWMController PWM,
-          auto Pins>
+          auto Rows>
   requires HAL::Claiming<PWM>
 class MotorDriver {
 public:
-  static constexpr auto motors = Arrays::map(Pins, &MotorPins::name);
+  static constexpr auto motors = Arrays::map(Rows, &MotorPins::name);
 
   // the LEDC timer belongs to the PWM this driver owns
   static constexpr auto claims = Arrays::concat(
-      HAL::row_claims<Pins>([](const MotorPins &motor) {
+      HAL::row_claims<Rows>([](const MotorPins &motor) {
         return HAL::Claim{HAL::Resource::PwmChannel, motor.pwm_channel,
                           HAL::Use::Exclusive};
       }),
@@ -56,10 +56,10 @@ public:
 
   explicit MotorDriver(Swarm::Assembly assembly)
       : gpio_{assembly}, pwm_{assembly} {
-    for (size_t i = 0; i < Pins.size(); ++i) {
+    for (size_t i = 0; i < Rows.size(); ++i) {
       gpio_.set_direction(kInA[i], HAL::PinMode::Output);
       gpio_.set_direction(kInB[i], HAL::PinMode::Output);
-      pwm_.configure_channel(Pins[i].pwm_channel, kEnable[i]);
+      pwm_.configure_channel(Rows[i].pwm_channel, kEnable[i]);
     }
   }
 
@@ -70,7 +70,7 @@ public:
   MotorDriver &operator=(MotorDriver &&) = default;
 
   template <size_t N>
-    requires(N <= Pins.size())
+    requires(N <= Rows.size())
   void run(const Motor::Frame<N> &frame) {
     for (const Motor::Command &cmd : frame.commands) {
       apply(slot_of(cmd.name), cmd);
@@ -78,24 +78,24 @@ public:
   }
 
   void stop() {
-    for (size_t i = 0; i < Pins.size(); ++i) {
-      apply(i, Motor::Command{Pins[i].name, Motor::Direction::STOP, 0.0});
+    for (size_t i = 0; i < Rows.size(); ++i) {
+      apply(i, Motor::Command{Rows[i].name, Motor::Direction::STOP, 0.0});
     }
   }
 
 private:
   // resolved once, at compile time: a label the declaration does not carry is
   // a build error, and nothing here can name a pin that was never claimed
-  static constexpr auto kInA = HAL::pin_column<Pins, "in_a">();
-  static constexpr auto kInB = HAL::pin_column<Pins, "in_b">();
-  static constexpr auto kEnable = HAL::pin_column<Pins, "enable">();
+  static constexpr auto kInA = HAL::pin_column<Rows, "in_a">();
+  static constexpr auto kInB = HAL::pin_column<Rows, "in_b">();
+  static constexpr auto kEnable = HAL::pin_column<Rows, "enable">();
 
   GPIO gpio_;
   PWM pwm_;
 
   static constexpr size_t slot_of(Motor::Name name) {
     return static_cast<size_t>(
-        std::ranges::find(Pins, name, &MotorPins::name) - Pins.begin());
+        std::ranges::find(Rows, name, &MotorPins::name) - Rows.begin());
   }
 
   void apply(size_t slot, const Motor::Command &cmd) {
@@ -117,7 +117,7 @@ private:
 
     gpio_.set_level(kInA[slot], level_a);
     gpio_.set_level(kInB[slot], level_b);
-    pwm_.set_duty_ratio(Pins[slot].pwm_channel,
+    pwm_.set_duty_ratio(Rows[slot].pwm_channel,
                         std::clamp(cmd.pwm_ratio, 0.0, 1.0));
   }
 };

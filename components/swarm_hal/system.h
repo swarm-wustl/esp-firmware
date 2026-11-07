@@ -16,9 +16,6 @@
 #include "resources.h"
 
 namespace Swarm {
-template <typename... Decls>
-concept no_resource_conflicts = HAL::no_conflicts(HAL::claims_of<Decls...>());
-
 // the relation between an independently declared geometry and an
 // independently declared actuator: can this driver serve this style?
 template <typename Driver, Drive::Style S>
@@ -39,7 +36,9 @@ struct needs_of<T> {
   using type = typename T::needs;
 };
 
-template <HAL::Claiming... Peripherals> struct system_impl {
+template <HAL::Claiming... Peripherals>
+  requires no_resource_conflicts<Peripherals...>
+struct system_impl {
   template <typename T>
   static constexpr bool declared = (std::same_as<T, Peripherals> || ...);
 
@@ -102,6 +101,7 @@ template <HAL::Claiming... Peripherals> struct system_impl {
 private:
   template <typename T, typename... Needs>
   static void emplace_needing(Instances &into, needs<Needs...>) {
+    // Topological sort for peripheral needs
     static_assert(((index_of<Needs>() < index_of<T>()) && ...),
                   "a peripheral must be listed after the peripherals it needs");
 
@@ -115,11 +115,10 @@ private:
 };
 
 template <HAL::Claiming... Peripherals>
-  requires no_resource_conflicts<Peripherals...>
 using system = system_impl<Peripherals...>;
 
 template <Drive::Style S, typename Driver, HAL::Claiming... Peripherals>
-  requires drives<Driver, S> && no_resource_conflicts<Driver, Peripherals...>
+  requires drives<Driver, S>
 struct chassis : system_impl<Driver, Peripherals...> {
   static constexpr Drive::Style style = S;
 
