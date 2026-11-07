@@ -235,16 +235,23 @@ constant the sim needs belongs there, not restated in `sim/`.
   g++ 11 lacks
 - the sim is on `ROS_DOMAIN_ID=42` (`SIM_DOMAIN`): DDS discovery crosses
   containers, so on domain 0 a simulated `swarm_1` publishes over the real one
-- `sim/truth` and the `<ns>/truth` TF frame are ground truth, sim-only, and
-  `sim/odom` is the pose the firmware integrates but doesn't publish. The
-  static `map -> odom` in `sim.sh` exists because the 3D panel only lists TF
-  frames; drop it once an EKF publishes one
+- `sim/truth` (in `map`) and the `<ns>/truth` TF frame are ground truth,
+  sim-only, and `sim/odom` (in `<ns>/odom`) is the pose the firmware
+  integrates but doesn't publish. The
+  static `map -> <ns>/odom` in `sim.sh` exists because the 3D panel only
+  lists TF frames; drop it once the global EKF publishes one
 - each robot also runs robot_localization's local EKF (`sim/ekf.yaml`):
   `odom/twist` in, `odometry/filtered` and `odom -> base_link` out. It is the
   filter meant for the real board too, and it subscribes best-effort, which
   is what makes it compatible with micro-ROS's publisher
-- every robot's frames are plain `odom`/`base_link`, so with more than one
-  robot their TF collides; `sim.sh` warns
+- frames are per robot: `<ns>/odom`, `<ns>/base_link`, `<ns>/uwb_link`, with
+  only `map` shared. `Robot::frame_in` joins them at compile time on the board,
+  from `CONFIG_SWARM_ROS_NAMESPACE`; the sim, one binary for every namespace,
+  joins the same suffixes at runtime, and `sim.sh` hands the EKF its frames as
+  `-p` overrides
+- the world is simulated in `map`. Robots are put down 0.5 m apart along y
+  (`start`), and `sim.sh`'s static `map -> <ns>/odom` is that start pose --
+  the stand-in for the global EKF
 - untested here: Sched timing, the micro-ROS session, the ESP32 drivers
 
 ## Host nodes

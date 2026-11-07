@@ -31,9 +31,13 @@ using tf2_msgs::msg::TFMessage;
 // HW::POLL_PERIOD_MS, which main.cpp keeps with the ranging task
 constexpr std::chrono::milliseconds RANGE_PERIOD{100};
 
-// the frame an EKF will call odom; ground truth and the firmware's dead
-// reckoning are drawn in it so they line up with the static map -> odom
-constexpr char WORLD_FRAME[] = "odom";
+// the one frame every robot shares, and the one the anchors are placed in. The
+// world is simulated in it; each robot's odom starts wherever it was put down
+constexpr char MAP_FRAME[] = "map";
+
+World::Pose pose_from(const std::vector<double> &xyt) {
+  return {xyt.at(0), xyt.at(1), xyt.at(2)};
+}
 
 class SimBase : public rclcpp::Node {
 public:
@@ -46,8 +50,14 @@ public:
         imu_(declare_parameter("imu", true)),
         anchor_(declare_parameter("anchor", std::vector<double>{2.0, 0.0})),
         range_noise_(declare_parameter("range_noise", 0.05)),
-        world_(World::initial(declare_parameter("motor_mismatch", 0.05))),
-        truth_frame_(std::string(get_namespace()).substr(1) + "/truth") {
+        world_(World::initial(
+            declare_parameter("motor_mismatch", 0.05),
+            pose_from(declare_parameter("start",
+                                        std::vector<double>{0.0, 0.0, 0.0})))),
+        odom_frame_(frame(Robot::ODOM_FRAME)),
+        base_frame_(frame(Robot::BASE_FRAME)),
+        uwb_frame_(frame(Robot::UWB_FRAME)),
+        truth_frame_(frame("truth")) {
     cmd_vel_ = create_subscription<Twist>(
         Robot::CMD_VEL_TOPIC, rclcpp::SensorDataQoS(),
         [this](const Twist &msg) { newest_ = Robot::read_twist(msg); });
@@ -121,14 +131,15 @@ private:
     if (previous) {
       TwistWithCovarianceStamped msg;
       msg.header.stamp = stamp;
-      msg.header.frame_id = Robot::BASE_FRAME;
+      msg.header.frame_id = base_frame_;
       Robot::fill_twist(
           msg, Odometry::twist_between(*previous, pose,
                                        Robot::ODOMETRY_PERIOD_MS / 1000.0));
       twist_pub_->publish(msg);
     }
 
-    odom_pub_->publish(pose_stamped(pose.x, pose.y, pose.theta, stamp));
+    odom_pub_->publish(
+        pose_stamped(odom_frame_, pose.x, pose.y, pose.theta, stamp));
   }
 
   void publish_range() {
@@ -137,7 +148,7 @@ private:
 
     Range msg;
     msg.header.stamp = now();
-    msg.header.frame_id = Robot::UWB_FRAME;
+    msg.header.frame_id = uwb_frame_;
     Robot::fill_range(msg, std::max(0.0, distance + gauss(range_noise_)));
     range_pub_->publish(msg);
   }
@@ -145,8 +156,8 @@ private:
   // sim-only, like sim/truth: the EKF will own odom -> base_link, so this
   // frame must not be base_link
   void publish_truth() {
-    const auto truth =
-        pose_stamped(world_.pose.x, world_.pose.y, world_.pose.theta, now());
+    const auto truth = pose_stamped(MAP_FRAME, world_.pose.x, world_.pose.y,
+                                    world_.pose.theta, now());
     truth_pub_->publish(truth);
 
     TransformStamped transform;
@@ -161,13 +172,21 @@ private:
     tf_pub_->publish(tf);
   }
 
-  static PoseStamped pose_stamped(double x, double y, double theta,
-                                  const rclcpp::Time &stamp) {
+  // Robot::frame_in at runtime: one binary serves every namespace, so the
+  // sim can't fix its frames at compile time the way the board does
+  std::string frame(const char *name) const {
+    const std::string ns = std::string(get_namespace()).substr(1);
+
+    return ns.empty() ? name : ns + "/" + name;
+  }
+
+  static PoseStamped pose_stamped(const std::string &frame, double x, double y,
+                                  double theta, const rclcpp::Time &stamp) {
     const auto [z, w] = Odometry::heading(theta);
 
     PoseStamped msg;
     msg.header.stamp = stamp;
-    msg.header.frame_id = WORLD_FRAME;
+    msg.header.frame_id = frame;
     msg.pose.position.x = x;
     msg.pose.position.y = y;
     msg.pose.orientation.z = z;
@@ -190,6 +209,9 @@ private:
   Watchdog::Feed<Drive::Twist> feed_{Drive::Twist{}, 0};
   std::optional<Drive::Twist> newest_;
   std::optional<Odometry::Pose> last_pose_;
+  std::string odom_frame_;
+  std::string base_frame_;
+  std::string uwb_frame_;
   std::string truth_frame_;
   std::mt19937 rng_{std::random_device{}()};
 

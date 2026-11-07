@@ -7,9 +7,8 @@
     two_d_mode: true
     publish_tf: true
 
-    odom_frame: odom
-    base_link_frame: base_link
-    world_frame: odom
+    # odom_frame, base_link_frame and world_frame are per robot (<ns>/odom,
+    # <ns>/base_link), so scripts/sim.sh passes them alongside this file
 
     # Robot::ODOM_TOPIC, relative so it resolves inside each robot's namespace
     twist0: odom/twist

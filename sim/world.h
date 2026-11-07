@@ -55,14 +55,14 @@ struct Slip {
 // two motors off one production line are never the same speed. A positive
 // mismatch slows the right wheel, so an open-loop robot pulls right and the
 // integral has something to do
-inline State initial(double mismatch) {
+inline State initial(double mismatch, const Pose &start) {
   return {.wheels = Arrays::map(
               Drive::wheels<Robot::STYLE>(),
               [mismatch](const Drive::Wheel &w) {
                 const double side = w.angular_z > 0.0 ? -1.0 : 1.0;
                 return Wheel{w.name, 1.0 + side * mismatch / 2.0, 0.0, 0.0};
               }),
-          .pose = {},
+          .pose = start,
           .yaw_rate = 0.0};
 }
 

@@ -65,31 +65,37 @@ docker image inspect "$IMAGE" >/dev/null 2>&1 || build_image
 namespaces=("$@")
 [ "${#namespaces[@]}" -gt 0 ] || namespaces=("$NAMESPACE")
 
+# robots are put down in a row along map's y, so they don't start on top of
+# each other
+SPACING=0.5
+
 # each robot gets its own local EKF (sim/ekf.yaml), the filter that will run
-# against the real board too
+# against the real board too. Frames are <ns>/odom and <ns>/base_link, as
+# Robot::frame_in builds them on the board, so the TF trees stay apart
 robots=""
+i=0
 for ns in "${namespaces[@]}"; do
-  robots+="build_sim/sim_base --ros-args -r __ns:=/$ns & "
+  # always with a decimal point: ROS rejects [0.0,0,0.0] as a mixed list
+  y="$(awk "BEGIN{printf \"%.3f\", $i * $SPACING}")"
+
+  robots+="build_sim/sim_base --ros-args -r __ns:=/$ns \
+    -p start:=[0.0,$y,0.0] & "
   robots+="ros2 run robot_localization ekf_node --ros-args -r __ns:=/$ns \
-    --params-file sim/ekf.yaml & "
+    --params-file sim/ekf.yaml -p odom_frame:=$ns/odom \
+    -p world_frame:=$ns/odom -p base_link_frame:=$ns/base_link & "
   # the 3D panel's pose tool publishes on /move_base_simple/goal, so a click
   # sends every robot there
   robots+="python3 host/go_to_goal.py --ros-args -r __ns:=/$ns \
     -r goal:=/move_base_simple/goal & "
+
+  # where the robot was put down: its odom starts there. A real robot would
+  # have this estimated rather than known
+  # TODO: drop once the global EKF publishes map -> <ns>/odom
+  robots+="ros2 run tf2_ros static_transform_publisher --y $y \
+    --frame-id map --child-frame-id $ns/odom >/dev/null 2>&1 & "
+
+  i=$((i + 1))
 done
-
-# TODO: every robot's frames are plain odom and base_link, so a second robot's
-# EKF publishes over the first one's TF. Namespace the frames in robot.h
-if [ "${#namespaces[@]}" -gt 1 ]; then
-  echo "sim.sh: warning: ${#namespaces[@]} robots share odom/base_link;" \
-    "TF will flicker between them" >&2
-fi
-
-# the 3D panel only offers frames it has seen in TF, and the firmware publishes
-# none, so odom would be undisplayable without a tree to hang it from
-# TODO: drop once the global EKF publishes map -> odom
-robots+="ros2 run tf2_ros static_transform_publisher \
-  --frame-id map --child-frame-id odom >/dev/null 2>&1 & "
 
 echo "sim.sh: ${namespaces[*]} up; open Foxglove on ws://localhost:8765" >&2
 
