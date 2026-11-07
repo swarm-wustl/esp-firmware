@@ -15,6 +15,12 @@ void check(const Odometry::Pose &expected, const Odometry::Pose &actual) {
   TEST_ASSERT_DOUBLE_WITHIN(1e-9, expected.y, actual.y);
   TEST_ASSERT_DOUBLE_WITHIN(1e-9, expected.theta, actual.theta);
 }
+
+void check(const Drive::Twist &expected, const Drive::Twist &actual) {
+  TEST_ASSERT_DOUBLE_WITHIN(1e-9, expected.linear_x, actual.linear_x);
+  TEST_ASSERT_DOUBLE_WITHIN(1e-9, expected.linear_y, actual.linear_y);
+  TEST_ASSERT_DOUBLE_WITHIN(1e-9, expected.angular_z, actual.angular_z);
+}
 } // namespace
 
 TEST_CASE("odometry: a straight twist moves along the heading", "[odometry]") {
@@ -83,4 +89,31 @@ TEST_CASE("odometry: no gyro rate leaves the encoder's angular_z",
       Odometry::with_yaw_rate({1.0, 2.0, 3.0}, std::nullopt);
 
   TEST_ASSERT_DOUBLE_WITHIN(1e-9, 3.0, body.angular_z);
+}
+
+TEST_CASE("odometry: twist_between recovers the twist integrate was given",
+          "[odometry]") {
+  const Odometry::Pose start{0.3, -0.2, 2.5};
+
+  for (const Drive::Twist twist :
+       {Drive::Twist{0.2, 0.0, 0.0}, Drive::Twist{0.15, 0.0, 1.3},
+        Drive::Twist{-0.1, 0.0, -0.7}, Drive::Twist{0.0, 0.0, 2.0},
+        Drive::Twist{0.1, 0.05, 0.4}}) {
+    const auto end = Odometry::integrate(start, twist, 0.2);
+
+    check(twist, Odometry::twist_between(start, end, 0.2));
+  }
+}
+
+TEST_CASE("odometry: integrating twist_between lands on the later pose",
+          "[odometry]") {
+  const Odometry::Pose from{1.0, 2.0, -3.0};
+  const Odometry::Pose to{1.04, 1.97, 2.9};
+
+  check(to,
+        Odometry::integrate(from, Odometry::twist_between(from, to, 0.2), 0.2));
+}
+
+TEST_CASE("odometry: twist_between over no time is still", "[odometry]") {
+  check(Drive::Twist{}, Odometry::twist_between(kOrigin, {1.0, 0.0, 0.0}, 0.0));
 }

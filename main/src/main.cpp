@@ -6,10 +6,11 @@
 #include "l298n.h"
 #include "mpu6050.h"
 #include "odometry.h"
+#include "robot.h"
+#include "sdkconfig.h"
 #include "session.h"
 #include "swarm_sched.h"
 #include "system.h"
-#include "sdkconfig.h"
 
 #ifdef CONFIG_K_INITIATOR
   constexpr bool K_INITIATOR = true;
@@ -19,8 +20,8 @@
 
 #include "esp_log.h"
 
-#include <geometry_msgs/msg/pose_with_covariance_stamped.h>
 #include <geometry_msgs/msg/twist.h>
+#include <geometry_msgs/msg/twist_with_covariance_stamped.h>
 #include <sensor_msgs/msg/range.h>
 #include <std_msgs/msg/float32.h>
 #include <uros_network_interfaces.h>
@@ -30,65 +31,22 @@
 #include <array>
 #include <cstddef>
 #include <numbers>
+#include <optional>
+#include <utility>
 
-static const char *TAG = "main";
+  static const char *TAG = "main";
 
-SWARM_ROS_MESSAGE(geometry_msgs, msg, PoseWithCovarianceStamped)
-SWARM_ROS_MESSAGE(geometry_msgs, msg, Twist)
-SWARM_ROS_MESSAGE(sensor_msgs, msg, Range)
-SWARM_ROS_MESSAGE(std_msgs, msg, Float32)
+  SWARM_ROS_MESSAGE(geometry_msgs, msg, Twist)
+  SWARM_ROS_MESSAGE(geometry_msgs, msg, TwistWithCovarianceStamped)
+  SWARM_ROS_MESSAGE(sensor_msgs, msg, Range)
+  SWARM_ROS_MESSAGE(std_msgs, msg, Float32)
 
-static void fill_range(sensor_msgs__msg__Range &msg, const double &meters) {
-  // Range was written for sonar/IR; UWB has no radiation_type of its own, and
-  // INFRARED is the conventional stand-in until this moves to a swarm_msgs type
-  msg.radiation_type = sensor_msgs__msg__Range__INFRARED;
-  msg.field_of_view = 6.2831853f;
-  msg.min_range = 0.0f;
-  msg.max_range = 300.0f;
-  msg.range = static_cast<float>(meters);
-}
+  static_assert(Robot::kRangeInfrared == sensor_msgs__msg__Range__INFRARED);
 
-static Drive::Twist read_twist(const geometry_msgs__msg__Twist &msg) {
-  return {msg.linear.x, msg.linear.y, msg.angular.z};
-}
+  static double read_effort(const std_msgs__msg__Float32 &msg) {
+    ESP_LOGI(TAG, "umc/front: %+.2f", static_cast<double>(msg.data));
 
-static double read_effort(const std_msgs__msg__Float32 &msg) {
-  ESP_LOGI(TAG, "umc/front: %+.2f", static_cast<double>(msg.data));
-
-  return msg.data;
-}
-
-// row-major 6x6 over (x, y, z, roll, pitch, yaw). A planar base never measures
-// z, roll or pitch, so those are given a variance large enough that an EKF
-// ignores them rather than one of zero, which it would take as certainty
-// TODO: odometry drift grows with distance, so a constant is a placeholder.
-// Scale it with distance travelled once the EKF is up and its residuals show
-// how far off this is
-static constexpr std::array<double, 36> kPoseCovariance = [] {
-  constexpr std::array<double, 6> variance{0.01, 0.01, 1e6, 1e6, 1e6, 0.05};
-
-  std::array<double, 36> out{};
-
-  for (size_t i = 0; i < variance.size(); ++i) {
-    out[i * 6 + i] = variance[i];
-  }
-
-  return out;
-}();
-
-static void fill_pose(geometry_msgs__msg__PoseWithCovarianceStamped &msg,
-                      const Odometry::Pose &pose) {
-  const auto [z, w] = Odometry::heading(pose.theta);
-
-  msg.pose.pose.position.x = pose.x;
-  msg.pose.pose.position.y = pose.y;
-  msg.pose.pose.position.z = 0.0;
-  msg.pose.pose.orientation.x = 0.0;
-  msg.pose.pose.orientation.y = 0.0;
-  msg.pose.pose.orientation.z = z;
-  msg.pose.pose.orientation.w = w;
-
-  std::ranges::copy(kPoseCovariance, msg.pose.covariance);
+    return msg.data;
 }
 
 namespace HW {
@@ -137,18 +95,14 @@ constexpr auto UMC_PINS =
 
 using UmcDriver = L298N::MotorDriver<GPIO, PWM, UMC_PINS>;
 
-constexpr Drive::Style STYLE = Drive::Style::DIFFERENTIAL;
-
 // one PCNT unit per wheel. 34/35/36/39 are input-only and have no internal
 // pull-up, so an open-collector hall output needs an external one
-constexpr auto ENCODER_ROWS =
-    Encoders::for_style<STYLE>(Encoders::Row{Motor::Name::LEFT, GPIO_NUM_35,
-                                             GPIO_NUM_34, 0},
-                               Encoders::Row{Motor::Name::RIGHT, GPIO_NUM_39,
-                                             GPIO_NUM_36, 1});
+constexpr auto ENCODER_ROWS = Encoders::for_style<Robot::STYLE>(
+    Encoders::Row{Motor::Name::LEFT, GPIO_NUM_35, GPIO_NUM_34, 0},
+    Encoders::Row{Motor::Name::RIGHT, GPIO_NUM_39, GPIO_NUM_36, 1});
 
-using EncoderBank =
-    Encoders::Bank<ESP32::QuadratureCounter, ENCODER_ROWS, Encoder::fit0485>;
+using EncoderBank = Encoders::Bank<ESP32::QuadratureCounter, ENCODER_ROWS,
+                                   Robot::WHEEL_ENCODER>;
 
 // placeholder pins: free of the motors, wired to nothing. See the TODO above
 constexpr auto DWM_PINS = HAL::pins(HAL::NamedPin{"cs", GPIO_NUM_15},
@@ -180,26 +134,32 @@ constexpr auto IMU_CONFIG =
 
 using Mpu = MPU6050::Sensor<I2C, GPIO, IMU_CONFIG, I2cBus>;
 
-using Chassis = Swarm::chassis<STYLE, MotorDriver, SpiBus, Dwm, EncoderBank,
-                               UmcDriver, I2cBus, Mpu>;
+using Chassis = Swarm::chassis<Robot::STYLE, MotorDriver, SpiBus, Dwm,
+                               EncoderBank, UmcDriver, I2cBus, Mpu>;
 
-using CmdVel = ROS::receives<geometry_msgs__msg__Twist, "cmd_vel", Drive::Twist,
-                             &read_twist>;
+using CmdVel =
+    ROS::receives<geometry_msgs__msg__Twist, Robot::CMD_VEL_TOPIC, Drive::Twist,
+                  &Robot::read_twist<geometry_msgs__msg__Twist>>;
 
 using UmcCmd =
     ROS::receives<std_msgs__msg__Float32, "umc/front", double, &read_effort>;
 
-using UwbRange = ROS::streams<sensor_msgs__msg__Range, "uwb/range", "uwb_link",
-                              double, &fill_range>;
+using UwbRange =
+    ROS::streams<sensor_msgs__msg__Range, Robot::UWB_TOPIC, Robot::UWB_FRAME,
+                 double, &Robot::fill_range<sensor_msgs__msg__Range>>;
 
-// integrated every control period on the robot, so a slow publish rate loses
-// nothing the way sampling a twist slowly would
-using OdomPose =
-    ROS::streams<geometry_msgs__msg__PoseWithCovarianceStamped, "odom/pose",
-                 "odom", Odometry::Pose, &fill_pose>;
+// the mean twist over each publish period rather than a sample of it, so an
+// EKF integrating at 5Hz retraces what the control loop integrated at 50Hz.
+// Velocity rather than pose because its error does not grow with distance,
+// and TwistWithCovarianceStamped because nav_msgs/Odometry (~720 octets)
+// outgrows the 512-octet XRCE MTU, which a best-effort stream cannot fragment
+using OdomTwist = ROS::streams<
+    geometry_msgs__msg__TwistWithCovarianceStamped, Robot::ODOM_TOPIC,
+    Robot::BASE_FRAME, Drive::Twist,
+    &Robot::fill_twist<geometry_msgs__msg__TwistWithCovarianceStamped>>;
 
-using Node = ROS::node<"base", CONFIG_SWARM_ROS_NAMESPACE, CmdVel, UmcCmd,
-                       UwbRange, OdomPose>;
+using Node = ROS::node<Robot::NODE, CONFIG_SWARM_ROS_NAMESPACE, CmdVel, UmcCmd,
+                       UwbRange, OdomTwist>;
 
 using PoseMailbox = Sched::channel<Odometry::Pose, 1>;
 using YawRateMailbox = Sched::channel<double, 1>;
@@ -207,35 +167,10 @@ using YawRateMailbox = Sched::channel<double, 1>;
 // motion is arithmetic plus two GPIO writes, so it shares the fast task
 constexpr uint32_t MOTION_PERIOD_MS = 5;
 
-// 20ms at X4 is ~150 counts per period at top speed, so the measured velocity
-// is not mostly quantisation noise the way it would be at 5ms
-constexpr uint32_t DRIVE_PERIOD_MS = 20;
-
-// a robot that has lost its server must not keep driving while the others plan
-// around it. Long enough to ride out a WiFi hiccup, so cmd_vel has to be
-// streamed faster than this
-constexpr uint32_t CMD_VEL_TIMEOUT_MS = 500;
-
-// FIT0485 is a 6V motor on a 12V rail, deliberately overdriven to 8V for
-// speed. Watch the motor temperature before pushing this further
-// TODO: the rail sags with the battery; measure it under load
-constexpr Motor::Supply WHEEL_SUPPLY{.rated = 8.0, .rail = 12.0};
-
-// FIT0485 is listed at 75rpm no-load at 6V but measured ~43rpm on the bench;
-// speed tracks voltage, so it scales with the overdrive. The feedforward only
-// has to be close, the integral takes up the rest
-// TODO: measure at the rated voltage, and tune the gains
-constexpr double MAX_WHEEL_SPEED =
-    43.0 * WHEEL_SUPPLY.rated / 6.0 * 2.0 * std::numbers::pi / 60.0;
-
-constexpr auto CONTROL =
-    Drive::control(WHEEL_SUPPLY, MAX_WHEEL_SPEED, DRIVE_PERIOD_MS / 1000.0,
-                   Pid::gains(0.05, 0.5, 0.0));
 constexpr uint32_t EXECUTOR_PERIOD_MS = 10;
-constexpr uint32_t ODOMETRY_PERIOD_MS = 200;
 
 // one yaw rate per control period, so the heading has no gaps to hold across
-constexpr uint32_t IMU_PERIOD_MS = DRIVE_PERIOD_MS;
+constexpr uint32_t IMU_PERIOD_MS = Robot::DRIVE_PERIOD_MS;
 
 constexpr uint32_t POLL_PERIOD_MS = 100;
 } // namespace HW
@@ -276,24 +211,16 @@ extern "C" void app_main(void) {
   static auto motion = Sched::make_task<4096, configMAX_PRIORITIES - 2>(
       // the loop integrates odometry, so it has to run from boot rather than
       // from the first cmd_vel. A zero twist coasts the wheels while it does
-      Sched::watched<HW::DRIVE_PERIOD_MS, HW::CMD_VEL_TIMEOUT_MS>(
+      Sched::watched<Robot::DRIVE_PERIOD_MS, Robot::CMD_VEL_TIMEOUT_MS>(
           session.inbox<HW::CmdVel>(), Drive::Twist{}) |
-          Sched::then(Drive::inverse_kinematics<HW::STYLE>) |
+          Sched::then(Drive::inverse_kinematics<Robot::STYLE>) |
           Sched::to(
-              [&motors, &encoders, state = Base::State<HW::STYLE>{}](
-                  const Drive::WheelVelocities<HW::STYLE> &targets) mutable {
-                const auto measured = Arrays::map(
-                    encoders.advance(), [](const Encoder::Reading &r) {
-                      return Drive::WheelVelocity{
-                          r.name, Encoder::rad_per_second(HW::EncoderBank::spec,
-                                                          r.counts,
-                                                          HW::CONTROL.period)};
-                    });
-
+              [&motors, &encoders, state = Base::State<Robot::STYLE>{}](
+                  const Drive::WheelVelocities<Robot::STYLE> &targets) mutable {
                 // I2C stays out of this loop: a stalled bus empties the mailbox
                 // and the heading falls back to the encoders
-                const auto [next, frame] = Base::step<HW::STYLE, HW::CONTROL>(
-                    state, targets, measured, yaw_rates.pop(0));
+                const auto [next, frame] = Robot::drive<HW::EncoderBank::spec>(
+                    state, targets, encoders.advance(), yaw_rates.pop(0));
                 state = next;
 
                 motors.run(frame);
@@ -312,12 +239,20 @@ extern "C" void app_main(void) {
           }));
 
   static auto odometry = Sched::make_task<4096, configMAX_PRIORITIES - 4>(
-      Sched::latest<HW::ODOMETRY_PERIOD_MS>(poses) |
-      Sched::to([](const Odometry::Pose &pose) {
+      Sched::latest<Robot::ODOMETRY_PERIOD_MS>(poses) |
+      Sched::to([last = std::optional<Odometry::Pose>{}](
+                    const Odometry::Pose &pose) mutable {
+        const auto previous = std::exchange(last, pose);
+
+        if (!previous) {
+          return;
+        }
+
         // false until the session is up as well, so at warning level this
         // would fire five times a second whenever the agent is away
-        if (!session.send<HW::OdomPose>(pose)) {
-          ESP_LOGD(TAG, "Dropped pose");
+        if (!session.send<HW::OdomTwist>(Odometry::twist_between(
+                *previous, pose, Robot::ODOMETRY_PERIOD_MS / 1000.0))) {
+          ESP_LOGD(TAG, "Dropped twist");
         }
       }));
 
