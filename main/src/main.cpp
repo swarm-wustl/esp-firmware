@@ -142,8 +142,10 @@ constexpr Drive::Style STYLE = Drive::Style::DIFFERENTIAL;
 // one PCNT unit per wheel. 34/35/36/39 are input-only and have no internal
 // pull-up, so an open-collector hall output needs an external one
 constexpr auto ENCODER_ROWS =
-    Encoders::for_style<STYLE>(Encoders::Row{Motor::Name::LEFT, 34, 35, 0},
-                               Encoders::Row{Motor::Name::RIGHT, 36, 39, 1});
+    Encoders::for_style<STYLE>(Encoders::Row{Motor::Name::LEFT, GPIO_NUM_35,
+                                             GPIO_NUM_34, 0},
+                               Encoders::Row{Motor::Name::RIGHT, GPIO_NUM_39,
+                                             GPIO_NUM_36, 1});
 
 using EncoderBank =
     Encoders::Bank<ESP32::QuadratureCounter, ENCODER_ROWS, Encoder::fit0485>;
@@ -214,15 +216,17 @@ constexpr uint32_t DRIVE_PERIOD_MS = 20;
 // streamed faster than this
 constexpr uint32_t CMD_VEL_TIMEOUT_MS = 500;
 
-// FIT0485 is a 6V motor on a 12V rail, so the loop never asks for more than
-// half duty
+// FIT0485 is a 6V motor on a 12V rail, deliberately overdriven to 8V for
+// speed. Watch the motor temperature before pushing this further
 // TODO: the rail sags with the battery; measure it under load
-constexpr Motor::Supply WHEEL_SUPPLY{.rated = 6.0, .rail = 12.0};
+constexpr Motor::Supply WHEEL_SUPPLY{.rated = 8.0, .rail = 12.0};
 
-// FIT0485 is listed at 75rpm no-load at 6V; the feedforward only has to be
-// close, the integral takes up the rest
+// FIT0485 is listed at 75rpm no-load at 6V but measured ~43rpm on the bench;
+// speed tracks voltage, so it scales with the overdrive. The feedforward only
+// has to be close, the integral takes up the rest
 // TODO: measure at the rated voltage, and tune the gains
-constexpr double MAX_WHEEL_SPEED = 75.0 * 2.0 * std::numbers::pi / 60.0;
+constexpr double MAX_WHEEL_SPEED =
+    43.0 * WHEEL_SUPPLY.rated / 6.0 * 2.0 * std::numbers::pi / 60.0;
 
 constexpr auto CONTROL =
     Drive::control(WHEEL_SUPPLY, MAX_WHEEL_SPEED, DRIVE_PERIOD_MS / 1000.0,
