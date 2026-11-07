@@ -17,6 +17,7 @@
 #include "base.h"
 #include "differential_drive.h"
 #include "encoder.h"
+#include "fixed_string.h"
 #include "odometry.h"
 
 namespace Robot {
@@ -32,37 +33,22 @@ inline constexpr char ODOM_FRAME[] = "odom";
 inline constexpr char BASE_FRAME[] = "base_link";
 inline constexpr char UWB_FRAME[] = "uwb_link";
 
-template <size_t N> struct FrameName {
-  char value[N]{};
-};
-
 // "swarm_1" + "base_link" -> "swarm_1/base_link". The board's namespace is
 // fixed at build time, so its frames are built here rather than at boot; the
-// sim joins the same way at runtime, once per robot
+// sim joins the same way at runtime, once per robot. Both branches are the
+// same width, so an empty namespace only leaves slack at the end
 template <size_t A, size_t B>
-consteval FrameName<A + B> frame_in(const char (&ns)[A],
-                                    const char (&frame)[B]) {
-  FrameName<A + B> out{};
-  size_t i = 0;
-
-  for (size_t j = 0; j + 1 < A; ++j) {
-    out.value[i++] = ns[j];
+consteval Strings::fixed_string<A + B> frame_in(const char (&ns)[A],
+                                                const char (&frame)[B]) {
+  if constexpr (A == 1) {
+    return Strings::fixed_string<B>{frame};
+  } else {
+    return ns + Strings::fixed_string{"/"} + frame;
   }
-
-  if (A > 1) {
-    out.value[i++] = '/';
-  }
-
-  for (size_t j = 0; j < B; ++j) {
-    out.value[i++] = frame[j];
-  }
-
-  return out;
 }
 
-static_assert(std::string_view{frame_in("swarm_1", "base_link").value} ==
-              "swarm_1/base_link");
-static_assert(std::string_view{frame_in("", "base_link").value} == "base_link");
+static_assert(frame_in("swarm_1", "base_link").view() == "swarm_1/base_link");
+static_assert(frame_in("", "base_link").view() == "base_link");
 
 constexpr Drive::Style STYLE = Drive::Style::DIFFERENTIAL;
 

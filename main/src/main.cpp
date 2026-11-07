@@ -150,7 +150,7 @@ constexpr auto UWB_FRAME =
     Robot::frame_in(CONFIG_SWARM_ROS_NAMESPACE, Robot::UWB_FRAME);
 
 using UwbRange =
-    ROS::streams<sensor_msgs__msg__Range, Robot::UWB_TOPIC, UWB_FRAME.value,
+    ROS::streams<sensor_msgs__msg__Range, Robot::UWB_TOPIC, UWB_FRAME,
                  double, &Robot::fill_range<sensor_msgs__msg__Range>>;
 
 // the mean twist over each publish period rather than a sample of it, so an
@@ -160,7 +160,7 @@ using UwbRange =
 // outgrows the 512-octet XRCE MTU, which a best-effort stream cannot fragment
 using OdomTwist = ROS::streams<
     geometry_msgs__msg__TwistWithCovarianceStamped, Robot::ODOM_TOPIC,
-    BASE_FRAME.value, Drive::Twist,
+    BASE_FRAME, Drive::Twist,
     &Robot::fill_twist<geometry_msgs__msg__TwistWithCovarianceStamped>>;
 
 using Node = ROS::node<Robot::NODE, CONFIG_SWARM_ROS_NAMESPACE, CmdVel, UmcCmd,
