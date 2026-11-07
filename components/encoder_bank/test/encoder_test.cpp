@@ -20,7 +20,7 @@ struct MockCounter {
   static inline std::array<int32_t, 8> counts{};
   static inline std::array<int, 8> configured{};
 
-  explicit MockCounter(Swarm::Assembly) {}
+  explicit MockCounter(Swarm::Assembly<MockCounter>) {}
 
   void configure_unit(int unit, HAL::Pin a, HAL::Pin b) {
     configured[unit] = a.number() * 100 + b.number();

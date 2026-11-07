@@ -246,13 +246,14 @@ class DWM {
                 "DWM1000 requires little-endian architecture");
 
 public:
-  static constexpr auto claims =
-      Arrays::concat(Pins.claims(), GPIO::claims, SPI::claims);
+  static constexpr auto claims = Pins.claims();
 
+  using owns = Swarm::owns<SPI, GPIO>;
   using needs = Swarm::needs<Bus>;
 
-  DWM(Swarm::Assembly assembly, Bus &bus)
-      : spi_{assembly, bus, Pins["cs"_p]}, gpio_{assembly} {
+  DWM(Swarm::Assembly<DWM> key, Bus &bus)
+      : spi_{Swarm::make<SPI>(key, bus, Pins["cs"_p])},
+        gpio_{Swarm::make<GPIO>(key)} {
     hard_reset();
   }
 

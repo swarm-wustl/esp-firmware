@@ -43,18 +43,19 @@ struct system_impl {
   static constexpr bool declared = (std::same_as<T, Peripherals> || ...);
 
   // This method ensures only things declared in the system at comptime
-  // can be created at runtime. We also pass in the Assembly{} tag/passkey
-  // so that any class opting in can include Assembly in their ctor,
+  // can be created at runtime. We also pass in the Assembly<T>{} tag/passkey
+  // so that any class opting in can include Assembly<T> in their ctor,
   // which prevents said class from being made outside of this method.
   //
   // This is better than friendship because the passkey can be passed along
   // to sub-classes (e.g., DWM making GPIO and SPI), doesn't require explicit
   // friend declarations for every new subscriber, works with
-  // emplace/factories/etc. The passkey is transferable!
+  // emplace/factories/etc. The passkey is transferable, but only to what the
+  // holder lists in its owns<...>
   template <typename T, typename... Args>
     requires declared<T>
   static T make(Args &&...args) {
-    return T{Assembly{}, std::forward<Args>(args)...};
+    return T{Assembly<T>{}, std::forward<Args>(args)...};
   }
 
   template <typename T> static constexpr size_t index_of() {
@@ -106,7 +107,7 @@ private:
                   "a peripheral must be listed after the peripherals it needs");
 
     std::get<std::optional<T>>(into.store_)
-        .emplace(Assembly{}, into.template get<Needs>()...);
+        .emplace(Assembly<T>{}, into.template get<Needs>()...);
   }
 
   template <typename T> static void emplace(Instances &into) {

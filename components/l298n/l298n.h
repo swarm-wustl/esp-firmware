@@ -41,21 +41,21 @@ template <std::same_as<MotorPins>... Rows> consteval auto motors(Rows... rows) {
 
 template <HAL::GenericGPIOController GPIO, HAL::GenericPWMController PWM,
           auto Rows>
-  requires HAL::Claiming<PWM>
 class MotorDriver {
 public:
   static constexpr auto motors = Arrays::map(Rows, &MotorPins::name);
 
   // the LEDC timer belongs to the PWM this driver owns
-  static constexpr auto claims = Arrays::concat(
+  using owns = Swarm::owns<GPIO, PWM>;
+
+  static constexpr auto claims =
       HAL::row_claims<Rows>([](const MotorPins &motor) {
         return HAL::Claim{HAL::Resource::PwmChannel, motor.pwm_channel,
                           HAL::Use::Exclusive};
-      }),
-      PWM::claims);
+      });
 
-  explicit MotorDriver(Swarm::Assembly assembly)
-      : gpio_{assembly}, pwm_{assembly} {
+  explicit MotorDriver(Swarm::Assembly<MotorDriver> key)
+      : gpio_{Swarm::make<GPIO>(key)}, pwm_{Swarm::make<PWM>(key)} {
     for (size_t i = 0; i < Rows.size(); ++i) {
       gpio_.set_direction(kInA[i], HAL::PinMode::Output);
       gpio_.set_direction(kInB[i], HAL::PinMode::Output);

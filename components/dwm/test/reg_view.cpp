@@ -17,8 +17,10 @@ struct HardReset {
   static constexpr std::array claims{HAL::Claim{
       HAL::Resource::Gpio, DWM_PINS["reset"_p].number(), HAL::Use::Exclusive}};
 
-  explicit HardReset(Swarm::Assembly assembly) {
-    ESP32::GPIO gpio{assembly};
+  using owns = Swarm::owns<ESP32::GPIO>;
+
+  explicit HardReset(Swarm::Assembly<HardReset> key) {
+    auto gpio = Swarm::make<ESP32::GPIO>(key);
     constexpr HAL::Pin reset = DWM_PINS["reset"_p];
 
     gpio.set_direction(reset, HAL::PinMode::Output);

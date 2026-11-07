@@ -10,7 +10,7 @@ static constexpr ledc_timer_t TIMER =
 static constexpr ledc_timer_bit_t DUTY_RESOLUTION = LEDC_TIMER_10_BIT;
 static constexpr uint32_t FREQUENCY_HZ = ESP32::PWM::frequency_hz;
 
-ESP32::PWM::PWM(Swarm::Assembly) {
+ESP32::PWM::PWM(Swarm::Assembly<PWM>) {
   ledc_timer_config_t timer = {
       .speed_mode = MODE,
       .duty_resolution = DUTY_RESOLUTION,

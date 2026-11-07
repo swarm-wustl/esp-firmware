@@ -140,14 +140,16 @@ template <HAL::GenericI2CController I2C, HAL::GenericGPIOController GPIO,
           Config Cfg, typename Bus, Address Addr = Address::Low>
 class Sensor {
 public:
-  static constexpr auto claims = Arrays::concat(I2C::claims, GPIO::claims);
+  static constexpr std::array<HAL::Claim, 0> claims{};
 
+  using owns = Swarm::owns<I2C, GPIO>;
   using needs = Swarm::needs<Bus>;
 
   static constexpr Config spec = Cfg;
 
-  Sensor(Swarm::Assembly assembly, Bus &bus)
-      : i2c_{assembly, bus, static_cast<uint8_t>(Addr)}, gpio_{assembly} {}
+  Sensor(Swarm::Assembly<Sensor> key, Bus &bus)
+      : i2c_{Swarm::make<I2C>(key, bus, static_cast<uint8_t>(Addr))},
+        gpio_{Swarm::make<GPIO>(key)} {}
 
   Sensor(const Sensor &) = delete;
   void operator=(const Sensor &) = delete;

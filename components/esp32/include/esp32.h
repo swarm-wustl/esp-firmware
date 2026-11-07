@@ -47,7 +47,7 @@ public:
       HAL::Claim{HAL::Resource::Gpio, mosi, HAL::Use::Shared},
   };
 
-  explicit SpiBus(Swarm::Assembly);
+  explicit SpiBus(Swarm::Assembly<SpiBus>);
   ~SpiBus();
 
   SpiBus(const SpiBus &) = delete;
@@ -68,7 +68,7 @@ class SPI {
 public:
   static constexpr std::array<HAL::Claim, 0> claims{};
 
-  SPI(Swarm::Assembly, SpiBus &bus, HAL::Pin cs);
+  SPI(Swarm::Assembly<SPI>, SpiBus &bus, HAL::Pin cs);
   ~SPI();
 
   SPI(const SPI &) = delete;
@@ -117,7 +117,7 @@ public:
                      std::array{HAL::Claim{HAL::Resource::I2cPort, Port,
                                            HAL::Use::Exclusive}});
 
-  explicit I2cBus(Swarm::Assembly)
+  explicit I2cBus(Swarm::Assembly<I2cBus>)
       : handle_{detail::i2c_open_bus(Port, Pins["sda"_p].number(),
                                      Pins["scl"_p].number())} {}
 
@@ -143,7 +143,7 @@ public:
   static constexpr uint32_t speed_hz = 400'000;
   static constexpr int timeout_ms = 1000;
 
-  I2C(Swarm::Assembly, Bus &bus, uint8_t address)
+  I2C(Swarm::Assembly<I2C>, Bus &bus, uint8_t address)
       : device_{detail::i2c_add_device(bus.handle(), address, speed_hz)} {}
 
   ~I2C() { detail::i2c_remove_device(device_); }
@@ -176,7 +176,7 @@ public:
   // built through the config like every other peripheral
   static constexpr std::array<HAL::Claim, 0> claims{};
 
-  explicit GPIO(Swarm::Assembly) {}
+  explicit GPIO(Swarm::Assembly<GPIO>) {}
   ~GPIO() = default;
 
   GPIO(const GPIO &) = delete;
@@ -227,7 +227,7 @@ public:
       HAL::Claim{HAL::Resource::LedcTimer, timer, HAL::Use::Shared},
   };
 
-  PWM(Swarm::Assembly);
+  PWM(Swarm::Assembly<PWM>);
 
   PWM(const PWM &) = delete;
   void operator=(const PWM &) = delete;
@@ -261,7 +261,7 @@ public:
   // allows ~170 output rev/s at X4, far past the 1.25 rev/s this gearbox turns
   static constexpr uint32_t glitch_filter_ns = 1000;
 
-  explicit QuadratureCounter(Swarm::Assembly);
+  explicit QuadratureCounter(Swarm::Assembly<QuadratureCounter>);
   ~QuadratureCounter();
 
   QuadratureCounter(const QuadratureCounter &) = delete;

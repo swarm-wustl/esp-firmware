@@ -8,7 +8,8 @@ namespace {
 constexpr const char *TAG = "pcnt";
 }
 
-ESP32::QuadratureCounter::QuadratureCounter(Swarm::Assembly) {}
+ESP32::QuadratureCounter::QuadratureCounter(
+    Swarm::Assembly<QuadratureCounter>) {}
 
 ESP32::QuadratureCounter::~QuadratureCounter() {
   for (pcnt_unit_handle_t &unit : units_) {

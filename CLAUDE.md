@@ -87,9 +87,13 @@ pin rows -- no algorithm is written or specialised. `Swarm::chassis` pairs a
 geometry with a driver and only exists if they fit; `HAL::Claim` lets every
 peripheral declare the pins and channels it takes, so a collision between two
 unrelated subsystems is a build error rather than a mystery on the bench. A
-device owns its sub-devices and folds in their claims (`DWM` holds its SPI,
-`L298N::MotorDriver` its PWM), so the config sees the whole tree from the two
-types it is handed.
+device lists its sub-devices in `using owns = Swarm::owns<...>` (`DWM` its SPI
+and GPIO, `L298N::MotorDriver` its GPIO and PWM), and that one list does two
+jobs: `Swarm::claims_of` walks it, so the config sees the whole tree from the
+types it is handed, and it is the only thing `Swarm::make<Sub>(key)` will build.
+Every key is `Swarm::Assembly<T>`, minted by a system that declared `T` or by
+the key of an owner that lists it, so a sub-device the owner forgot to list
+doesn't compile, and neither does handing it the owner's own key.
 
 ## The UMC
 

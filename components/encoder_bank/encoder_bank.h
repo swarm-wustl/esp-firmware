@@ -42,7 +42,6 @@ consteval auto for_style(Rows... rows) {
 }
 
 template <Encoder::Counter Counter, auto Table, Encoder::Geometry Motor>
-  requires HAL::Claiming<Counter>
 class Bank {
 public:
   static_assert(Encoder::usable(Motor),
@@ -54,14 +53,14 @@ public:
   // derived from it rather than declared twice
   static constexpr Encoder::Spec spec{Motor, Counter::decoding};
 
-  static constexpr auto claims = Arrays::concat(
-      HAL::row_claims<Table>([](const Row &row) {
-        return HAL::Claim{HAL::Resource::PcntUnit, row.unit,
-                          HAL::Use::Exclusive};
-      }),
-      Counter::claims);
+  using owns = Swarm::owns<Counter>;
 
-  explicit Bank(Swarm::Assembly assembly) : counter_{assembly} {
+  static constexpr auto claims = HAL::row_claims<Table>([](const Row &row) {
+    return HAL::Claim{HAL::Resource::PcntUnit, row.unit, HAL::Use::Exclusive};
+  });
+
+  explicit Bank(Swarm::Assembly<Bank> key)
+      : counter_{Swarm::make<Counter>(key)} {
     for (size_t i = 0; i < Table.size(); ++i) {
       counter_.configure_unit(Table[i].unit, kChannelA[i], kChannelB[i]);
     }
