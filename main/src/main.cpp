@@ -6,15 +6,15 @@
 #include "l298n.h"
 #include "mpu6050.h"
 #include "odometry.h"
+#include "sdkconfig.h"
 #include "session.h"
 #include "swarm_sched.h"
 #include "system.h"
-#include "sdkconfig.h"
 
 #ifdef CONFIG_K_INITIATOR
-  constexpr bool K_INITIATOR = true;
+constexpr bool K_INITIATOR = true;
 #else
-  constexpr bool K_INITIATOR = false;
+constexpr bool K_INITIATOR = false;
 #endif
 
 #include "esp_log.h"
@@ -50,6 +50,17 @@ static void fill_range(sensor_msgs__msg__Range &msg, const double &meters) {
 
 static Drive::Twist read_twist(const geometry_msgs__msg__Twist &msg) {
   return {msg.linear.x, msg.linear.y, msg.angular.z};
+}
+
+static constexpr const char *label(Motor::Name name) {
+  switch (name) {
+  case Motor::Name::LEFT:
+    return "left";
+  case Motor::Name::RIGHT:
+    return "right";
+  default:
+    return "motor";
+  }
 }
 
 static double read_effort(const std_msgs__msg__Float32 &msg) {
@@ -115,10 +126,10 @@ using PWM = ESP32::PWM;
 // which side -- swap the two names if the robot spins on a forward twist
 // TODO: no longer L298N, fix to proper name. but implementation is identical
 constexpr auto MOTOR_PINS =
-    L298N::motors(L298N::MotorPins{Motor::Name::LEFT, GPIO_NUM_26, GPIO_NUM_27,
-                                   GPIO_NUM_19, 0},
-                  L298N::MotorPins{Motor::Name::RIGHT, GPIO_NUM_32, GPIO_NUM_33,
-                                   GPIO_NUM_25, 1});
+    L298N::motors(L298N::MotorPins{Motor::Name::LEFT, GPIO_NUM_13, GPIO_NUM_14,
+                                   GPIO_NUM_12, 0},
+                  L298N::MotorPins{Motor::Name::RIGHT, GPIO_NUM_5, GPIO_NUM_16,
+                                   GPIO_NUM_17, 1});
 
 using MotorDriver = L298N::MotorDriver<GPIO, PWM, MOTOR_PINS>;
 
@@ -139,11 +150,12 @@ using UmcDriver = L298N::MotorDriver<GPIO, PWM, UMC_PINS>;
 
 constexpr Drive::Style STYLE = Drive::Style::DIFFERENTIAL;
 
-// one PCNT unit per wheel. 34/35/36/39 are input-only and have no internal
-// pull-up, so an open-collector hall output needs an external one
+// one PCNT unit per wheel
 constexpr auto ENCODER_ROWS =
-    Encoders::for_style<STYLE>(Encoders::Row{Motor::Name::LEFT, 34, 35, 0},
-                               Encoders::Row{Motor::Name::RIGHT, 36, 39, 1});
+    Encoders::for_style<STYLE>(Encoders::Row{Motor::Name::LEFT, GPIO_NUM_26,
+                                             GPIO_NUM_25, 0},
+                               Encoders::Row{Motor::Name::RIGHT, GPIO_NUM_33,
+                                             GPIO_NUM_32, 1});
 
 using EncoderBank =
     Encoders::Bank<ESP32::QuadratureCounter, ENCODER_ROWS, Encoder::fit0485>;
@@ -178,8 +190,11 @@ constexpr auto IMU_CONFIG =
 
 using Mpu = MPU6050::Sensor<I2C, GPIO, IMU_CONFIG, I2cBus>;
 
-using Chassis = Swarm::chassis<STYLE, MotorDriver, SpiBus, Dwm, EncoderBank,
-                               UmcDriver, I2cBus, Mpu>;
+// motor bring-up: the UMC, DW1000 and IMU pins above now collide with the
+// wheels, so only the drive and its encoders are taken until they are rewired
+using Chassis = Swarm::chassis<STYLE, MotorDriver, EncoderBank>;
+// using Chassis = Swarm::chassis<STYLE, MotorDriver, SpiBus, Dwm, EncoderBank,
+//                                UmcDriver, I2cBus, Mpu>;
 
 using CmdVel = ROS::receives<geometry_msgs__msg__Twist, "cmd_vel", Drive::Twist,
                              &read_twist>;
@@ -214,21 +229,24 @@ constexpr uint32_t DRIVE_PERIOD_MS = 20;
 // streamed faster than this
 constexpr uint32_t CMD_VEL_TIMEOUT_MS = 500;
 
-// FIT0485 is a 6V motor on a 12V rail, so the loop never asks for more than
-// half duty
+// FIT0485 is a 6V motor on a 12V rail, deliberately overdriven to 8V for
+// speed. Watch the motor temperature before pushing this further
 // TODO: the rail sags with the battery; measure it under load
-constexpr Motor::Supply WHEEL_SUPPLY{.rated = 6.0, .rail = 12.0};
+constexpr Motor::Supply WHEEL_SUPPLY{.rated = 8.0, .rail = 12.0};
 
-// FIT0485 is listed at 75rpm no-load at 6V; the feedforward only has to be
-// close, the integral takes up the rest
+// FIT0485 is listed at 75rpm no-load at 6V but measured ~43rpm on the bench;
+// speed tracks voltage, so it scales with the overdrive. The feedforward only
+// has to be close, the integral takes up the rest
 // TODO: measure at the rated voltage, and tune the gains
-constexpr double MAX_WHEEL_SPEED = 75.0 * 2.0 * std::numbers::pi / 60.0;
+constexpr double MAX_WHEEL_SPEED =
+    43.0 * WHEEL_SUPPLY.rated / 6.0 * 2.0 * std::numbers::pi / 60.0;
 
 constexpr auto CONTROL =
     Drive::control(WHEEL_SUPPLY, MAX_WHEEL_SPEED, DRIVE_PERIOD_MS / 1000.0,
                    Pid::gains(0.05, 0.5, 0.0));
 constexpr uint32_t EXECUTOR_PERIOD_MS = 10;
 constexpr uint32_t ODOMETRY_PERIOD_MS = 200;
+constexpr uint32_t ENCODER_LOG_PERIOD_MS = 200;
 
 // one yaw rate per control period, so the heading has no gaps to hold across
 constexpr uint32_t IMU_PERIOD_MS = DRIVE_PERIOD_MS;
@@ -244,25 +262,25 @@ extern "C" void app_main(void) {
   ESP_LOGI(TAG, "FreeRTOS tick: %d Hz", CONFIG_FREERTOS_HZ);
 
   auto &peripherals = HW::Chassis::take();
-  auto &dwm_sensor = peripherals.get<HW::Dwm>();
+  // auto &dwm_sensor = peripherals.get<HW::Dwm>();
   auto &motors = peripherals.get<HW::MotorDriver>();
   auto &encoders = peripherals.get<HW::EncoderBank>();
-  auto &umc = peripherals.get<HW::UmcDriver>();
-  auto &imu_sensor = peripherals.get<HW::Mpu>();
+  // auto &umc = peripherals.get<HW::UmcDriver>();
+  // auto &imu_sensor = peripherals.get<HW::Mpu>();
 
-  // these two talk to the bus, so they report failure until the DW1000 is on
-  // pins it is actually wired to
-  if (auto id = dwm_sensor.get_device_id()) {
-    ESP_LOGI(TAG, "DW1000 id: 0x%08lX", static_cast<unsigned long>(*id));
-  } else {
-    ESP_LOGE(TAG, "DW1000 id read failed");
-  }
-
-  if (auto r = dwm_sensor.configure(); r) {
-    ESP_LOGI(TAG, "DW1000 configured");
-  } else {
-    ESP_LOGE(TAG, "DW1000 configure failed");
-  }
+  // // these two talk to the bus, so they report failure until the DW1000 is on
+  // // pins it is actually wired to
+  // if (auto id = dwm_sensor.get_device_id()) {
+  //   ESP_LOGI(TAG, "DW1000 id: 0x%08lX", static_cast<unsigned long>(*id));
+  // } else {
+  //   ESP_LOGE(TAG, "DW1000 id read failed");
+  // }
+  //
+  // if (auto r = dwm_sensor.configure(); r) {
+  //   ESP_LOGI(TAG, "DW1000 configured");
+  // } else {
+  //   ESP_LOGE(TAG, "DW1000 configure failed");
+  // }
 
 #if defined(CONFIG_MICRO_ROS_ESP_NETIF_WLAN) ||                                \
     defined(CONFIG_MICRO_ROS_ESP_NETIF_ENET)
@@ -294,18 +312,18 @@ extern "C" void app_main(void) {
 
                 motors.run(frame);
                 poses.overwrite(state.pose);
-              }),
-      Sched::latest<HW::MOTION_PERIOD_MS>(session.inbox<HW::UmcCmd>()) |
-          Sched::then(Motor::ganged<HW::UmcDriver::motors>) |
-          Sched::to([&umc](const auto &frame) {
-            for (const Motor::Command &cmd : frame.commands) {
-              ESP_LOGI(TAG, "umc motor %d: dir %d duty %.2f",
-                       static_cast<int>(cmd.name), static_cast<int>(cmd.dir),
-                       cmd.pwm_ratio);
-            }
-
-            umc.run(frame);
-          }));
+              }));
+  //     Sched::latest<HW::MOTION_PERIOD_MS>(session.inbox<HW::UmcCmd>()) |
+  //         Sched::then(Motor::ganged<HW::UmcDriver::motors>) |
+  //         Sched::to([&umc](const auto &frame) {
+  //           for (const Motor::Command &cmd : frame.commands) {
+  //             ESP_LOGI(TAG, "umc motor %d: dir %d duty %.2f",
+  //                      static_cast<int>(cmd.name), static_cast<int>(cmd.dir),
+  //                      cmd.pwm_ratio);
+  //           }
+  //
+  //           umc.run(frame);
+  //         }))
 
   static auto odometry = Sched::make_task<4096, configMAX_PRIORITIES - 4>(
       Sched::latest<HW::ODOMETRY_PERIOD_MS>(poses) |
@@ -317,85 +335,106 @@ extern "C" void app_main(void) {
         }
       }));
 
+  // advance() belongs to the motion loop, so this differences the running
+  // totals itself rather than stealing counts from the controller
+  static auto encoder_log = Sched::make_task<4096, configMAX_PRIORITIES - 5>(
+      Sched::every<HW::ENCODER_LOG_PERIOD_MS> |
+      Sched::then([&encoders] { return encoders.read(); }) |
+      Sched::to([last = std::array<int32_t, HW::EncoderBank::motors.size()>{}](
+                    const auto &totals) mutable {
+        constexpr double seconds = HW::ENCODER_LOG_PERIOD_MS / 1000.0;
+
+        for (size_t i = 0; i < totals.size(); ++i) {
+          const int32_t delta = totals[i].counts - last[i];
+          last[i] = totals[i].counts;
+
+          ESP_LOGI(TAG, "%s %+8ld total %+5ld counts %+7.2f rpm",
+                   label(totals[i].name), static_cast<long>(totals[i].counts),
+                   static_cast<long>(delta),
+                   Encoder::rpm(HW::EncoderBank::spec, delta, seconds));
+        }
+      }));
+
   // init runs on the uros task, not here: a dead agent must not stop motion
   // from spawning
   static auto ros = Sched::make_task<16000, configMAX_PRIORITIES - 1>(
       ROS::serve<HW::EXECUTOR_PERIOD_MS>(session));
 
-  // the bias estimate assumes the robot is still, so calibration belongs in
-  // on_start rather than anywhere a command could already be moving it
-  static auto imu = Sched::make_task<4096, configMAX_PRIORITIES - 4>(
-      Sched::on_start([&imu_sensor] {
-        while (true) {
-          if (auto id = imu_sensor.who_am_i()) {
-            ESP_LOGI(TAG, "MPU6050 id: 0x%02X", *id);
-            break;
-          } else {
-            ESP_LOGW(TAG, "MPU6050 id read failed; retrying");
-            vTaskDelay(pdMS_TO_TICKS(1000));
-          }
-        }
-
-        if (!imu_sensor.configure()) {
-          ESP_LOGE(TAG, "MPU6050 configure failed");
-
-          return false;
-        }
-
-        ESP_LOGI(TAG, "MPU6050 calibrating -- hold still");
-
-        if (const auto offsets = imu_sensor.calibrate()) {
-          ESP_LOGI(TAG, "MPU6050 gyro bias: %d %d %d counts", offsets->gyro.x,
-                   offsets->gyro.y, offsets->gyro.z);
-        } else {
-          ESP_LOGE(TAG, "MPU6050 calibration failed");
-
-          return false;
-        }
-
-        return true;
-      }) |
-      Sched::every<HW::IMU_PERIOD_MS> |
-      Sched::then([&imu_sensor] { return imu_sensor.read_sample(); }) |
-      Sched::to([](const Imu::Sample &sample) {
-        // TODO: check the sign on the bench -- a part mounted upside down
-        // needs this negated, and Imu::Axis has no way to say so yet
-        yaw_rates.overwrite(Imu::yaw_rate(sample, HW::Mpu::spec.up));
-
-        ESP_LOGD(TAG, "gyro %+7.2f %+7.2f %+7.2f dps  accel %+6.3f %+6.3f "
-                      "%+6.3f g  %.1f C",
-                 sample.gyro.x, sample.gyro.y, sample.gyro.z, sample.accel.x,
-                 sample.accel.y, sample.accel.z, sample.temperature_c);
-      }));
+  // // the bias estimate assumes the robot is still, so calibration belongs in
+  // // on_start rather than anywhere a command could already be moving it
+  // static auto imu = Sched::make_task<4096, configMAX_PRIORITIES - 4>(
+  //     Sched::on_start([&imu_sensor] {
+  //       while (true) {
+  //         if (auto id = imu_sensor.who_am_i()) {
+  //           ESP_LOGI(TAG, "MPU6050 id: 0x%02X", *id);
+  //           break;
+  //         } else {
+  //           ESP_LOGW(TAG, "MPU6050 id read failed; retrying");
+  //           vTaskDelay(pdMS_TO_TICKS(1000));
+  //         }
+  //       }
+  //
+  //       if (!imu_sensor.configure()) {
+  //         ESP_LOGE(TAG, "MPU6050 configure failed");
+  //
+  //         return false;
+  //       }
+  //
+  //       ESP_LOGI(TAG, "MPU6050 calibrating -- hold still");
+  //
+  //       if (const auto offsets = imu_sensor.calibrate()) {
+  //         ESP_LOGI(TAG, "MPU6050 gyro bias: %d %d %d counts", offsets->gyro.x,
+  //                  offsets->gyro.y, offsets->gyro.z);
+  //       } else {
+  //         ESP_LOGE(TAG, "MPU6050 calibration failed");
+  //
+  //         return false;
+  //       }
+  //
+  //       return true;
+  //     }) |
+  //     Sched::every<HW::IMU_PERIOD_MS> |
+  //     Sched::then([&imu_sensor] { return imu_sensor.read_sample(); }) |
+  //     Sched::to([](const Imu::Sample &sample) {
+  //       // TODO: check the sign on the bench -- a part mounted upside down
+  //       // needs this negated, and Imu::Axis has no way to say so yet
+  //       yaw_rates.overwrite(Imu::yaw_rate(sample, HW::Mpu::spec.up));
+  //
+  //       ESP_LOGD(TAG, "gyro %+7.2f %+7.2f %+7.2f dps  accel %+6.3f %+6.3f "
+  //                     "%+6.3f g  %.1f C",
+  //                sample.gyro.x, sample.gyro.y, sample.gyro.z, sample.accel.x,
+  //                sample.accel.y, sample.accel.z, sample.temperature_c);
+  //     }));
 
   ros.spawn("uros");
   motion.spawn("motion");
   odometry.spawn("odometry");
+  encoder_log.spawn("encoder_log");
   // may not work until I2C_PINS are corrected: expect who_am_i retries
-  imu.spawn("imu");
+  // imu.spawn("imu");
 
-  if constexpr (K_INITIATOR) {
-    ESP_LOGI(TAG, "k initiator true");
-    [[maybe_unused]] static auto ranging =
-        Sched::make_task<4096, configMAX_PRIORITIES - 3>(
-            Sched::every<HW::POLL_PERIOD_MS> |
-            Sched::then([&dwm_sensor] { return dwm_sensor.range(); }) |
-            Sched::to([](double meters) {
-              if (!session.send<HW::UwbRange>(meters)) {
-                ESP_LOGW(TAG, "Dropped range: publish channel full");
-              }
-            }));
-
-    // ranging.spawn("ranging");
-  } else {
-    ESP_LOGI(TAG, "k initiator false");
-    // the responder measures t_reply on its own crystal and drift multiplies
-    // it, so this task must not be preempted between rx(poll) and tx(reply)
-    [[maybe_unused]] static auto responding =
-        Sched::make_task<4096, configMAX_PRIORITIES - 1>(
-            Sched::every<HW::POLL_PERIOD_MS> |
-            Sched::to([&dwm_sensor] { return dwm_sensor.respond(); }));
-
-    // responding.spawn("responding");
-  }
+  // if constexpr (K_INITIATOR) {
+  //   ESP_LOGI(TAG, "k initiator true");
+  //   [[maybe_unused]] static auto ranging =
+  //       Sched::make_task<4096, configMAX_PRIORITIES - 3>(
+  //           Sched::every<HW::POLL_PERIOD_MS> |
+  //           Sched::then([&dwm_sensor] { return dwm_sensor.range(); }) |
+  //           Sched::to([](double meters) {
+  //             if (!session.send<HW::UwbRange>(meters)) {
+  //               ESP_LOGW(TAG, "Dropped range: publish channel full");
+  //             }
+  //           }));
+  //
+  //   // ranging.spawn("ranging");
+  // } else {
+  //   ESP_LOGI(TAG, "k initiator false");
+  //   // the responder measures t_reply on its own crystal and drift multiplies
+  //   // it, so this task must not be preempted between rx(poll) and tx(reply)
+  //   [[maybe_unused]] static auto responding =
+  //       Sched::make_task<4096, configMAX_PRIORITIES - 1>(
+  //           Sched::every<HW::POLL_PERIOD_MS> |
+  //           Sched::to([&dwm_sensor] { return dwm_sensor.respond(); }));
+  //
+  //   // responding.spawn("responding");
+  // }
 }
