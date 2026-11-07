@@ -55,7 +55,9 @@ template <typename T> class Assembly;
 
 template <typename Sub, typename Owner, typename... Args>
   requires owned_by<Sub, Owner>
-Sub make(Assembly<Owner>, Args &&...args);
+Sub make(Assembly<Owner>, Args &&...args) {
+  return Sub{Assembly<Sub>{}, std::forward<Args>(args)...};
+}
 
 // the key to constructing one T. Only a system that declared T can mint one,
 // or the key of a T's owner -- so nothing that owns a pin can exist outside a
@@ -72,12 +74,6 @@ template <typename T> class Assembly {
     requires no_resource_conflicts<Peripherals...>
   friend struct system_impl;
 };
-
-template <typename Sub, typename Owner, typename... Args>
-  requires owned_by<Sub, Owner>
-Sub make(Assembly<Owner>, Args &&...args) {
-  return Sub{Assembly<Sub>{}, std::forward<Args>(args)...};
-}
 } // namespace Swarm
 
 #endif
