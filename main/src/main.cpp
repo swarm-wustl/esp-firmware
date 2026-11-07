@@ -1,7 +1,7 @@
 #include "base.h"
 #include "differential_drive.h"
 #include "dwm.h"
-#include "encoders.h"
+#include "encoder_bank.h"
 #include "esp32.h"
 #include "l298n.h"
 #include "mpu6050.h"

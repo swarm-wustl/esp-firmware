@@ -4,7 +4,7 @@
 
 #include "differential_drive.h"
 #include "encoder.h"
-#include "encoders.h"
+#include "encoder_bank.h"
 #include "system.h"
 
 namespace {

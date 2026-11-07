@@ -2,5 +2,5 @@
 idf_component_register(
     SRCS "encoder_test.cpp"
     INCLUDE_DIRS "."
-    REQUIRES unity encoders
+    REQUIRES unity encoder_bank
 )

@@ -1,5 +1,5 @@
-#ifndef ENCODERS_H
-#define ENCODERS_H
+#ifndef ENCODER_BANK_H
+#define ENCODER_BANK_H
 
 #include <array>
 #include <concepts>
