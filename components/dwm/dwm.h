@@ -3,11 +3,11 @@
 
 #include "arrays.h"
 #include "assembly.h"
-#include "system.h"
 #include "dwm_data.h"
 #include "dwm_regs.h"
 #include "peripheral_hal.h"
 #include "resources.h"
+#include "system.h"
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -452,6 +452,8 @@ public:
    *   t_reply = tx(reply) - rx(poll)          [measured by responder, sent
    * back] tof     = (t_round - t_reply) / 2
    */
+  // TODO: split this function up into pure parts (I/O, decode, math)
+  // also have it read cleaner with monadic chaining where applicable
   std::expected<double, HAL::SpiError> range() {
     std::array<std::byte, 1> poll{RANGE_POLL};
     if (auto r = transmit(poll); !r) {
