@@ -1,0 +1,17 @@
+# the global filter, layered over ekf.yaml: the same twist, plus host/uwb_fix.py's
+# position in map. It owns map -> odom, and it is where UWB jumps land, so
+# odom -> base_link never sees them
+
+# map_frame, world_frame (both map) and initial_state, the robot's start pose,
+# are per robot, so scripts/sim.sh passes them alongside this file
+/**:
+  ros__parameters:
+    pose0: uwb/pose
+    # x and y only: UWB has no heading, which comes from integrating the
+    # twist's yaw rate and is pulled straight by the fixes as the robot moves
+    pose0_config: [true,  true,  false,
+                   false, false, false,
+                   false, false, false,
+                   false, false, false,
+                   false, false, false]
+    pose0_queue_size: 10

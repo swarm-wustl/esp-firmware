@@ -241,21 +241,30 @@ constant the sim needs belongs there, not restated in `sim/`.
   containers, so on domain 0 a simulated `swarm_1` publishes over the real one
 - `sim/truth` (in `map`) and the `<ns>/truth` TF frame are ground truth,
   sim-only, and `sim/odom` (in `<ns>/odom`) is the pose the firmware
-  integrates but doesn't publish. The
-  static `map -> <ns>/odom` in `sim.sh` exists because the 3D panel only
-  lists TF frames; drop it once the global EKF publishes one
+  integrates but doesn't publish
 - each robot also runs robot_localization's local EKF (`sim/ekf.yaml`):
   `odom/twist` in, `odometry/filtered` and `odom -> base_link` out. It is the
   filter meant for the real board too, and it subscribes best-effort, which
   is what makes it compatible with micro-ROS's publisher
+- and a global EKF (`ekf.yaml` with `sim/ekf_global.yaml` layered on): the
+  same twist plus `uwb/pose` (x, y only), `odometry/global` and
+  `map -> <ns>/odom` out. UWB's jumps land in that link, so `odom -> base_link`
+  stays smooth. Heading in `map` is the integrated yaw rate, pulled straight by
+  the fixes only while the robot moves
+- anchors are declared once, in `sim.sh`'s `ANCHORS`, as static `map ->
+  anchor_N` frames. The sim ranges them in turn, one per period, and puts the
+  anchor's frame in the `Range`'s `header.frame_id`, since `Range` has no other
+  way to say which peer answered. TODO: the board still stamps its own
+  `uwb_link`, and DWM frames carry no address to range a chosen anchor with,
+  so `uwb_fix` drops the board's ranges until both change
 - frames are per robot: `<ns>/odom`, `<ns>/base_link`, `<ns>/uwb_link`, with
   only `map` shared. `Robot::frame_in` joins them at compile time on the board,
   from `CONFIG_SWARM_ROS_NAMESPACE`; the sim, one binary for every namespace,
   joins the same suffixes at runtime, and `sim.sh` hands the EKF its frames as
   `-p` overrides
 - the world is simulated in `map`. Robots are put down 0.5 m apart along y
-  (`start`), and `sim.sh`'s static `map -> <ns>/odom` is that start pose --
-  the stand-in for the global EKF
+  (`start`), and the global EKF is handed that pose as `initial_state` -- a
+  real robot would have to estimate it
 - untested here: Sched timing, the micro-ROS session, the ESP32 drivers
 
 ## Host nodes
@@ -268,6 +277,13 @@ panel's `/move_base_simple/goal`, so a click sends every robot), `cmd_vel` at
 working once `map -> odom` is a real correction. It stops with an explicit zero
 twist and goes quiet; the board's watchdog is the fallback, not the brake.
 `command()` is the pure control law, importable without a running graph.
+
+`host/uwb_fix.py` turns one robot's `uwb/range` into `uwb/pose`
+(`PoseWithCovarianceStamped` in `map`) for the global EKF. An anchor is
+whatever frame a range names, looked up in TF, so nothing restates the anchor
+positions. It solves once at least three anchors have answered within
+`max_age`, and the covariance comes from the fit's geometry, so anchors bunched
+to one side give an honestly wide fix. `trilaterate()` is the pure part.
 
 ## DW1000 references
 

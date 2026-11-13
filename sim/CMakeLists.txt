@@ -15,6 +15,7 @@ find_package(rclcpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(tf2_msgs REQUIRED)
+find_package(tf2_ros REQUIRED)
 
 # the firmware headers take their constants from the sdkconfig.h IDF
 # generates. This is the same translation, so the sim builds against the same
@@ -44,4 +45,5 @@ target_link_libraries(sim_base PRIVATE
   rclcpp::rclcpp
   ${geometry_msgs_TARGETS}
   ${sensor_msgs_TARGETS}
-  ${tf2_msgs_TARGETS})
+  ${tf2_msgs_TARGETS}
+  tf2_ros::tf2_ros)

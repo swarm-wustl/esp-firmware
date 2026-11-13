@@ -1,6 +1,7 @@
 # the local filter: odom -> base_link from the board's twist alone. Nothing
 # absolute goes in, so it drifts like dead reckoning but never jumps; the
-# global filter that fuses UWB will own map -> odom
+# global filter that fuses UWB (ekf_global.yaml, layered over this file)
+# owns map -> odom
 /**:
   ros__parameters:
     frequency: 30.0

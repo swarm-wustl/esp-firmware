@@ -13,7 +13,10 @@
 #include <geometry_msgs/msg/twist_with_covariance_stamped.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/range.hpp>
+#include <tf2/exceptions.h>
 #include <tf2_msgs/msg/tf_message.hpp>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
 
 #include "encoder.h"
 #include "robot.h"
@@ -48,7 +51,7 @@ public:
         gyro_noise_(declare_parameter("gyro_noise", 0.005)),
         gyro_bias_(declare_parameter("gyro_bias", 0.002)),
         imu_(declare_parameter("imu", true)),
-        anchor_(declare_parameter("anchor", std::vector<double>{2.0, 0.0})),
+        anchors_(declare_parameter("anchors", std::vector<std::string>{})),
         range_noise_(declare_parameter("range_noise", 0.05)),
         world_(World::initial(
             declare_parameter("motor_mismatch", 0.05),
@@ -56,7 +59,6 @@ public:
                                         std::vector<double>{0.0, 0.0, 0.0})))),
         odom_frame_(frame(Robot::ODOM_FRAME)),
         base_frame_(frame(Robot::BASE_FRAME)),
-        uwb_frame_(frame(Robot::UWB_FRAME)),
         truth_frame_(frame("truth")) {
     cmd_vel_ = create_subscription<Twist>(
         Robot::CMD_VEL_TOPIC, rclcpp::SensorDataQoS(),
@@ -142,13 +144,33 @@ private:
         pose_stamped(odom_frame_, pose.x, pose.y, pose.theta, stamp));
   }
 
+  // one anchor per period, in turn, the way one radio has to range them.
+  // frame_id names the anchor rather than the robot's antenna: Range has no
+  // other field to say which peer answered, and the anchor's frame is where
+  // the fix node looks up its position
   void publish_range() {
-    const double distance = std::hypot(world_.pose.x - anchor_.at(0),
-                                       world_.pose.y - anchor_.at(1));
+    if (anchors_.empty()) {
+      return;
+    }
+
+    const auto &anchor = anchors_[next_anchor_++ % anchors_.size()];
+    geometry_msgs::msg::Vector3 at;
+
+    try {
+      at = tf_.lookupTransform(MAP_FRAME, anchor, tf2::TimePointZero)
+               .transform.translation;
+    } catch (const tf2::TransformException &e) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "no %s: %s",
+                           anchor.c_str(), e.what());
+      return;
+    }
+
+    const double distance =
+        std::hypot(world_.pose.x - at.x, world_.pose.y - at.y);
 
     Range msg;
     msg.header.stamp = now();
-    msg.header.frame_id = uwb_frame_;
+    msg.header.frame_id = anchor;
     Robot::fill_range(msg, std::max(0.0, distance + gauss(range_noise_)));
     range_pub_->publish(msg);
   }
@@ -200,7 +222,8 @@ private:
   double gyro_noise_;
   double gyro_bias_;
   bool imu_;
-  std::vector<double> anchor_;
+  std::vector<std::string> anchors_;
+  size_t next_anchor_ = 0;
   double range_noise_;
 
   World::State world_;
@@ -211,9 +234,10 @@ private:
   std::optional<Odometry::Pose> last_pose_;
   std::string odom_frame_;
   std::string base_frame_;
-  std::string uwb_frame_;
   std::string truth_frame_;
   std::mt19937 rng_{std::random_device{}()};
+  tf2_ros::Buffer tf_{get_clock()};
+  tf2_ros::TransformListener tf_listener_{tf_};
 
   rclcpp::Subscription<Twist>::SharedPtr cmd_vel_;
   rclcpp::Publisher<TwistWithCovarianceStamped>::SharedPtr twist_pub_;
