@@ -19,6 +19,10 @@ ITERATIONS = 10
 CONVERGED = 1e-6  # m
 UNMEASURED = 1e6  # variance the EKF reads as "ignore", not as certainty
 
+# 99% points of chi-square by degrees of freedom (anchors - 2). A fix whose
+# squared residuals sum past this is not explained by the noise alone
+CHI2_99 = {1: 6.63, 2: 9.21, 3: 11.34, 4: 13.28, 5: 15.09, 6: 16.81}
+
 
 def invert(m):
     (a, b), (c, d) = m
@@ -74,20 +78,93 @@ def trilaterate(observations, guess, sigma):
     return (x, y), covariance
 
 
+def residuals(observations, position):
+    x, y = position
+    return [r - math.hypot(x - ax, y - ay) for (ax, ay), r in observations]
+
+
+def misfit(observations, position, sigma):
+    return sum(e * e for e in residuals(observations, position)) / (sigma * sigma)
+
+
+# drops one anchor at a time until the rest agree. Largest residual is the
+# wrong pick: least squares spreads one bad range over the others, and in a
+# square a long read on one corner fits much like a short read on the
+# opposite one. So each anchor is left out in turn and the rest refit, and the
+# one dropped is the one whose absence leaves the best fit -- provided it
+# reads long against that fit, since a blocked path makes the radio lock onto
+# a reflection and only ever adds. Three anchors leave one degree of freedom,
+# so a set still holding the bad range can fit as well as the clean one; the
+# previous fix, when there is a recent one, breaks the tie, since the robot
+# moves centimetres between fixes. With three left there is no redundancy to
+# say which is wrong, so a misfit there is no fix
+def consistent_fix(observations, guess, sigma, prior=None):
+    result = trilaterate(observations, guess, sigma)
+
+    if result is None:
+        return None, []
+
+    position, _ = result
+    gate = CHI2_99.get(len(observations) - 2, math.inf)
+
+    if misfit(observations, position, sigma) <= gate:
+        return result, []
+
+    if len(observations) <= MIN_ANCHORS:
+        return None, list(observations)
+
+    candidates = []
+
+    for i, ((ax, ay), r) in enumerate(observations):
+        rest = observations[:i] + observations[i + 1:]
+        fit = trilaterate(rest, position, sigma)
+
+        if fit is None:
+            continue
+
+        (x, y), _ = fit
+
+        if r > math.hypot(x - ax, y - ay):
+            score = misfit(rest, (x, y), sigma)
+            if prior:
+                score += (math.hypot(x - guess[0], y - guess[1]) / prior) ** 2
+            candidates.append((score, i))
+
+    if not candidates:
+        return None, list(observations)
+
+    _, worst = min(candidates)
+    result, dropped = consistent_fix(
+        observations[:worst] + observations[worst + 1:], guess, sigma, prior)
+
+    return result, [observations[worst]] + dropped
+
+
 class UwbFix(Node):
     def __init__(self):
         super().__init__("uwb_fix")
 
         self.map_frame = self.declare_parameter("map_frame", "map").value
-        self.sigma = self.declare_parameter("range_sigma", 0.05).value
+        # the antenna-delay bias goes into the fix's sigma alongside the
+        # noise: it is constant per link, so it is not independent from fix to
+        # fix, but leaving it out tells the EKF the fix is better than it is
+        noise = self.declare_parameter("range_sigma", 0.05).value
+        bias = self.declare_parameter("range_bias", 0.0).value
+        self.sigma = math.hypot(noise, bias)
+        self.reject = self.declare_parameter("reject_outliers", True).value
         # ranges older than this are dropped from a fix. A robot moving while
         # the anchors are ranged in turn smears the fix by speed * max_age, so
         # keep it just over one round of anchors
         self.max_age = self.declare_parameter("max_age", 0.5).value
+        # how far the robot plausibly is from the last fix, and how old that
+        # fix may be before it says nothing about where the robot is now
+        self.prior = self.declare_parameter("prior_sigma", 0.15).value
+        self.prior_age = self.declare_parameter("prior_age", 1.0).value
 
         self.anchors = {}
         self.latest = {}
         self.guess = None
+        self.guessed = None
 
         self.tf = Buffer()
         self.listener = TransformListener(self.tf, self)
@@ -119,25 +196,43 @@ class UwbFix(Node):
         stamp = Time.from_msg(msg.header.stamp)
         self.latest[msg.header.frame_id] = (at, msg.range, stamp)
 
-        observations = [
-            (anchor, r) for anchor, r, heard in self.latest.values()
+        fresh = {
+            frame: (anchor, r) for frame, (anchor, r, heard) in self.latest.items()
             if (stamp - heard).nanoseconds * 1e-9 <= self.max_age
-        ]
+        }
+        observations = list(fresh.values())
 
         if len(observations) < MIN_ANCHORS:
             return
 
-        guess = self.guess or tuple(
+        recent = (self.guessed is not None and
+                  (stamp - self.guessed).nanoseconds * 1e-9 <= self.prior_age)
+        guess = self.guess if recent else tuple(
             sum(a[i] for a, _ in observations) / len(observations)
             for i in range(2))
-        result = trilaterate(observations, guess, self.sigma)
+
+        if self.reject:
+            result, dropped = consistent_fix(observations, guess, self.sigma,
+                                             self.prior if recent else None)
+            self.report(fresh, dropped)
+        else:
+            result = trilaterate(observations, guess, self.sigma)
 
         if result is None:
             return
 
         (x, y), cov = result
         self.guess = (x, y)
+        self.guessed = stamp
         self.fix.publish(self.pose(msg.header.stamp, x, y, cov))
+
+    def report(self, fresh, dropped):
+        if not dropped:
+            return
+
+        names = [f for f, o in fresh.items() if o in dropped]
+        self.get_logger().info(f"rejected {', '.join(names)}",
+                               throttle_duration_sec=1.0)
 
     def pose(self, stamp, x, y, cov):
         msg = PoseWithCovarianceStamped()

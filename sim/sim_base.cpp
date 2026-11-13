@@ -4,6 +4,7 @@
 #include <optional>
 #include <random>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -60,7 +61,11 @@ public:
         gyro_bias_(gyro_bias_model_.mean),
         imu_(declare_parameter("imu", true)),
         anchors_(declare_parameter("anchors", std::vector<std::string>{})),
-        range_noise_(declare_parameter("range_noise", 0.05)),
+        range_errors_{
+            .noise = declare_parameter("range_noise", 0.05),
+            .nlos_chance = declare_parameter("nlos_chance", 0.05),
+            .nlos_excess = declare_parameter("nlos_excess", 0.3),
+            .dropout = declare_parameter("range_dropout", 0.05)},
         world_(World::initial(
             declare_parameter("motor_mismatch", 0.05),
             pose_from(declare_parameter("start",
@@ -68,6 +73,9 @@ public:
         odom_frame_(frame(Robot::ODOM_FRAME)),
         base_frame_(frame(Robot::BASE_FRAME)),
         truth_frame_(frame("truth")) {
+    robot_bias_ = gauss(declare_parameter("robot_bias", 0.03));
+    anchor_bias_ = declare_anchor_bias();
+
     cmd_vel_ = create_subscription<Twist>(
         Robot::CMD_VEL_TOPIC, rclcpp::SensorDataQoS(),
         [this](const Twist &msg) { newest_ = Robot::read_twist(msg); });
@@ -121,6 +129,26 @@ private:
     return counts;
   }
 
+  // an anchor's antenna delay is a property of the anchor, so every robot must
+  // draw the same bias for it. Each robot is its own process, so the draw is
+  // seeded from a seed they share and the anchor's name
+  std::unordered_map<std::string, double> declare_anchor_bias() {
+    const double sigma = declare_parameter("anchor_bias", 0.03);
+    const auto seed = declare_parameter("anchor_seed", 0);
+    std::unordered_map<std::string, double> out;
+
+    for (const auto &anchor : anchors_) {
+      std::seed_seq seq{static_cast<uint64_t>(seed),
+                        std::hash<std::string>{}(anchor)};
+      std::mt19937 gen{seq};
+      out[anchor] =
+          sigma > 0.0 ? std::normal_distribution<double>{0.0, sigma}(gen)
+                      : 0.0;
+    }
+
+    return out;
+  }
+
   World::SlipModel declare_slip() {
     const double sigma = declare_parameter("slip", 0.03);
     const double time = declare_parameter("slip_time", 3.0);
@@ -140,6 +168,8 @@ private:
 
     return world_.yaw_rate + gyro_bias_ + gauss(gyro_noise_);
   }
+
+  double uniform() { return std::uniform_real_distribution<double>{}(rng_); }
 
   double gauss(double sigma) {
     return sigma > 0.0 ? std::normal_distribution<double>{0.0, sigma}(rng_)
@@ -191,10 +221,21 @@ private:
     const double distance =
         std::hypot(world_.pose.x - at.x, world_.pose.y - at.y);
 
+    const auto measured = World::range(
+        distance, robot_bias_ + anchor_bias_.at(anchor), range_errors_,
+        {.noise = gauss(1.0),
+         .nlos = uniform(),
+         .excess = std::exponential_distribution<double>{1.0}(rng_),
+         .dropout = uniform()});
+
+    if (!measured) {
+      return;
+    }
+
     Range msg;
     msg.header.stamp = now();
     msg.header.frame_id = anchor;
-    Robot::fill_range(msg, std::max(0.0, distance + gauss(range_noise_)));
+    Robot::fill_range(msg, *measured);
     range_pub_->publish(msg);
   }
 
@@ -249,7 +290,9 @@ private:
   bool imu_;
   std::vector<std::string> anchors_;
   size_t next_anchor_ = 0;
-  double range_noise_;
+  World::RangeErrors range_errors_;
+  double robot_bias_ = 0.0;
+  std::unordered_map<std::string, double> anchor_bias_;
 
   World::State world_;
   Base::State<Robot::STYLE> base_{};

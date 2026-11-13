@@ -73,8 +73,19 @@ SPACING=0.5
 # each becomes a static TF frame, the sim ranges whatever frames it is named,
 # and host/uwb_fix.py looks an anchor up by the frame its range carries
 ANCHORS=(anchor_0:-1.5,-1.5 anchor_1:2.5,-1.5 anchor_2:2.5,2.5 anchor_3:-1.5,2.5)
-# what the sim adds to each range and what the fix node assumes it adds
+# what the sim gets wrong in each range, and what the fix node is told to
+# expect. The biases are antenna delay left over after calibration: one per
+# anchor, the same for every robot, and one per robot, the same for every
+# anchor. UWB_SEED fixes the anchor biases; it is printed so a run can be
+# repeated
 RANGE_NOISE=0.05
+ANCHOR_BIAS=0.03
+ROBOT_BIAS=0.03
+NLOS_CHANCE=0.05
+NLOS_EXCESS=0.3
+RANGE_DROPOUT=0.05
+UWB_SEED="${UWB_SEED:-$RANDOM}"
+RANGE_BIAS="$(awk "BEGIN{printf \"%.4f\", sqrt($ANCHOR_BIAS^2 + $ROBOT_BIAS^2)}")"
 
 anchors=""
 anchor_names=""
@@ -97,12 +108,15 @@ for ns in "${namespaces[@]}"; do
 
   robots+="build_sim/sim_base --ros-args -r __ns:=/$ns \
     -p start:=[0.0,$y,0.0] -p anchors:=[$anchor_names] \
-    -p range_noise:=$RANGE_NOISE & "
+    -p range_noise:=$RANGE_NOISE -p anchor_bias:=$ANCHOR_BIAS \
+    -p robot_bias:=$ROBOT_BIAS -p anchor_seed:=$UWB_SEED \
+    -p nlos_chance:=$NLOS_CHANCE -p nlos_excess:=$NLOS_EXCESS \
+    -p range_dropout:=$RANGE_DROPOUT & "
   robots+="ros2 run robot_localization ekf_node --ros-args -r __ns:=/$ns \
     --params-file sim/ekf.yaml -p odom_frame:=$ns/odom \
     -p world_frame:=$ns/odom -p base_link_frame:=$ns/base_link & "
   robots+="python3 host/uwb_fix.py --ros-args -r __ns:=/$ns \
-    -p range_sigma:=$RANGE_NOISE & "
+    -p range_sigma:=$RANGE_NOISE -p range_bias:=$RANGE_BIAS & "
   # the global filter starts where the robot was put down, which a real robot
   # would have to estimate rather than know. Its own node name and output
   # topic keep it apart from the local filter in the same namespace
@@ -120,7 +134,7 @@ for ns in "${namespaces[@]}"; do
   i=$((i + 1))
 done
 
-echo "sim.sh: ${namespaces[*]} up; open Foxglove on ws://localhost:8765" >&2
+echo "sim.sh: ${namespaces[*]} up (UWB_SEED=$UWB_SEED); open Foxglove on ws://localhost:8765" >&2
 
 exec docker run --rm -it --init \
   --name "$NAME" \

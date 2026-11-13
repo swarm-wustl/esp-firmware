@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <numbers>
+#include <optional>
 
 #include "arrays.h"
 #include "differential_drive.h"
@@ -88,6 +89,39 @@ inline Slip drift(const Slip &slip, const Slip &innovation,
                   const SlipModel &model, double dt) {
   return {wander(model.left, slip.left, innovation.left, dt),
           wander(model.right, slip.right, innovation.right, dt)};
+}
+
+// what a DW1000 range gets wrong on top of the antenna-delay bias, which the
+// caller sums from the two ends of the link
+struct RangeErrors {
+  double noise;       // m, sigma
+  double nlos_chance; // per range
+  double nlos_excess; // m, mean
+  double dropout;     // per range
+};
+
+// one range's worth of randomness, drawn by the node
+struct RangeDraw {
+  double noise;   // standard normal
+  double nlos;    // uniform in [0, 1)
+  double excess;  // exponential, mean 1
+  double dropout; // uniform in [0, 1)
+};
+
+// a blocked direct path makes the radio lock onto a reflection, which is
+// always longer, so non-line-of-sight only ever adds. Empty is an exchange
+// that timed out
+inline std::optional<double> range(double distance, double bias,
+                                   const RangeErrors &errors,
+                                   const RangeDraw &draw) {
+  if (draw.dropout < errors.dropout) {
+    return std::nullopt;
+  }
+
+  const double excess =
+      draw.nlos < errors.nlos_chance ? errors.nlos_excess * draw.excess : 0.0;
+
+  return std::max(0.0, distance + bias + errors.noise * draw.noise + excess);
 }
 
 // two motors off one production line are never the same speed. A positive

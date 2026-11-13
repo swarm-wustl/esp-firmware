@@ -15,3 +15,7 @@
                    false, false, false,
                    false, false, false]
     pose0_queue_size: 10
+    # in standard deviations of the fix against the filter's own estimate.
+    # uwb_fix drops what it can see is inconsistent; this catches a fix whose
+    # ranges agree with each other but not with where the robot has been
+    pose0_rejection_threshold: 4.0

@@ -288,6 +288,23 @@ positions. It solves once at least three anchors have answered within
 `max_age`, and the covariance comes from the fit's geometry, so anchors bunched
 to one side give an honestly wide fix. `trilaterate()` is the pure part.
 
+Ranges that disagree are dropped before the fix (`consistent_fix`): each anchor
+is left out in turn and the one whose absence leaves the best fit goes,
+provided it reads long, since non-line-of-sight only adds. Largest residual is
+the wrong rule -- least squares spreads one bad range over the rest, and in a
+square a long corner fits like a short opposite corner -- and with three
+anchors left a set holding the bad range can still fit, so the previous fix,
+if recent, breaks the tie. Three anchors that disagree give no fix at all. The
+global EKF's `pose0_rejection_threshold` catches fixes that agree with each
+other but not with the track.
+
+The sim's ranges carry what the DW1000 gets wrong (`World::range`): Gaussian
+noise, an antenna-delay bias per anchor (shared by every robot, seeded from
+`UWB_SEED`) and per robot, an occasional long non-line-of-sight read, and
+dropped exchanges. All of it is set in `sim.sh`, which also hands `uwb_fix` the
+combined bias so the fix's covariance includes it. The numbers are guesses
+until the antenna delay is calibrated on the bench.
+
 ## DW1000 references
 
 When answering questions about the DW1000 / register behavior, consult `docs/references.md`:
