@@ -535,6 +535,8 @@ private:
 
   // sub-addressed SPI header (manual 2.2.1.2): 1 octet non-indexed, 2 for an
   // offset <= 0x7F, 3 with the extended-address flag for larger offsets
+  // TODO: maybe integrate this directly with RegView stuff
+  // instead of having two separate APIs for writing to registers.
   static uint8_t make_header(std::array<std::byte, 3> &hdr, bool write,
                              uint8_t reg, uint16_t offset) {
     uint8_t b0 = (write ? 0x80 : 0x00) | (reg & 0x3F) | (offset ? 0x40 : 0x00);
