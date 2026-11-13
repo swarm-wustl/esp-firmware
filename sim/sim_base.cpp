@@ -46,7 +46,14 @@ class SimBase : public rclcpp::Node {
 public:
   SimBase()
       : Node(Robot::NODE, CONFIG_SWARM_ROS_NAMESPACE),
-        slip_(declare_parameter("slip", 0.05)),
+        // a negative mean is ground lost under the wheel. The right wheel
+        // losing more is the slow pull a real floor gives odometry
+        slip_model_{
+            .mean = {declare_parameter("slip_mean_left", -0.02),
+                     declare_parameter("slip_mean_right", -0.03)},
+            .sigma = declare_parameter("slip", 0.03),
+            .correlation_time = declare_parameter("slip_time", 3.0)},
+        slip_(slip_model_.mean),
         time_constant_(declare_parameter("time_constant", 0.08)),
         gyro_noise_(declare_parameter("gyro_noise", 0.005)),
         gyro_bias_(declare_parameter("gyro_bias", 0.002)),
@@ -94,7 +101,9 @@ private:
         base_, targets, advance(World::counts(world_)), gyro());
     base_ = next;
 
-    world_ = World::step(world_, frame, {gauss(slip_), gauss(slip_)},
+    slip_ = World::drift(slip_, {gauss(1.0), gauss(1.0)}, slip_model_,
+                         Robot::CONTROL.period);
+    world_ = World::step(world_, frame, slip_,
                          time_constant_, Robot::CONTROL.period);
 
     publish_truth();
@@ -217,7 +226,8 @@ private:
     return msg;
   }
 
-  double slip_;
+  World::SlipModel slip_model_;
+  World::Slip slip_;
   double time_constant_;
   double gyro_noise_;
   double gyro_bias_;

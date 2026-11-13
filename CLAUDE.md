@@ -221,7 +221,10 @@ until the real pair goes in.
 bridge on `ws://localhost:8765` (Lichtblick works). `sim/sim_base.cpp` is an
 rclcpp node that runs the firmware's own motion loop -- `Watchdog::observe`,
 `Drive::inverse_kinematics`, `Robot::drive` -- against `sim/world.h`, a plant
-with motor lag, motor mismatch, wheel slip and a gyro. Only the plant is new
+with motor lag, motor mismatch, wheel slip and a gyro. Slip is correlated
+(`World::drift`, a Gauss-Markov process around a per-wheel mean), not fresh
+noise each step: white slip cancels as it integrates and leaves odometry
+nearly perfect, so UWB would have nothing to correct. Only the plant is new
 code; its kinematics are written out independently on purpose, so a sign error
 shared by controller and world can't cancel.
 

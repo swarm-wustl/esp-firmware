@@ -52,6 +52,34 @@ struct Slip {
   double right;
 };
 
+// slip that wanders around a mean and forgets itself over correlation_time (a
+// first-order Gauss-Markov process). Fresh noise every step would cancel as it
+// integrated; a floor that eats 3% keeps eating it, and that is the error
+// odometry cannot see and UWB has to pull back. A correlation_time of zero is
+// white noise around the mean
+struct SlipModel {
+  Slip mean;
+  double sigma;            // spread around the mean, fraction of rim speed
+  double correlation_time; // s
+};
+
+// innovation is one standard normal draw per wheel, so the randomness stays
+// in the node and this stays a function
+inline Slip drift(const Slip &slip, const Slip &innovation,
+                  const SlipModel &model, double dt) {
+  const double keep =
+      model.correlation_time > 0.0 ? std::exp(-dt / model.correlation_time)
+                                   : 0.0;
+  // scaled so the spread holds at sigma whatever dt and correlation_time are
+  const double kick = model.sigma * std::sqrt(1.0 - keep * keep);
+  const auto wander = [&](double now, double mean, double draw) {
+    return mean + (now - mean) * keep + kick * draw;
+  };
+
+  return {wander(slip.left, model.mean.left, innovation.left),
+          wander(slip.right, model.mean.right, innovation.right)};
+}
+
 // two motors off one production line are never the same speed. A positive
 // mismatch slows the right wheel, so an open-loop robot pulls right and the
 // integral has something to do
@@ -112,8 +140,11 @@ inline State step(const State &state, const Motor::Frame<N> &frame,
   });
 
   const State spun{wheels, state.pose, state.yaw_rate};
-  const double left = rim_speed(spun, Motor::Name::LEFT) * (1.0 + slip.left);
-  const double right = rim_speed(spun, Motor::Name::RIGHT) * (1.0 + slip.right);
+  // on flat ground the floor can only take motion away, never add it. Clamped
+  // here rather than in drift so the process itself stays an undistorted OU
+  const auto ground = [](double slip) { return 1.0 + std::min(slip, 0.0); };
+  const double left = rim_speed(spun, Motor::Name::LEFT) * ground(slip.left);
+  const double right = rim_speed(spun, Motor::Name::RIGHT) * ground(slip.right);
 
   const double v = Drive::kWheelRadius * (left + right) / 2.0;
   const double w =
