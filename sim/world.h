@@ -52,32 +52,42 @@ struct Slip {
   double right;
 };
 
-// slip that wanders around a mean and forgets itself over correlation_time (a
-// first-order Gauss-Markov process). Fresh noise every step would cancel as it
-// integrated; a floor that eats 3% keeps eating it, and that is the error
-// odometry cannot see and UWB has to pull back. A correlation_time of zero is
-// white noise around the mean
-struct SlipModel {
-  Slip mean;
-  double sigma;            // spread around the mean, fraction of rim speed
+// a value that wanders around a mean and forgets itself over
+// correlation_time (a first-order Gauss-Markov process). A correlation_time of
+// zero is white noise around the mean
+struct GaussMarkov {
+  double mean;
+  double sigma;            // spread around the mean
   double correlation_time; // s
 };
 
-// innovation is one standard normal draw per wheel, so the randomness stays
-// in the node and this stays a function
+// draw is one standard normal sample, so the randomness stays in the node and
+// this stays a function
+inline double wander(const GaussMarkov &process, double now, double draw,
+                     double dt) {
+  const double keep = process.correlation_time > 0.0
+                          ? std::exp(-dt / process.correlation_time)
+                          : 0.0;
+  // scaled so the spread holds at sigma whatever dt and correlation_time are
+  const double kick = process.sigma * std::sqrt(1.0 - keep * keep);
+
+  return process.mean + (now - process.mean) * keep + kick * draw;
+}
+
+// slip that wanders around a mean. Fresh noise every step would cancel as it
+// integrated; a floor that eats 3% keeps eating it, and that is the error
+// odometry cannot see and UWB has to pull back. sigma is a fraction of rim
+// speed
+struct SlipModel {
+  GaussMarkov left;
+  GaussMarkov right;
+};
+
+// innovation is one standard normal draw per wheel
 inline Slip drift(const Slip &slip, const Slip &innovation,
                   const SlipModel &model, double dt) {
-  const double keep =
-      model.correlation_time > 0.0 ? std::exp(-dt / model.correlation_time)
-                                   : 0.0;
-  // scaled so the spread holds at sigma whatever dt and correlation_time are
-  const double kick = model.sigma * std::sqrt(1.0 - keep * keep);
-  const auto wander = [&](double now, double mean, double draw) {
-    return mean + (now - mean) * keep + kick * draw;
-  };
-
-  return {wander(slip.left, model.mean.left, innovation.left),
-          wander(slip.right, model.mean.right, innovation.right)};
+  return {wander(model.left, slip.left, innovation.left, dt),
+          wander(model.right, slip.right, innovation.right, dt)};
 }
 
 // two motors off one production line are never the same speed. A positive

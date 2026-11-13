@@ -46,17 +46,18 @@ class SimBase : public rclcpp::Node {
 public:
   SimBase()
       : Node(Robot::NODE, CONFIG_SWARM_ROS_NAMESPACE),
-        // a negative mean is ground lost under the wheel. The right wheel
-        // losing more is the slow pull a real floor gives odometry
-        slip_model_{
-            .mean = {declare_parameter("slip_mean_left", -0.02),
-                     declare_parameter("slip_mean_right", -0.03)},
-            .sigma = declare_parameter("slip", 0.03),
-            .correlation_time = declare_parameter("slip_time", 3.0)},
-        slip_(slip_model_.mean),
+        slip_model_(declare_slip()),
+        slip_{slip_model_.left.mean, slip_model_.right.mean},
         time_constant_(declare_parameter("time_constant", 0.08)),
         gyro_noise_(declare_parameter("gyro_noise", 0.005)),
-        gyro_bias_(declare_parameter("gyro_bias", 0.002)),
+        // the sim hands the yaw rate straight to Robot::drive, past the
+        // board's at-rest calibration, so the mean is what calibration leaves
+        // and the wander is the bias creeping with temperature after it
+        gyro_bias_model_{
+            .mean = declare_parameter("gyro_bias", 0.002),
+            .sigma = declare_parameter("gyro_bias_drift", 0.002),
+            .correlation_time = declare_parameter("gyro_bias_time", 60.0)},
+        gyro_bias_(gyro_bias_model_.mean),
         imu_(declare_parameter("imu", true)),
         anchors_(declare_parameter("anchors", std::vector<std::string>{})),
         range_noise_(declare_parameter("range_noise", 0.05)),
@@ -103,6 +104,8 @@ private:
 
     slip_ = World::drift(slip_, {gauss(1.0), gauss(1.0)}, slip_model_,
                          Robot::CONTROL.period);
+    gyro_bias_ = World::wander(gyro_bias_model_, gyro_bias_, gauss(1.0),
+                               Robot::CONTROL.period);
     world_ = World::step(world_, frame, slip_,
                          time_constant_, Robot::CONTROL.period);
 
@@ -116,6 +119,17 @@ private:
     }
 
     return counts;
+  }
+
+  World::SlipModel declare_slip() {
+    const double sigma = declare_parameter("slip", 0.03);
+    const double time = declare_parameter("slip_time", 3.0);
+
+    // a negative mean is ground lost under the wheel. The right wheel
+    // losing more is the slow pull a real floor gives odometry
+    return {.left = {declare_parameter("slip_mean_left", -0.02), sigma, time},
+            .right = {declare_parameter("slip_mean_right", -0.03), sigma,
+                      time}};
   }
 
   // an empty mailbox -- no IMU, bus down -- is the firmware's encoder fallback
@@ -230,6 +244,7 @@ private:
   World::Slip slip_;
   double time_constant_;
   double gyro_noise_;
+  World::GaussMarkov gyro_bias_model_;
   double gyro_bias_;
   bool imu_;
   std::vector<std::string> anchors_;
