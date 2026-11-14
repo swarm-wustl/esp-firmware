@@ -183,6 +183,10 @@ def main():
     parser.add_argument("--default-namespace", required=True)
     parser.add_argument("--legs", type=int, default=len(ROUTE),
                         help="drive only the first N legs, for a quicker run")
+    # robots that do something stop between goals; one that never stops never
+    # shows its gyro at rest
+    parser.add_argument("--pause", type=float, default=0.0,
+                        help="s to stand at each goal before the next")
     args = parser.parse_args()
     names = args.namespaces or [args.default_namespace]
     rclpy.init()
@@ -220,6 +224,7 @@ def main():
             spin_for(executor, SAMPLE_PERIOD, sample_all)
 
         took = time.monotonic() - began
+        spin_for(executor, args.pause, sample_all)
 
         for r in robots:
             s = r.samples

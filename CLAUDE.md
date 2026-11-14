@@ -280,6 +280,12 @@ constant the sim needs belongs there, not restated in `sim/`.
   start and stop of a turn, which the filter took for gyro bias. After
   `relock_after` seconds of nothing but gated measurements the filter takes
   the next fix whole.
+- at rest the gyro reads its own bias, so whenever two twists running show
+  the encoders still and the gyro turning slower than any spin go_to_goal
+  makes (`zero_rate`), the filter takes the yaw rate as a measurement of the
+  bias. It is far more direct than what the track says about heading, which
+  is all the filter has while driving, but it only helps a robot that stops:
+  `check --pause S` stands at each goal so a recorded run has stops in it
   The sim publishes the true values on `sim/gyro_bias` and `sim/slip` to set
   against `global_ekf/gyro_bias` and `global_ekf/slip`
 - the biases are only as learnable as the twist's covariance is honest.

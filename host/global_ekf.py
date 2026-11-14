@@ -164,18 +164,33 @@ def update_range(state, cov, anchor, r, sigma, bias_index, long_gate, short_gate
         predicted += state[bias_index]
 
     innovation = r - predicted
-    spread = float(h @ cov @ h) + sigma * sigma
-    score = innovation / math.sqrt(spread)
+    score = innovation / math.sqrt(float(h @ cov @ h) + sigma * sigma)
 
     if score > long_gate or score < -short_gate:
         return None
 
+    return update_scalar(state, cov, h, innovation, sigma * sigma)
+
+
+# one scalar measurement whose row of the Jacobian is h
+def update_scalar(state, cov, h, innovation, variance):
+    spread = float(h @ cov @ h) + variance
     gain = cov @ h / spread
     corrected = state + gain * innovation
     corrected[THETA] = wrap(corrected[THETA])
-    keep = np.eye(n) - np.outer(gain, h)
+    keep = np.eye(len(state)) - np.outer(gain, h)
 
-    return corrected, keep @ cov @ keep.T + np.outer(gain, gain) * sigma * sigma
+    return corrected, keep @ cov @ keep.T + np.outer(gain, gain) * variance
+
+
+# a robot at rest is not turning, so what the gyro reads is its bias. The
+# yaw rate comes in already averaged over the twist's period, with that
+# period's variance
+def update_zero_rate(state, cov, rate, variance):
+    h = np.zeros(len(state))
+    h[GYRO_BIAS] = 1.0
+
+    return update_scalar(state, cov, h, rate - state[GYRO_BIAS], variance)
 
 
 # takes a fix's position whole and forgets what the old one said about the
@@ -250,6 +265,15 @@ DEFAULTS = {
     # more than the sim blocks; replay found 1.5 to 2 best, and 1 starves it
     "long_gate": 2.0,
     "short_gate": 4.0,
+    # at rest the gyro reads its own bias, far more directly than the track
+    # can show it: a second of standing still pins it to about 0.0007 rad/s,
+    # where a straight leg of UWB says little more than that in a minute.
+    # Rest is read off the twist: the encoders' speed is still and the gyro
+    # turns slower than any spin go_to_goal makes, for two twists running so
+    # a stop's last wobble is not taken for one
+    "zero_rate": True,
+    "rest_speed": 1e-3,  # m/s
+    "rest_rate": 0.02,  # rad/s
 }
 
 
@@ -270,6 +294,9 @@ class Filter:
         self.range_sigma = (settings["range_sigma"] if self.bias_states else
                             math.hypot(settings["range_sigma"], settings["range_bias"]))
         self.gates = (settings["long_gate"], settings["short_gate"])
+        self.zero_rate = settings["zero_rate"]
+        self.rest = (settings["rest_speed"], settings["rest_rate"])
+        self.was_still = False
         self.anchor_index = {}
         self.state = np.array([*start, 0.0, 0.0])
         self.cov = np.diag([*(s * s for s in settings["initial_sigma"]),
@@ -315,6 +342,14 @@ class Filter:
             self.advance(at)
             outcomes.append(fuse(*args))
         self.advance(t)
+
+        still = (abs(self.twist[0]) < self.rest[0] and abs(self.twist[1]) < self.rest[0]
+                 and abs(self.twist[2]) < self.rest[1])
+        if self.zero_rate and still and self.was_still:
+            self.state, self.cov = update_zero_rate(self.state, self.cov, self.twist[2],
+                                                    self.twist_cov[2, 2])
+            outcomes.append("at rest")
+        self.was_still = still
 
         return outcomes
 
