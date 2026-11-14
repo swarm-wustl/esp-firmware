@@ -81,7 +81,8 @@ ANCHORS=(anchor_0:-1.5,-1.5 anchor_1:2.5,-1.5 anchor_2:2.5,2.5 anchor_3:-1.5,2.5
 RANGE_NOISE=0.05
 ANCHOR_BIAS=0.03
 ROBOT_BIAS=0.03
-NLOS_CHANCE=0.05
+NLOS_FRACTION=0.05
+NLOS_DURATION=2.0
 NLOS_EXCESS=0.3
 RANGE_DROPOUT=0.05
 UWB_SEED="${UWB_SEED:-$RANDOM}"
@@ -110,7 +111,8 @@ for ns in "${namespaces[@]}"; do
     -p start:=[0.0,$y,0.0] -p anchors:=[$anchor_names] \
     -p range_noise:=$RANGE_NOISE -p anchor_bias:=$ANCHOR_BIAS \
     -p robot_bias:=$ROBOT_BIAS -p anchor_seed:=$UWB_SEED \
-    -p nlos_chance:=$NLOS_CHANCE -p nlos_excess:=$NLOS_EXCESS \
+    -p nlos_fraction:=$NLOS_FRACTION -p nlos_duration:=$NLOS_DURATION \
+    -p nlos_excess:=$NLOS_EXCESS \
     -p range_dropout:=$RANGE_DROPOUT & "
   robots+="ros2 run robot_localization ekf_node --ros-args -r __ns:=/$ns \
     --params-file sim/ekf.yaml -p odom_frame:=$ns/odom \

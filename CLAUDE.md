@@ -300,8 +300,10 @@ other but not with the track.
 
 The sim's ranges carry what the DW1000 gets wrong (`World::range`): Gaussian
 noise, an antenna-delay bias per anchor (shared by every robot, seeded from
-`UWB_SEED`) and per robot, an occasional long non-line-of-sight read, and
-dropped exchanges. All of it is set in `sim.sh`, which also hands `uwb_fix` the
+`UWB_SEED`) and per robot, non-line-of-sight blockage, and dropped exchanges.
+Blockage is a two-state Markov chain per link (`World::obstruct`), so a blocked
+anchor reads long for seconds at a time with one held excess, as when someone
+stands in the way, rather than one range in twenty at random. All of it is set in `sim.sh`, which also hands `uwb_fix` the
 combined bias so the fix's covariance includes it. The numbers are guesses
 until the antenna delay is calibrated on the bench.
 

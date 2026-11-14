@@ -63,9 +63,10 @@ public:
         anchors_(declare_parameter("anchors", std::vector<std::string>{})),
         range_errors_{
             .noise = declare_parameter("range_noise", 0.05),
-            .nlos_chance = declare_parameter("nlos_chance", 0.05),
-            .nlos_excess = declare_parameter("nlos_excess", 0.3),
             .dropout = declare_parameter("range_dropout", 0.05)},
+        blockage_{.fraction = declare_parameter("nlos_fraction", 0.05),
+                  .duration = declare_parameter("nlos_duration", 2.0),
+                  .excess = declare_parameter("nlos_excess", 0.3)},
         world_(World::initial(
             declare_parameter("motor_mismatch", 0.05),
             pose_from(declare_parameter("start",
@@ -221,12 +222,16 @@ private:
     const double distance =
         std::hypot(world_.pose.x - at.x, world_.pose.y - at.y);
 
-    const auto measured = World::range(
-        distance, robot_bias_ + anchor_bias_.at(anchor), range_errors_,
-        {.noise = gauss(1.0),
-         .nlos = uniform(),
-         .excess = std::exponential_distribution<double>{1.0}(rng_),
-         .dropout = uniform()});
+    // each link is ranged once a round, so that is the chain's step
+    const double round =
+        std::chrono::duration<double>(RANGE_PERIOD).count() * anchors_.size();
+    auto &path = paths_[anchor];
+    path = World::obstruct(path, blockage_, round, uniform(),
+                           std::exponential_distribution<double>{1.0}(rng_));
+
+    const auto measured =
+        World::range(distance, robot_bias_ + anchor_bias_.at(anchor), path,
+                     range_errors_, {.noise = gauss(1.0), .dropout = uniform()});
 
     if (!measured) {
       return;
@@ -291,6 +296,8 @@ private:
   std::vector<std::string> anchors_;
   size_t next_anchor_ = 0;
   World::RangeErrors range_errors_;
+  World::Blockage blockage_;
+  std::unordered_map<std::string, World::Path> paths_;
   double robot_bias_ = 0.0;
   std::unordered_map<std::string, double> anchor_bias_;
 

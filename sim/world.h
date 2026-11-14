@@ -91,20 +91,54 @@ inline Slip drift(const Slip &slip, const Slip &innovation,
           wander(model.right, slip.right, innovation.right, dt)};
 }
 
+// someone standing between a robot and an anchor blocks it for seconds, not
+// for one range in twenty, so blockage is a two-state Markov chain per link
+// rather than a coin flip per range: the same anchor reads long for several
+// rounds running
+struct Blockage {
+  double fraction; // of the time a link is blocked
+  double duration; // s, mean length of one blockage
+  double excess;   // m, mean extra path while blocked
+};
+
+struct Path {
+  bool blocked;
+  double excess; // m, held for the whole blockage: one obstacle, one reflection
+};
+
+// the chain's exact transition over dt, so it holds whatever the gap between
+// ranges of one link. Rates in from clear and out from blocked are fixed by
+// the fraction and duration; together they forget the state at rate 1/memory
+inline Path obstruct(const Path &path, const Blockage &blockage, double dt,
+                     double uniform, double exponential) {
+  if (blockage.fraction <= 0.0 || blockage.duration <= 0.0) {
+    return {false, 0.0};
+  }
+
+  const double memory = blockage.duration * (1.0 - blockage.fraction);
+  const double fade = std::exp(-dt / memory);
+  const double p_blocked =
+      path.blocked ? blockage.fraction + (1.0 - blockage.fraction) * fade
+                   : blockage.fraction * (1.0 - fade);
+  const bool blocked = uniform < p_blocked;
+
+  if (!blocked) {
+    return {false, 0.0};
+  }
+
+  return {true, path.blocked ? path.excess : blockage.excess * exponential};
+}
+
 // what a DW1000 range gets wrong on top of the antenna-delay bias, which the
-// caller sums from the two ends of the link
+// caller sums from the two ends of the link, and the path's blockage
 struct RangeErrors {
-  double noise;       // m, sigma
-  double nlos_chance; // per range
-  double nlos_excess; // m, mean
-  double dropout;     // per range
+  double noise;   // m, sigma
+  double dropout; // per range
 };
 
 // one range's worth of randomness, drawn by the node
 struct RangeDraw {
   double noise;   // standard normal
-  double nlos;    // uniform in [0, 1)
-  double excess;  // exponential, mean 1
   double dropout; // uniform in [0, 1)
 };
 
@@ -112,16 +146,14 @@ struct RangeDraw {
 // always longer, so non-line-of-sight only ever adds. Empty is an exchange
 // that timed out
 inline std::optional<double> range(double distance, double bias,
-                                   const RangeErrors &errors,
+                                   const Path &path, const RangeErrors &errors,
                                    const RangeDraw &draw) {
   if (draw.dropout < errors.dropout) {
     return std::nullopt;
   }
 
-  const double excess =
-      draw.nlos < errors.nlos_chance ? errors.nlos_excess * draw.excess : 0.0;
-
-  return std::max(0.0, distance + bias + errors.noise * draw.noise + excess);
+  return std::max(0.0,
+                  distance + bias + path.excess + errors.noise * draw.noise);
 }
 
 // two motors off one production line are never the same speed. A positive
