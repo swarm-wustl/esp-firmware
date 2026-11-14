@@ -14,6 +14,7 @@ set(REPO ${CMAKE_CURRENT_SOURCE_DIR}/..)
 find_package(rclcpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(tf2_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 
@@ -45,5 +46,6 @@ target_link_libraries(sim_base PRIVATE
   rclcpp::rclcpp
   ${geometry_msgs_TARGETS}
   ${sensor_msgs_TARGETS}
+  ${std_msgs_TARGETS}
   ${tf2_msgs_TARGETS}
   tf2_ros::tf2_ros)

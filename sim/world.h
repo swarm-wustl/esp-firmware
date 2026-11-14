@@ -209,6 +209,11 @@ constexpr double rim_speed(const State &state, Motor::Name name) {
   return it == state.wheels.end() ? 0.0 : it->speed;
 }
 
+// the fraction of rim speed that reaches the floor. On flat ground the floor
+// can only take motion away, never add it. Clamped here rather than in drift
+// so the process itself stays an undistorted OU
+constexpr double ground(double slip) { return 1.0 + std::min(slip, 0.0); }
+
 inline State step(const State &state, const Motor::Frame<N> &frame,
                   const Slip &slip, double time_constant, double dt) {
   const auto wheels = Arrays::map(state.wheels, [&](const Wheel &wheel) {
@@ -216,9 +221,6 @@ inline State step(const State &state, const Motor::Frame<N> &frame,
   });
 
   const State spun{wheels, state.pose, state.yaw_rate};
-  // on flat ground the floor can only take motion away, never add it. Clamped
-  // here rather than in drift so the process itself stays an undistorted OU
-  const auto ground = [](double slip) { return 1.0 + std::min(slip, 0.0); };
   const double left = rim_speed(spun, Motor::Name::LEFT) * ground(slip.left);
   const double right = rim_speed(spun, Motor::Name::RIGHT) * ground(slip.right);
 

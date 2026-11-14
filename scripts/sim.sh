@@ -131,14 +131,10 @@ for ns in "${namespaces[@]}"; do
   robots+="python3 host/uwb_fix.py --ros-args -r __ns:=/$ns \
     -p range_sigma:=$RANGE_NOISE -p range_bias:=$RANGE_BIAS & "
   # the global filter starts where the robot was put down, which a real robot
-  # would have to estimate rather than know. Its own node name and output
-  # topic keep it apart from the local filter in the same namespace
-  robots+="ros2 run robot_localization ekf_node --ros-args -r __ns:=/$ns \
-    -r __node:=ekf_global -r odometry/filtered:=odometry/global \
-    --params-file sim/ekf.yaml --params-file sim/ekf_global.yaml \
-    -p map_frame:=map -p world_frame:=map -p odom_frame:=$ns/odom \
-    -p base_link_frame:=$ns/base_link \
-    -p initial_state:=[0.0,$y,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0] & "
+  # would have to estimate rather than know
+  robots+="python3 host/global_ekf.py --ros-args -r __ns:=/$ns \
+    -p odom_frame:=$ns/odom -p base_link_frame:=$ns/base_link \
+    -p initial_state:=[0.0,$y,0.0] & "
   # the 3D panel's pose tool publishes on /move_base_simple/goal, so a click
   # sends every robot there
   robots+="python3 host/go_to_goal.py --ros-args -r __ns:=/$ns \

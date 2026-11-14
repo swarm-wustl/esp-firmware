@@ -249,13 +249,28 @@ constant the sim needs belongs there, not restated in `sim/`.
   `odom/twist` in, `odometry/filtered` and `odom -> base_link` out. It is the
   filter meant for the real board too, and it subscribes best-effort, which
   is what makes it compatible with micro-ROS's publisher
-- and a global EKF (`ekf.yaml` with `sim/ekf_global.yaml` layered on): the
-  same twist plus `uwb/pose` (x, y only), `odometry/global` and
-  `map -> <ns>/odom` out. UWB's jumps land in that link, so `odom -> base_link`
-  stays smooth. Both filters set `process_noise_covariance` from what the twist
-  can't see (slip, gyro bias): robot_localization's defaults trust the
-  prediction so little that the global filter took every fix as given. Heading in `map` is the integrated yaw rate, pulled straight by
-  the fixes only while the robot moves
+- the local filter sets `process_noise_covariance` from what the twist can't
+  see (slip, gyro bias); robot_localization's defaults say nothing about the
+  robot
+- and a global EKF, `host/global_ekf.py`: the same twist plus `uwb/pose`,
+  `odometry/global` and `map -> <ns>/odom` out. UWB's jumps land in that link,
+  so `odom -> base_link` stays smooth. It is our own rather than
+  robot_localization's because its state carries the two biases, gyro and
+  slip, beside x, y, theta: each a Gauss-Markov state that the fixes correct
+  through the cross-covariance and that comes off the twist, where process
+  noise could only widen the covariance by root t. Slip is one number, a
+  scale on forward speed, because heading comes from the gyro, which turns
+  with the robot whatever its wheels do. `predict` and `update` are the pure
+  part. Fixes past a chi-square gate are turned away, and after
+  `relock_after` seconds of nothing else the filter takes the next one whole.
+  The sim publishes the true values on `sim/gyro_bias` and `sim/slip` to set
+  against `global_ekf/gyro_bias` and `global_ekf/slip`
+- the biases are only as learnable as `kTwistCovariance` is honest. Its
+  placeholders give the yaw rate 0.05 rad/s of noise against the sim's 0.005,
+  and a 0.003 rad/s bias hides in that. In a 30 s UWB outage the filter held
+  10 cm with covariances set to the sim's real noise, against 35 cm with the
+  placeholders. Heading in `map` is the integrated yaw rate, pulled straight
+  by the fixes only while the robot moves
 - anchors are declared once, in `sim.sh`'s `ANCHORS`, as static `map ->
   anchor_N` frames. The sim ranges them in turn, one per period, and puts the
   anchor's frame in the `Range`'s `header.frame_id`, since `Range` has no other
@@ -312,7 +327,7 @@ than a guess. Breaking that tie with the previous fix was tried: one wrong
 pick became the prior for the next, and the fix stayed wrong for the whole
 blockage. Fewest drops wins over lowest misfit, since fewer survivors always
 fit better. Three anchors that disagree give no fix at all. The
-global EKF's `pose0_rejection_threshold` catches fixes that agree with each
+global EKF's gate catches fixes that agree with each
 other but not with the track.
 
 The sim's ranges carry what the DW1000 gets wrong (`World::range`): Gaussian

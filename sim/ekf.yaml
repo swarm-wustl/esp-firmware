@@ -1,7 +1,6 @@
 # the local filter: odom -> base_link from the board's twist alone. Nothing
 # absolute goes in, so it drifts like dead reckoning but never jumps; the
-# global filter that fuses UWB (ekf_global.yaml, layered over this file)
-# owns map -> odom
+# global filter that fuses UWB (host/global_ekf.py) owns map -> odom
 /**:
   ros__parameters:
     frequency: 30.0
@@ -25,10 +24,10 @@
 
     # variance per second the state may wander between measurements. The
     # defaults (0.05 on x and y, 0.06 on yaw) are 22 cm and 14 deg per root
-    # second, so the global filter took every UWB fix as given and a bad one
-    # dragged the heading with it. What the twist can't see is slip and the
-    # gyro's bias, and 2 cm and 0.8 deg per root second covers both. The
-    # velocities keep their defaults: they are measured every 200 ms
+    # second, which say nothing about the robot and report a covariance to
+    # match. What the twist can't see is slip and the gyro's bias, and 2 cm
+    # and 0.8 deg per root second covers both. The velocities keep their
+    # defaults: they are measured every 200 ms
     process_noise_covariance: [
       4.0e-4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
       0.0, 4.0e-4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,

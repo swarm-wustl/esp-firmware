@@ -14,6 +14,7 @@
 #include <geometry_msgs/msg/twist_with_covariance_stamped.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/range.hpp>
+#include <std_msgs/msg/float64.hpp>
 #include <tf2/exceptions.h>
 #include <tf2_msgs/msg/tf_message.hpp>
 #include <tf2_ros/buffer.h>
@@ -30,6 +31,7 @@ using geometry_msgs::msg::TransformStamped;
 using geometry_msgs::msg::Twist;
 using geometry_msgs::msg::TwistWithCovarianceStamped;
 using sensor_msgs::msg::Range;
+using std_msgs::msg::Float64;
 using tf2_msgs::msg::TFMessage;
 
 // HW::POLL_PERIOD_MS, which main.cpp keeps with the ranging task
@@ -88,6 +90,8 @@ public:
         create_publisher<Range>(Robot::UWB_TOPIC, rclcpp::SensorDataQoS());
     truth_pub_ = create_publisher<PoseStamped>("sim/truth", 10);
     odom_pub_ = create_publisher<PoseStamped>("sim/odom", 10);
+    gyro_bias_pub_ = create_publisher<Float64>("sim/gyro_bias", 10);
+    slip_pub_ = create_publisher<Float64>("sim/slip", 10);
     tf_pub_ = create_publisher<TFMessage>("/tf", 100);
 
     control_timer_ = create_wall_timer(
@@ -203,6 +207,16 @@ private:
 
     odom_pub_->publish(
         pose_stamped(odom_frame_, pose.x, pose.y, pose.theta, stamp));
+    publish_biases();
+  }
+
+  // what a global filter that carries the biases in its state should find.
+  // Slip as one number is the part of it that scales forward speed, which is
+  // all a robot whose heading comes from the gyro can see of it
+  void publish_biases() {
+    gyro_bias_pub_->publish(Float64{}.set__data(imu_ ? gyro_bias_ : 0.0));
+    slip_pub_->publish(Float64{}.set__data(
+        (World::ground(slip_.left) + World::ground(slip_.right)) / 2.0 - 1.0));
   }
 
   // one anchor per period, in turn, the way one radio has to range them.
@@ -329,6 +343,8 @@ private:
   rclcpp::Publisher<Range>::SharedPtr range_pub_;
   rclcpp::Publisher<PoseStamped>::SharedPtr truth_pub_;
   rclcpp::Publisher<PoseStamped>::SharedPtr odom_pub_;
+  rclcpp::Publisher<Float64>::SharedPtr gyro_bias_pub_;
+  rclcpp::Publisher<Float64>::SharedPtr slip_pub_;
   rclcpp::Publisher<TFMessage>::SharedPtr tf_pub_;
   rclcpp::TimerBase::SharedPtr control_timer_;
   rclcpp::TimerBase::SharedPtr pose_timer_;
