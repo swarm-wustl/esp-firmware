@@ -147,8 +147,12 @@ def main():
         took = time.monotonic() - began
 
         for r in robots:
-            off = math.hypot(r.truth.position.x - goal[0], r.truth.position.y - goal[1])
             s = r.samples
+            if not s["global"]:
+                print(f"{str(goal):>14}  {r.ns:>8}  no estimate yet", flush=True)
+                continue
+
+            off = math.hypot(r.truth.position.x - goal[0], r.truth.position.y - goal[1])
             print(f"{str(goal):>14}  {r.ns:>8}  "
                   f"{'timeout' if not r.arrived else f'{took:5.1f}s':>6}  "
                   f"{off * 100:6.1f}cm  {s['global'][-1] * 100:5.1f}cm  "
@@ -158,6 +162,10 @@ def main():
     print()
     for r in robots:
         s = r.samples
+        if not s["global"]:
+            print(f"{r.ns}: no odometry/global, sim/truth or map -> base_link heard")
+            continue
+
         print(f"{r.ns} over {len(s['global'])} samples:")
         for key in ("global", "tf", "dead reckoning"):
             print(f"  {key:>14}  rms {rms(s[key]) * 100:5.1f}cm  "
