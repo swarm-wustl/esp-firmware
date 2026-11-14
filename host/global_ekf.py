@@ -165,6 +165,80 @@ def seconds(stamp):
     return Time.from_msg(stamp).nanoseconds * 1e-9
 
 
+# every tunable with its default, in one place: the node declares them as
+# parameters and sim/replay.py overrides them by name. The sim's own models
+# are tighter and faster; these say what an unknown floor and a calibrated
+# gyro could plausibly do, slowly
+DEFAULTS = {
+    "gyro_bias_sigma": 0.005,
+    "gyro_bias_time": 120.0,
+    "slip_sigma": 0.05,
+    "slip_time": 120.0,
+    "wander": 1e-4,
+    "initial_sigma": [0.05, 0.05, 0.05],
+    # s of nothing but gated fixes before the filter takes the fixes' word
+    # over its own: a track the gate trusts too much would otherwise turn
+    # every fix away for good
+    "relock_after": 3.0,
+}
+
+
+# what the node does with each message, without the node, so a recorded run
+# can be replayed through it. Times are seconds
+class Filter:
+    def __init__(self, start, settings=DEFAULTS):
+        self.model = Model(
+            gyro_bias=GaussMarkov(settings["gyro_bias_sigma"],
+                                  settings["gyro_bias_time"]),
+            slip=GaussMarkov(settings["slip_sigma"], settings["slip_time"]),
+            wander=settings["wander"])
+        self.relock = settings["relock_after"]
+        self.state = np.array([*start, 0.0, 0.0])
+        self.cov = np.diag([*(s * s for s in settings["initial_sigma"]),
+                            self.model.gyro_bias.sigma ** 2,
+                            self.model.slip.sigma ** 2])
+        self.gated_since = None
+        self.at = None
+        self.twist = np.zeros(3)
+        self.twist_cov = np.zeros((3, 3))
+
+    # each twist is the mean over the period it closes, so it moves the state
+    # up to its own stamp. A fix between twists is met by carrying the last
+    # twist forward to it
+    def advance(self, to):
+        if self.at is not None:
+            dt = min(to - self.at, MAX_STEP)
+            if dt > 0.0:
+                self.state, self.cov = predict(self.state, self.cov, self.twist,
+                                               self.twist_cov, dt, self.model)
+
+        self.at = to if self.at is None else max(self.at, to)
+
+    def on_twist(self, t, twist, twist_cov):
+        self.twist = np.asarray(twist, dtype=float)
+        self.twist_cov = np.asarray(twist_cov, dtype=float)
+        self.advance(t)
+
+    # "fused", "gated", or "relocked"
+    def on_fix(self, t, position, position_cov):
+        self.advance(t)
+        result = update(self.state, self.cov, position, position_cov)
+
+        if result is not None:
+            self.state, self.cov = result
+            self.gated_since = None
+            return "fused"
+
+        self.gated_since = self.gated_since or self.at
+
+        if self.at - self.gated_since < self.relock:
+            return "gated"
+
+        self.state, self.cov = relocate(self.state, self.cov, position, position_cov)
+        self.gated_since = None
+        return "relocked"
+
+
 class GlobalEkf(Node):
     def __init__(self):
         super().__init__("global_ekf")
@@ -173,31 +247,10 @@ class GlobalEkf(Node):
         self.odom_frame = self.declare_parameter("odom_frame", "odom").value
         self.base_frame = self.declare_parameter("base_link_frame", "base_link").value
 
-        # the sim's own models are tighter and faster; these say what an
-        # unknown floor and a calibrated gyro could plausibly do, slowly
-        self.model = Model(
-            gyro_bias=GaussMarkov(
-                self.declare_parameter("gyro_bias_sigma", 0.005).value,
-                self.declare_parameter("gyro_bias_time", 120.0).value),
-            slip=GaussMarkov(
-                self.declare_parameter("slip_sigma", 0.05).value,
-                self.declare_parameter("slip_time", 120.0).value),
-            wander=self.declare_parameter("wander", 1e-4).value)
-
         start = self.declare_parameter("initial_state", [0.0, 0.0, 0.0]).value
-        start_sigma = self.declare_parameter("initial_sigma", [0.05, 0.05, 0.05]).value
-        self.state = np.array([*start, 0.0, 0.0])
-        self.cov = np.diag([*(s * s for s in start_sigma),
-                            self.model.gyro_bias.sigma ** 2,
-                            self.model.slip.sigma ** 2])
-        # s of nothing but gated fixes before the filter takes the fixes'
-        # word over its own: a track the gate trusts too much would otherwise
-        # turn every fix away for good
-        self.relock = self.declare_parameter("relock_after", 3.0).value
-        self.gated_since = None
-        self.at = None
-        self.twist = np.zeros(3)
-        self.twist_cov = np.zeros((3, 3))
+        self.filter = Filter(start, {
+            name: self.declare_parameter(name, default).value
+            for name, default in DEFAULTS.items()})
 
         self.tf = Buffer()
         self.listener = TransformListener(self.tf, self)
@@ -214,26 +267,13 @@ class GlobalEkf(Node):
         self.create_timer(1.0 / self.declare_parameter("frequency", 30.0).value,
                           self.publish_transform)
 
-    # each twist is the mean over the period it closes, so it moves the state
-    # up to its own stamp. A fix between twists is met by carrying the last
-    # twist forward to it
-    def advance(self, to):
-        if self.at is not None:
-            dt = min(to - self.at, MAX_STEP)
-            if dt > 0.0:
-                self.state, self.cov = predict(self.state, self.cov, self.twist,
-                                               self.twist_cov, dt, self.model)
-
-        self.at = to if self.at is None else max(self.at, to)
-
     def on_twist(self, msg):
         t = msg.twist.twist
         c = msg.twist.covariance
-        self.twist = np.array([t.linear.x, t.linear.y, t.angular.z])
-        self.twist_cov = np.array([[c[0], c[1], c[5]],
-                                   [c[6], c[7], c[11]],
-                                   [c[30], c[31], c[35]]])
-        self.advance(seconds(msg.header.stamp))
+        self.filter.on_twist(seconds(msg.header.stamp),
+                             (t.linear.x, t.linear.y, t.angular.z),
+                             [[c[0], c[1], c[5]], [c[6], c[7], c[11]],
+                              [c[30], c[31], c[35]]])
         self.publish(msg.header.stamp)
 
     def on_fix(self, msg):
@@ -242,32 +282,20 @@ class GlobalEkf(Node):
                                    throttle_duration_sec=5.0)
             return
 
-        self.advance(seconds(msg.header.stamp))
         p = msg.pose.pose.position
         c = msg.pose.covariance
-        result = update(self.state, self.cov, (p.x, p.y),
-                        np.array([[c[0], c[1]], [c[6], c[7]]]))
+        outcome = self.filter.on_fix(seconds(msg.header.stamp), (p.x, p.y),
+                                     np.array([[c[0], c[1]], [c[6], c[7]]]))
 
-        if result is not None:
-            self.state, self.cov = result
-            self.gated_since = None
-            return
-
-        self.gated_since = self.gated_since or self.at
-
-        if self.at - self.gated_since < self.relock:
+        if outcome == "gated":
             self.get_logger().info(f"gated fix ({p.x:.2f}, {p.y:.2f})",
                                    throttle_duration_sec=1.0)
-            return
-
-        self.get_logger().warn(f"relocked on ({p.x:.2f}, {p.y:.2f}) after "
-                               f"{self.relock:.0f} s of gated fixes")
-        self.state, self.cov = relocate(self.state, self.cov, (p.x, p.y),
-                                        np.array([[c[0], c[1]], [c[6], c[7]]]))
-        self.gated_since = None
+        elif outcome == "relocked":
+            self.get_logger().warn(f"relocked on ({p.x:.2f}, {p.y:.2f}) after "
+                                   f"{self.filter.relock:.0f} s of gated fixes")
 
     def publish(self, stamp):
-        x, y, theta, bias, slip = self.state
+        x, y, theta, bias, slip = self.filter.state
         msg = Odometry()
         msg.header.stamp = stamp
         msg.header.frame_id = self.map_frame
@@ -281,12 +309,12 @@ class GlobalEkf(Node):
         for i, a in enumerate((X, Y, None, None, None, THETA)):
             for j, b in enumerate((X, Y, None, None, None, THETA)):
                 if a is not None and b is not None:
-                    pose_cov[i * 6 + j] = self.cov[a, b]
+                    pose_cov[i * 6 + j] = self.filter.cov[a, b]
         msg.pose.covariance = pose_cov
 
-        msg.twist.twist.linear.x = (1.0 + slip) * self.twist[0]
-        msg.twist.twist.linear.y = self.twist[1]
-        msg.twist.twist.angular.z = self.twist[2] - bias
+        msg.twist.twist.linear.x = (1.0 + slip) * self.filter.twist[0]
+        msg.twist.twist.linear.y = self.filter.twist[1]
+        msg.twist.twist.angular.z = self.filter.twist[2] - bias
         self.odometry.publish(msg)
 
         self.bias_pub.publish(Float64(data=float(bias)))
@@ -295,10 +323,10 @@ class GlobalEkf(Node):
     # map -> odom is what's left of map -> base once the local filter's
     # odom -> base is taken off, both at the time the state is for
     def publish_transform(self):
-        if self.at is None:
+        if self.filter.at is None:
             return
 
-        at = Time(nanoseconds=int(self.at * 1e9))
+        at = Time(nanoseconds=int(self.filter.at * 1e9))
         try:
             local = self.tf.lookup_transform(self.odom_frame, self.base_frame, at)
         except TransformException:
@@ -311,7 +339,7 @@ class GlobalEkf(Node):
 
         l = local.transform
         odom_to_base = (l.translation.x, l.translation.y, yaw_of(l.rotation))
-        x, y, t = compose(tuple(self.state[[X, Y, THETA]]), invert(odom_to_base))
+        x, y, t = compose(tuple(self.filter.state[[X, Y, THETA]]), invert(odom_to_base))
 
         msg = TransformStamped()
         msg.header.stamp = self.get_clock().now().to_msg()

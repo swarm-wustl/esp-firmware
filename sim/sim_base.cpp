@@ -62,6 +62,10 @@ public:
             .correlation_time = declare_parameter("gyro_bias_time", 60.0)},
         gyro_bias_(gyro_bias_model_.mean),
         imu_(declare_parameter("imu", true)),
+        // the board's kTwistCovariance is a placeholder until it is measured.
+        // The sim knows its own noise, so by default it says so, which is
+        // what lets a filter tell a bias from the noise around it
+        true_covariance_(declare_parameter("true_covariance", true)),
         anchors_(declare_parameter("anchors", std::vector<std::string>{})),
         seed_(declare_parameter("seed", 0)),
         range_errors_{
@@ -202,6 +206,14 @@ private:
       Robot::fill_twist(
           msg, Odometry::twist_between(*previous, pose,
                                        Robot::ODOMETRY_PERIOD_MS / 1000.0));
+      if (true_covariance_) {
+        const auto noise = World::twist_noise(
+            imu_ ? std::optional{gyro_noise_} : std::nullopt,
+            Robot::ODOMETRY_PERIOD_MS / 1000.0, Robot::CONTROL.period);
+        msg.twist.covariance[0] = noise.vx;
+        msg.twist.covariance[7] = noise.vy;
+        msg.twist.covariance[35] = noise.wz;
+      }
       twist_pub_->publish(msg);
     }
 
@@ -315,6 +327,7 @@ private:
   World::GaussMarkov gyro_bias_model_;
   double gyro_bias_;
   bool imu_;
+  bool true_covariance_;
   std::vector<std::string> anchors_;
   int64_t seed_;
   size_t next_anchor_ = 0;

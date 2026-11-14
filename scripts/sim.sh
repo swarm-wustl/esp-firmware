@@ -11,7 +11,10 @@
 #   scripts/sim.sh teleop [ns]      drive a robot from the keyboard (2nd terminal)
 #   scripts/sim.sh shell            bash in the running sim, for ros2 topic etc.
 #   scripts/sim.sh check [ns...]    drive the running sim round a route and score
-#                                   its estimates against truth (sim/check.py)
+#                                   its estimates against truth (sim/check.py);
+#                                   --legs N for a shorter route
+#   scripts/sim.sh replay [args]    rerun the filters over the last check's
+#                                   recording, in seconds (sim/replay.py)
 #   scripts/sim.sh build            (re)build the sim image
 #
 # Wheel geometry and the default namespace come out of sdkconfig, through the
@@ -68,7 +71,12 @@ case "${1:-}" in
     in_sim "exec bash" ;;
   check)
     shift
-    in_sim "exec python3 sim/check.py ${*:-$NAMESPACE}" ;;
+    in_sim "exec python3 sim/check.py --default-namespace $NAMESPACE $*" ;;
+  replay)
+    shift
+    docker image inspect "$IMAGE" >/dev/null 2>&1 || build_image
+    exec docker run --rm -i -v "$REPO:/workspace" -w /workspace "$IMAGE" \
+      bash -lc ". /opt/ros/humble/setup.bash && exec python3 sim/replay.py $*" ;;
 esac
 
 docker image inspect "$IMAGE" >/dev/null 2>&1 || build_image

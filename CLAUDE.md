@@ -265,11 +265,14 @@ constant the sim needs belongs there, not restated in `sim/`.
   `relock_after` seconds of nothing else the filter takes the next one whole.
   The sim publishes the true values on `sim/gyro_bias` and `sim/slip` to set
   against `global_ekf/gyro_bias` and `global_ekf/slip`
-- the biases are only as learnable as `kTwistCovariance` is honest. Its
-  placeholders give the yaw rate 0.05 rad/s of noise against the sim's 0.005,
-  and a 0.003 rad/s bias hides in that. In a 30 s UWB outage the filter held
-  10 cm with covariances set to the sim's real noise, against 35 cm with the
-  placeholders. Heading in `map` is the integrated yaw rate, pulled straight
+- the biases are only as learnable as the twist's covariance is honest.
+  `kTwistCovariance` is a placeholder until the bench measures it, and gives
+  the yaw rate 0.05 rad/s of noise, ten times the sim's gyro: a 0.003 rad/s
+  bias hides in that. So the sim by default (`true_covariance`) reports its
+  own noise instead, `World::twist_noise`: gyro noise averaged over the
+  period's control steps, and encoder rounding at its two ends. Slip is left
+  out of it on purpose -- it is the filter's to learn. With the placeholders,
+  a 30 s outage cost about twice the error. Heading in `map` is the integrated yaw rate, pulled straight
   by the fixes only while the robot moves
 - anchors are declared once, in `sim.sh`'s `ANCHORS`, as static `map ->
   anchor_N` frames. The sim ranges them in turn, one per period, and puts the
@@ -295,7 +298,16 @@ constant the sim needs belongs there, not restated in `sim/`.
   a fixed route and prints, per leg and over the whole run, how far each
   estimate is from `sim/truth`: the global EKF, `map -> base_link`, dead
   reckoning and heading. Compare changes on the same `SIM_SEED`, from a fresh
-  start
+  start; `--legs N` drives a shorter route
+- check also records what the filters were fed and the truth to
+  `build_sim/check.jsonl`, and `scripts/sim.sh replay` (`sim/replay.py`) reruns
+  `uwb_fix` and the global filter over it in about a second, through the
+  `Fixer` and `Filter` classes the nodes wrap -- the nodes only add ROS. Every
+  variant sees the same inputs, so a difference is the change, not the run:
+  `--set name=value` for any `Settings` field or `global_ekf.DEFAULTS` entry,
+  `--outage a:b` to drop fixes, `--twist-cov k` to scale the twist covariance.
+  It is open loop (the recorded trajectory, where live the estimate steers),
+  so a plant change, or a final number, still wants a live check
 - untested here: Sched timing, the micro-ROS session, the ESP32 drivers
 
 ## Host nodes

@@ -5,6 +5,7 @@
 # in map, so anchors are declared once, as TF, and nowhere else
 
 import math
+from dataclasses import dataclass, fields
 
 import rclpy
 from geometry_msgs.msg import PoseWithCovarianceStamped
@@ -141,6 +142,59 @@ def consistent_fix(observations, guess, sigma, ambiguity):
     return kept, dropped
 
 
+@dataclass(frozen=True)
+class Settings:
+    reject_outliers: bool = True
+    # s: ranges older than this are dropped from a fix. A robot moving while
+    # the anchors are ranged in turn smears the fix by speed * max_age, so
+    # keep it just over one round of anchors
+    max_age: float = 0.5
+    # m: two ways of dropping a range that fit as well as each other and land
+    # further apart than this give no fix. A few sigma of the fix
+    ambiguity: float = 0.15
+    # s: the last fix seeds the next solve while it is this recent
+    guess_age: float = 1.0
+
+
+# what the node does with each range, without the node, so a recorded run can
+# be replayed through it (sim/replay.py). Times are seconds
+class Fixer:
+    def __init__(self, sigma, settings=Settings()):
+        self.sigma = sigma
+        self.settings = settings
+        self.latest = {}
+        self.guess = None
+        self.guessed = None
+
+    # (result, dropped, fresh): result is ((x, y), covariance) or None, and
+    # dropped names the anchors left out of it, or all of them when there was
+    # no fix. Nothing to say until enough anchors have answered
+    def add(self, frame, anchor, r, t):
+        self.latest[frame] = (anchor, r, t)
+        fresh = {f: (a, rr) for f, (a, rr, heard) in self.latest.items()
+                 if t - heard <= self.settings.max_age}
+        observations = list(fresh.values())
+
+        if len(observations) < MIN_ANCHORS:
+            return None, [], fresh
+
+        recent = self.guessed is not None and t - self.guessed <= self.settings.guess_age
+        guess = self.guess if recent else tuple(
+            sum(a[i] for a, _ in observations) / len(observations)
+            for i in range(2))
+
+        if self.settings.reject_outliers:
+            result, dropped = consistent_fix(observations, guess, self.sigma,
+                                             self.settings.ambiguity)
+        else:
+            result, dropped = trilaterate(observations, guess, self.sigma), []
+
+        if result is not None:
+            self.guess, self.guessed = result[0], t
+
+        return result, [f for f, o in fresh.items() if o in dropped], fresh
+
+
 class UwbFix(Node):
     def __init__(self):
         super().__init__("uwb_fix")
@@ -151,22 +205,11 @@ class UwbFix(Node):
         # fix, but leaving it out tells the EKF the fix is better than it is
         noise = self.declare_parameter("range_sigma", 0.05).value
         bias = self.declare_parameter("range_bias", 0.0).value
-        self.sigma = math.hypot(noise, bias)
-        self.reject = self.declare_parameter("reject_outliers", True).value
-        # ranges older than this are dropped from a fix. A robot moving while
-        # the anchors are ranged in turn smears the fix by speed * max_age, so
-        # keep it just over one round of anchors
-        self.max_age = self.declare_parameter("max_age", 0.5).value
-        # m: two ways of dropping a range that fit as well as each other and
-        # land further apart than this give no fix. A few sigma of the fix
-        self.ambiguity = self.declare_parameter("ambiguity", 0.15).value
-        # the last fix seeds the next solve while it is this recent, s
-        self.guess_age = self.declare_parameter("guess_age", 1.0).value
-
+        settings = Settings(**{
+            f.name: self.declare_parameter(f.name, f.default).value
+            for f in fields(Settings)})
+        self.fixer = Fixer(math.hypot(noise, bias), settings)
         self.anchors = {}
-        self.latest = {}
-        self.guess = None
-        self.guessed = None
 
         self.tf = Buffer()
         self.listener = TransformListener(self.tf, self)
@@ -195,44 +238,19 @@ class UwbFix(Node):
         if at is None:
             return
 
-        stamp = Time.from_msg(msg.header.stamp)
-        self.latest[msg.header.frame_id] = (at, msg.range, stamp)
+        t = Time.from_msg(msg.header.stamp).nanoseconds * 1e-9
+        result, dropped, _ = self.fixer.add(msg.header.frame_id, at, msg.range, t)
+        self.report(result, dropped)
 
-        fresh = {
-            frame: (anchor, r) for frame, (anchor, r, heard) in self.latest.items()
-            if (stamp - heard).nanoseconds * 1e-9 <= self.max_age
-        }
-        observations = list(fresh.values())
+        if result is not None:
+            (x, y), cov = result
+            self.fix.publish(self.pose(msg.header.stamp, x, y, cov))
 
-        if len(observations) < MIN_ANCHORS:
-            return
-
-        recent = (self.guessed is not None and
-                  (stamp - self.guessed).nanoseconds * 1e-9 <= self.guess_age)
-        guess = self.guess if recent else tuple(
-            sum(a[i] for a, _ in observations) / len(observations)
-            for i in range(2))
-
-        if self.reject:
-            result, dropped = consistent_fix(observations, guess, self.sigma,
-                                             self.ambiguity)
-            self.report(fresh, result, dropped)
-        else:
-            result = trilaterate(observations, guess, self.sigma)
-
-        if result is None:
-            return
-
-        (x, y), cov = result
-        self.guess = (x, y)
-        self.guessed = stamp
-        self.fix.publish(self.pose(msg.header.stamp, x, y, cov))
-
-    def report(self, fresh, result, dropped):
+    def report(self, result, dropped):
         if not dropped:
             return
 
-        names = ", ".join(f for f, o in fresh.items() if o in dropped)
+        names = ", ".join(dropped)
         self.get_logger().info(
             f"rejected {names}" if result else f"no fix from {names}",
             throttle_duration_sec=1.0)

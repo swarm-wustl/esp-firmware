@@ -237,6 +237,34 @@ inline State step(const State &state, const Motor::Frame<N> &frame,
           .yaw_rate = w};
 }
 
+// what one odometry message gets wrong, as variances, from what this plant
+// actually does: white gyro noise averaged over the period's control steps,
+// and encoder quantization, which only bites at the period's two ends because
+// the counts are cumulative. Slip is left out on purpose: it is a bias, and a
+// filter that carries it in its state is meant to learn it, not be told the
+// twist is noisy enough to hide it
+struct TwistNoise {
+  double vx;
+  double vy;
+  double wz;
+};
+
+inline TwistNoise twist_noise(std::optional<double> gyro_noise, double period,
+                              double step) {
+  const double count =
+      2.0 * std::numbers::pi * Drive::kWheelRadius / ENCODER.counts_per_rev();
+  // one wheel's travel over the period: a uniform rounding at each end
+  const double travel = count * count / 6.0;
+  const double v = travel / (2.0 * period * period);
+  const double w =
+      gyro_noise ? *gyro_noise * *gyro_noise / std::round(period / step)
+                 : 2.0 * travel /
+                       std::pow(2.0 * Drive::kHalfTrack * period, 2.0);
+
+  // nothing in the plant slides sideways, but a zero would read as certainty
+  return {.vx = v, .vy = v, .wz = w};
+}
+
 // cumulative, like a PCNT unit: the firmware's Tracker takes the difference
 inline std::array<Encoder::Reading, N> counts(const State &state) {
   return Arrays::map(state.wheels, [](const Wheel &wheel) {
