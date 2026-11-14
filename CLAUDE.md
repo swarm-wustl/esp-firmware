@@ -252,7 +252,9 @@ constant the sim needs belongs there, not restated in `sim/`.
 - and a global EKF (`ekf.yaml` with `sim/ekf_global.yaml` layered on): the
   same twist plus `uwb/pose` (x, y only), `odometry/global` and
   `map -> <ns>/odom` out. UWB's jumps land in that link, so `odom -> base_link`
-  stays smooth. Heading in `map` is the integrated yaw rate, pulled straight by
+  stays smooth. Both filters set `process_noise_covariance` from what the twist
+  can't see (slip, gyro bias): robot_localization's defaults trust the
+  prediction so little that the global filter took every fix as given. Heading in `map` is the integrated yaw rate, pulled straight by
   the fixes only while the robot moves
 - anchors are declared once, in `sim.sh`'s `ANCHORS`, as static `map ->
   anchor_N` frames. The sim ranges them in turn, one per period, and puts the
@@ -302,10 +304,14 @@ to one side give an honestly wide fix. `trilaterate()` is the pure part.
 Ranges that disagree are dropped before the fix (`consistent_fix`): each anchor
 is left out in turn and the one whose absence leaves the best fit goes,
 provided it reads long, since non-line-of-sight only adds. Largest residual is
-the wrong rule -- least squares spreads one bad range over the rest, and in a
-square a long corner fits like a short opposite corner -- and with three
-anchors left a set holding the bad range can still fit, so the previous fix,
-if recent, breaks the tie. Three anchors that disagree give no fix at all. The
+the wrong rule -- least squares spreads one bad range over the rest. With
+three anchors left a set holding the bad range can fit as well as the clean
+one (in a square, a long corner fits like a short opposite corner), so when
+the possible drops land more than `ambiguity` apart there is no fix rather
+than a guess. Breaking that tie with the previous fix was tried: one wrong
+pick became the prior for the next, and the fix stayed wrong for the whole
+blockage. Fewest drops wins over lowest misfit, since fewer survivors always
+fit better. Three anchors that disagree give no fix at all. The
 global EKF's `pose0_rejection_threshold` catches fixes that agree with each
 other but not with the track.
 

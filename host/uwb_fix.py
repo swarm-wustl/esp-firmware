@@ -87,27 +87,30 @@ def misfit(observations, position, sigma):
     return sum(e * e for e in residuals(observations, position)) / (sigma * sigma)
 
 
-# drops one anchor at a time until the rest agree. Largest residual is the
-# wrong pick: least squares spreads one bad range over the others, and in a
-# square a long read on one corner fits much like a short read on the
-# opposite one. So each anchor is left out in turn and the rest refit, and the
-# one dropped is the one whose absence leaves the best fit -- provided it
-# reads long against that fit, since a blocked path makes the radio lock onto
-# a reflection and only ever adds. Three anchors leave one degree of freedom,
-# so a set still holding the bad range can fit as well as the clean one; the
-# previous fix, when there is a recent one, breaks the tie, since the robot
-# moves centimetres between fixes. With three left there is no redundancy to
-# say which is wrong, so a misfit there is no fix
-def consistent_fix(observations, guess, sigma, prior=None):
+def consistent(observations, position, sigma):
+    return misfit(observations, position, sigma) <= CHI2_99.get(
+        len(observations) - 2, math.inf)
+
+
+# drops anchors until the rest agree, and gives no fix when it can't tell
+# which to drop. Largest residual is the wrong pick: least squares spreads one
+# bad range over the others. So each anchor is left out in turn, and a drop is
+# a candidate if it reads long against the rest's fit, since a blocked path
+# makes the radio lock onto a reflection and only ever adds, and the rest then
+# agree. In a square, three anchors barely over-determine a fix, so leaving
+# out the blocked corner and leaving out the opposite one both fit: when the
+# candidates land more than `ambiguity` apart there is no telling them apart
+# from ranges alone, and breaking the tie with the last fix makes one wrong
+# pick the reason for the next, for as long as the blockage lasts
+def consistent_fix(observations, guess, sigma, ambiguity):
     result = trilaterate(observations, guess, sigma)
 
     if result is None:
-        return None, []
+        return None, list(observations)
 
     position, _ = result
-    gate = CHI2_99.get(len(observations) - 2, math.inf)
 
-    if misfit(observations, position, sigma) <= gate:
+    if consistent(observations, position, sigma):
         return result, []
 
     if len(observations) <= MIN_ANCHORS:
@@ -117,27 +120,25 @@ def consistent_fix(observations, guess, sigma, prior=None):
 
     for i, ((ax, ay), r) in enumerate(observations):
         rest = observations[:i] + observations[i + 1:]
-        fit = trilaterate(rest, position, sigma)
+        kept, dropped = consistent_fix(rest, position, sigma, ambiguity)
 
-        if fit is None:
+        if kept is None or r <= math.dist(kept[0], (ax, ay)):
             continue
 
-        (x, y), _ = fit
+        survivors = [o for o in rest if o not in dropped]
+        candidates.append((misfit(survivors, kept[0], sigma), kept,
+                           [observations[i]] + dropped))
 
-        if r > math.hypot(x - ax, y - ay):
-            score = misfit(rest, (x, y), sigma)
-            if prior:
-                score += (math.hypot(x - guess[0], y - guess[1]) / prior) ** 2
-            candidates.append((score, i))
+    points = [kept[0] for _, kept, _ in candidates]
+    spread = max((math.dist(a, b) for a in points for b in points), default=0.0)
 
-    if not candidates:
+    if not candidates or spread > ambiguity:
         return None, list(observations)
 
-    _, worst = min(candidates)
-    result, dropped = consistent_fix(
-        observations[:worst] + observations[worst + 1:], guess, sigma, prior)
+    # fewest ranges thrown away first: fewer survivors always fit better
+    _, kept, dropped = min(candidates, key=lambda c: (len(c[2]), c[0]))
 
-    return result, [observations[worst]] + dropped
+    return kept, dropped
 
 
 class UwbFix(Node):
@@ -156,10 +157,11 @@ class UwbFix(Node):
         # the anchors are ranged in turn smears the fix by speed * max_age, so
         # keep it just over one round of anchors
         self.max_age = self.declare_parameter("max_age", 0.5).value
-        # how far the robot plausibly is from the last fix, and how old that
-        # fix may be before it says nothing about where the robot is now
-        self.prior = self.declare_parameter("prior_sigma", 0.15).value
-        self.prior_age = self.declare_parameter("prior_age", 1.0).value
+        # m: two ways of dropping a range that fit as well as each other and
+        # land further apart than this give no fix. A few sigma of the fix
+        self.ambiguity = self.declare_parameter("ambiguity", 0.15).value
+        # the last fix seeds the next solve while it is this recent, s
+        self.guess_age = self.declare_parameter("guess_age", 1.0).value
 
         self.anchors = {}
         self.latest = {}
@@ -206,15 +208,15 @@ class UwbFix(Node):
             return
 
         recent = (self.guessed is not None and
-                  (stamp - self.guessed).nanoseconds * 1e-9 <= self.prior_age)
+                  (stamp - self.guessed).nanoseconds * 1e-9 <= self.guess_age)
         guess = self.guess if recent else tuple(
             sum(a[i] for a, _ in observations) / len(observations)
             for i in range(2))
 
         if self.reject:
             result, dropped = consistent_fix(observations, guess, self.sigma,
-                                             self.prior if recent else None)
-            self.report(fresh, dropped)
+                                             self.ambiguity)
+            self.report(fresh, result, dropped)
         else:
             result = trilaterate(observations, guess, self.sigma)
 
@@ -226,13 +228,14 @@ class UwbFix(Node):
         self.guessed = stamp
         self.fix.publish(self.pose(msg.header.stamp, x, y, cov))
 
-    def report(self, fresh, dropped):
+    def report(self, fresh, result, dropped):
         if not dropped:
             return
 
-        names = [f for f, o in fresh.items() if o in dropped]
-        self.get_logger().info(f"rejected {', '.join(names)}",
-                               throttle_duration_sec=1.0)
+        names = ", ".join(f for f, o in fresh.items() if o in dropped)
+        self.get_logger().info(
+            f"rejected {names}" if result else f"no fix from {names}",
+            throttle_duration_sec=1.0)
 
     def pose(self, stamp, x, y, cov):
         msg = PoseWithCovarianceStamped()
