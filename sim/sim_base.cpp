@@ -61,6 +61,7 @@ public:
         gyro_bias_(gyro_bias_model_.mean),
         imu_(declare_parameter("imu", true)),
         anchors_(declare_parameter("anchors", std::vector<std::string>{})),
+        seed_(declare_parameter("seed", 0)),
         range_errors_{
             .noise = declare_parameter("range_noise", 0.05),
             .dropout = declare_parameter("range_dropout", 0.05)},
@@ -74,7 +75,7 @@ public:
         odom_frame_(frame(Robot::ODOM_FRAME)),
         base_frame_(frame(Robot::BASE_FRAME)),
         truth_frame_(frame("truth")) {
-    robot_bias_ = gauss(declare_parameter("robot_bias", 0.03));
+    robot_bias_ = gauss(range_rng_, declare_parameter("robot_bias", 0.03));
     anchor_bias_ = declare_anchor_bias();
 
     cmd_vel_ = create_subscription<Twist>(
@@ -111,10 +112,10 @@ private:
         base_, targets, advance(World::counts(world_)), gyro());
     base_ = next;
 
-    slip_ = World::drift(slip_, {gauss(1.0), gauss(1.0)}, slip_model_,
-                         Robot::CONTROL.period);
-    gyro_bias_ = World::wander(gyro_bias_model_, gyro_bias_, gauss(1.0),
-                               Robot::CONTROL.period);
+    slip_ = World::drift(slip_, {gauss(motion_rng_, 1.0), gauss(motion_rng_, 1.0)},
+                         slip_model_, Robot::CONTROL.period);
+    gyro_bias_ = World::wander(gyro_bias_model_, gyro_bias_,
+                               gauss(motion_rng_, 1.0), Robot::CONTROL.period);
     world_ = World::step(world_, frame, slip_,
                          time_constant_, Robot::CONTROL.period);
 
@@ -130,21 +131,25 @@ private:
     return counts;
   }
 
-  // an anchor's antenna delay is a property of the anchor, so every robot must
-  // draw the same bias for it. Each robot is its own process, so the draw is
-  // seeded from a seed they share and the anchor's name
+  // every draw comes from the one seed, so a run can be repeated. Each
+  // stream is keyed by what it belongs to: an anchor's antenna delay is the
+  // anchor's, so every robot process must draw the same one, while a robot's
+  // own noise must differ from its neighbours'. Motion and ranging draw from
+  // separate engines because their timers interleave differently run to run
+  std::mt19937 stream(const std::string &key) const {
+    std::seed_seq seq{static_cast<uint64_t>(seed_),
+                      std::hash<std::string>{}(key)};
+
+    return std::mt19937{seq};
+  }
+
   std::unordered_map<std::string, double> declare_anchor_bias() {
     const double sigma = declare_parameter("anchor_bias", 0.03);
-    const auto seed = declare_parameter("anchor_seed", 0);
     std::unordered_map<std::string, double> out;
 
     for (const auto &anchor : anchors_) {
-      std::seed_seq seq{static_cast<uint64_t>(seed),
-                        std::hash<std::string>{}(anchor)};
-      std::mt19937 gen{seq};
-      out[anchor] =
-          sigma > 0.0 ? std::normal_distribution<double>{0.0, sigma}(gen)
-                      : 0.0;
+      auto gen = stream(anchor);
+      out[anchor] = gauss(gen, sigma);
     }
 
     return out;
@@ -167,13 +172,15 @@ private:
       return std::nullopt;
     }
 
-    return world_.yaw_rate + gyro_bias_ + gauss(gyro_noise_);
+    return world_.yaw_rate + gyro_bias_ + gauss(motion_rng_, gyro_noise_);
   }
 
-  double uniform() { return std::uniform_real_distribution<double>{}(rng_); }
+  static double uniform(std::mt19937 &gen) {
+    return std::uniform_real_distribution<double>{}(gen);
+  }
 
-  double gauss(double sigma) {
-    return sigma > 0.0 ? std::normal_distribution<double>{0.0, sigma}(rng_)
+  static double gauss(std::mt19937 &gen, double sigma) {
+    return sigma > 0.0 ? std::normal_distribution<double>{0.0, sigma}(gen)
                        : 0.0;
   }
 
@@ -226,12 +233,13 @@ private:
     const double round =
         std::chrono::duration<double>(RANGE_PERIOD).count() * anchors_.size();
     auto &path = paths_[anchor];
-    path = World::obstruct(path, blockage_, round, uniform(),
-                           std::exponential_distribution<double>{1.0}(rng_));
+    path = World::obstruct(path, blockage_, round, uniform(range_rng_),
+                           std::exponential_distribution<double>{1.0}(range_rng_));
 
     const auto measured =
         World::range(distance, robot_bias_ + anchor_bias_.at(anchor), path,
-                     range_errors_, {.noise = gauss(1.0), .dropout = uniform()});
+                     range_errors_,
+                     {.noise = gauss(range_rng_, 1.0), .dropout = uniform(range_rng_)});
 
     if (!measured) {
       return;
@@ -294,6 +302,7 @@ private:
   double gyro_bias_;
   bool imu_;
   std::vector<std::string> anchors_;
+  int64_t seed_;
   size_t next_anchor_ = 0;
   World::RangeErrors range_errors_;
   World::Blockage blockage_;
@@ -310,7 +319,8 @@ private:
   std::string odom_frame_;
   std::string base_frame_;
   std::string truth_frame_;
-  std::mt19937 rng_{std::random_device{}()};
+  std::mt19937 motion_rng_{stream(frame("motion"))};
+  std::mt19937 range_rng_{stream(frame("range"))};
   tf2_ros::Buffer tf_{get_clock()};
   tf2_ros::TransformListener tf_listener_{tf_};
 

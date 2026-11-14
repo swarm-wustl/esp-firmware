@@ -10,6 +10,8 @@
 #   scripts/sim.sh swarm_1 swarm_2  one robot per namespace
 #   scripts/sim.sh teleop [ns]      drive a robot from the keyboard (2nd terminal)
 #   scripts/sim.sh shell            bash in the running sim, for ros2 topic etc.
+#   scripts/sim.sh check [ns...]    drive the running sim round a route and score
+#                                   its estimates against truth (sim/check.py)
 #   scripts/sim.sh build            (re)build the sim image
 #
 # Wheel geometry and the default namespace come out of sdkconfig, through the
@@ -18,6 +20,11 @@
 # The sim runs on its own ROS_DOMAIN_ID (SIM_DOMAIN, default 42): DDS discovery
 # crosses containers, so a fake swarm_1 on domain 0 would publish over the
 # real board's topics whenever swarm-agent is up. SIM_DOMAIN=0 mixes them.
+#
+# Every random draw in the world comes from SIM_SEED, printed at startup, so
+# SIM_SEED=123 scripts/sim.sh repeats a run's noise, slip and blockage. The
+# trajectory still differs a little: when go_to_goal's commands land against
+# the control loop is wall-clock timing.
 
 set -euo pipefail
 
@@ -46,7 +53,8 @@ build_image() {
 in_sim() {
   docker inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null | grep -q true ||
     die "sim is not running -- start it with scripts/sim.sh"
-  exec docker exec -it "$NAME" bash -lc ". /opt/ros/humble/setup.bash && $1"
+  # -t only from a terminal, so check can run from a script too
+  exec docker exec -i $([ -t 0 ] && echo -t) "$NAME" bash -lc ". /opt/ros/humble/setup.bash && $1"
 }
 
 case "${1:-}" in
@@ -58,12 +66,17 @@ case "${1:-}" in
       --ros-args -r cmd_vel:=/${2:-$NAMESPACE}/cmd_vel" ;;
   shell)
     in_sim "exec bash" ;;
+  check)
+    shift
+    in_sim "exec python3 sim/check.py ${*:-$NAMESPACE}" ;;
 esac
 
 docker image inspect "$IMAGE" >/dev/null 2>&1 || build_image
 
 namespaces=("$@")
 [ "${#namespaces[@]}" -gt 0 ] || namespaces=("$NAMESPACE")
+
+SIM_SEED="${SIM_SEED:-$RANDOM}"
 
 # robots are put down in a row along map's y, so they don't start on top of
 # each other
@@ -76,8 +89,7 @@ ANCHORS=(anchor_0:-1.5,-1.5 anchor_1:2.5,-1.5 anchor_2:2.5,2.5 anchor_3:-1.5,2.5
 # what the sim gets wrong in each range, and what the fix node is told to
 # expect. The biases are antenna delay left over after calibration: one per
 # anchor, the same for every robot, and one per robot, the same for every
-# anchor. UWB_SEED fixes the anchor biases; it is printed so a run can be
-# repeated
+# anchor
 RANGE_NOISE=0.05
 ANCHOR_BIAS=0.03
 ROBOT_BIAS=0.03
@@ -85,7 +97,6 @@ NLOS_FRACTION=0.05
 NLOS_DURATION=2.0
 NLOS_EXCESS=0.3
 RANGE_DROPOUT=0.05
-UWB_SEED="${UWB_SEED:-$RANDOM}"
 RANGE_BIAS="$(awk "BEGIN{printf \"%.4f\", sqrt($ANCHOR_BIAS^2 + $ROBOT_BIAS^2)}")"
 
 anchors=""
@@ -110,7 +121,7 @@ for ns in "${namespaces[@]}"; do
   robots+="build_sim/sim_base --ros-args -r __ns:=/$ns \
     -p start:=[0.0,$y,0.0] -p anchors:=[$anchor_names] \
     -p range_noise:=$RANGE_NOISE -p anchor_bias:=$ANCHOR_BIAS \
-    -p robot_bias:=$ROBOT_BIAS -p anchor_seed:=$UWB_SEED \
+    -p robot_bias:=$ROBOT_BIAS -p seed:=$SIM_SEED \
     -p nlos_fraction:=$NLOS_FRACTION -p nlos_duration:=$NLOS_DURATION \
     -p nlos_excess:=$NLOS_EXCESS \
     -p range_dropout:=$RANGE_DROPOUT & "
@@ -136,7 +147,7 @@ for ns in "${namespaces[@]}"; do
   i=$((i + 1))
 done
 
-echo "sim.sh: ${namespaces[*]} up (UWB_SEED=$UWB_SEED); open Foxglove on ws://localhost:8765" >&2
+echo "sim.sh: ${namespaces[*]} up (SIM_SEED=$SIM_SEED); open Foxglove on ws://localhost:8765" >&2
 
 exec docker run --rm -it --init \
   --name "$NAME" \

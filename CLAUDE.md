@@ -268,6 +268,17 @@ constant the sim needs belongs there, not restated in `sim/`.
 - the world is simulated in `map`. Robots are put down 0.5 m apart along y
   (`start`), and the global EKF is handed that pose as `initial_state` -- a
   real robot would have to estimate it
+- every draw the world makes comes from `SIM_SEED` (printed at startup),
+  split into streams keyed by what they belong to: per anchor, so every robot
+  process draws the same antenna delay, and per robot for motion and ranging,
+  kept apart because their timers interleave differently each run. The seed
+  fixes the noise, not the trajectory -- when go_to_goal's commands land is
+  wall-clock -- so a repeat matches in its totals, not leg by leg
+- `scripts/sim.sh check [ns...]` (`sim/check.py`) drives the running sim round
+  a fixed route and prints, per leg and over the whole run, how far each
+  estimate is from `sim/truth`: the global EKF, `map -> base_link`, dead
+  reckoning and heading. Compare changes on the same `SIM_SEED`, from a fresh
+  start
 - untested here: Sched timing, the micro-ROS session, the ESP32 drivers
 
 ## Host nodes
@@ -299,8 +310,7 @@ global EKF's `pose0_rejection_threshold` catches fixes that agree with each
 other but not with the track.
 
 The sim's ranges carry what the DW1000 gets wrong (`World::range`): Gaussian
-noise, an antenna-delay bias per anchor (shared by every robot, seeded from
-`UWB_SEED`) and per robot, non-line-of-sight blockage, and dropped exchanges.
+noise, an antenna-delay bias per anchor (shared by every robot) and per robot, non-line-of-sight blockage, and dropped exchanges.
 Blockage is a two-state Markov chain per link (`World::obstruct`), so a blocked
 anchor reads long for seconds at a time with one held excess, as when someone
 stands in the way, rather than one range in twenty at random. All of it is set in `sim.sh`, which also hands `uwb_fix` the
