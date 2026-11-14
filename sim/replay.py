@@ -36,7 +36,10 @@ SETTLED = 30.0
 
 def setting(text):
     name, value = text.split("=", 1)
-    return name, json.loads(value)
+    try:
+        return name, json.loads(value)
+    except json.JSONDecodeError:
+        return name, value
 
 
 def window(text):
@@ -83,8 +86,11 @@ def replay(events, overrides, outage, twist_scale):
     stream = sorted(by_kind["twist"] + by_kind["range"], key=lambda e: e["t"])
     first = stream[0]["t"]
     start = truth.at(first)
+    # the filter is told what uwb_fix was, unless a --set says otherwise
+    recorded = {k: fix_settings[k] for k in ("range_sigma", "range_bias") if k in fix_settings}
     ekf = Filter((start["x"], start["y"], start["theta"]),
-                 {**DEFAULTS, **{k: v for k, v in overrides.items() if k in DEFAULTS}})
+                 {**DEFAULTS, **recorded,
+                  **{k: v for k, v in overrides.items() if k in DEFAULTS}})
 
     errors, yaws, in_outage, bias_errors = [], [], [], []
     outcomes = defaultdict(int)
@@ -103,6 +109,10 @@ def replay(events, overrides, outage, twist_scale):
                 in_outage.append(error)
             continue
 
+        blacked_out = outage and outage[0] <= e["t"] - first <= outage[1]
+        if not blacked_out:
+            ekf.on_range(e["t"], e["frame"], anchors[e["frame"]], e["range"])
+
         result, dropped, _ = fixer.add(e["frame"], anchors[e["frame"]], e["range"], e["t"])
 
         if result is None:
@@ -112,7 +122,7 @@ def replay(events, overrides, outage, twist_scale):
         if dropped:
             outcomes["fix with a drop"] += 1
 
-        if outage and outage[0] <= e["t"] - first <= outage[1]:
+        if blacked_out:
             outcomes["fix lost to outage"] += 1
             continue
 
@@ -122,6 +132,7 @@ def replay(events, overrides, outage, twist_scale):
     return {
         "errors": errors, "yaws": yaws, "bias_errors": bias_errors, "outage": in_outage, "outcomes": outcomes,
         "duration": stream[-1]["t"] - first, "state": ekf.state,
+        "anchor_biases": {f: ekf.state[i] for f, i in ekf.anchor_index.items()},
         "gyro_bias": [e["value"] for e in by_kind["gyro_bias"]],
         "slip": [e["value"] for e in by_kind["slip"]],
     }
@@ -155,7 +166,7 @@ def main():
             print(f"  outage    worst {max(out['outage']) * 100:5.1f}cm  "
                   f"at its end {out['outage'][-1] * 100:5.1f}cm")
 
-        _, _, _, bias, slip = out["state"]
+        _, _, _, bias, slip = out["state"][:5]
         if out["bias_errors"]:
             b = out["bias_errors"]
             print(f"  gyro bias {bias:+.4f} rad/s, true {out['gyro_bias'][-1]:+.4f}; "
@@ -164,7 +175,10 @@ def main():
         if out["slip"]:
             print(f"  slip      {slip * 100:+5.1f}%, true mean "
                   f"{sum(out['slip']) / len(out['slip']) * 100:+5.1f}%")
-        print("  fixes     " + ", ".join(f"{k} {v}" for k, v in sorted(out["outcomes"].items())))
+        if out["anchor_biases"]:
+            print("  anchors   " + ", ".join(f"{k} {v * 100:+.1f}cm"
+                                         for k, v in sorted(out["anchor_biases"].items())))
+        print("  uwb       " + ", ".join(f"{k} {v}" for k, v in sorted(out["outcomes"].items())))
 
 
 if __name__ == "__main__":

@@ -142,6 +142,7 @@ for ns in "${namespaces[@]}"; do
   # would have to estimate rather than know
   robots+="python3 host/global_ekf.py --ros-args -r __ns:=/$ns \
     -p odom_frame:=$ns/odom -p base_link_frame:=$ns/base_link \
+    -p range_sigma:=$RANGE_NOISE -p range_bias:=$RANGE_BIAS \
     -p initial_state:=[0.0,$y,0.0] & "
   # the 3D panel's pose tool publishes on /move_base_simple/goal, so a click
   # sends every robot there

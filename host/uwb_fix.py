@@ -195,6 +195,30 @@ class Fixer:
         return result, [f for f, o in fresh.items() if o in dropped], fresh
 
 
+# an anchor is any frame a range names that resolves in map, looked up once
+class Anchors:
+    def __init__(self, node, map_frame, tf=None):
+        self.node = node
+        self.map_frame = map_frame
+        self.known = {}
+        self.tf = tf or Buffer()
+        self.listener = None if tf else TransformListener(self.tf, node)
+
+    def __call__(self, frame):
+        if frame not in self.known:
+            try:
+                t = self.tf.lookup_transform(self.map_frame, frame, Time())
+            except TransformException as e:
+                self.node.get_logger().warn(f"no {frame} in {self.map_frame}: {e}",
+                                            throttle_duration_sec=2.0)
+                return None
+
+            self.known[frame] = (t.transform.translation.x,
+                                 t.transform.translation.y)
+
+        return self.known[frame]
+
+
 class UwbFix(Node):
     def __init__(self):
         super().__init__("uwb_fix")
@@ -209,28 +233,11 @@ class UwbFix(Node):
             f.name: self.declare_parameter(f.name, f.default).value
             for f in fields(Settings)})
         self.fixer = Fixer(math.hypot(noise, bias), settings)
-        self.anchors = {}
-
-        self.tf = Buffer()
-        self.listener = TransformListener(self.tf, self)
+        self.anchor = Anchors(self, self.map_frame)
 
         self.create_subscription(Range, "uwb/range", self.on_range,
                                  qos_profile_sensor_data)
         self.fix = self.create_publisher(PoseWithCovarianceStamped, "uwb/pose", 10)
-
-    def anchor(self, frame):
-        if frame not in self.anchors:
-            try:
-                t = self.tf.lookup_transform(self.map_frame, frame, Time())
-            except TransformException as e:
-                self.get_logger().warn(f"no {frame} in {self.map_frame}: {e}",
-                                       throttle_duration_sec=2.0)
-                return None
-
-            self.anchors[frame] = (t.transform.translation.x,
-                                   t.transform.translation.y)
-
-        return self.anchors[frame]
 
     def on_range(self, msg):
         at = self.anchor(msg.header.frame_id)

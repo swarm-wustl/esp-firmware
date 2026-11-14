@@ -252,7 +252,7 @@ constant the sim needs belongs there, not restated in `sim/`.
 - the local filter sets `process_noise_covariance` from what the twist can't
   see (slip, gyro bias); robot_localization's defaults say nothing about the
   robot
-- and a global EKF, `host/global_ekf.py`: the same twist plus `uwb/pose`,
+- and a global EKF, `host/global_ekf.py`: the same twist plus UWB,
   `odometry/global` and `map -> <ns>/odom` out. UWB's jumps land in that link,
   so `odom -> base_link` stays smooth. It is our own rather than
   robot_localization's because its state carries the two biases, gyro and
@@ -260,13 +260,26 @@ constant the sim needs belongs there, not restated in `sim/`.
   through the cross-covariance and that comes off the twist, where process
   noise could only widen the covariance by root t. Slip is one number, a
   scale on forward speed, because heading comes from the gyro, which turns
-  with the robot whatever its wheels do. `predict` and `update` are the pure
-  part. A fix waits for the twist whose period it falls in and is fused in
+  with the robot whatever its wheels do. `predict`, `update` and
+  `update_range` are the pure part
+- it is tightly coupled (`coupling`): each `uwb/range` is its own measurement
+  against the distance the state predicts to that anchor, so a round with
+  fewer than three good anchors still counts, each range lands at its own
+  time, and a blocked anchor stands out against the track rather than against
+  the other anchors. The gate is one-sided (`long_gate` 2 sigma, `short_gate`
+  4), since a blocked path only reads long. Each anchor's antenna delay, plus
+  the robot's own, which no state could tell apart from it, is a state of its
+  own, appended when the anchor is first heard: folded into sigma, a constant
+  error posed as white and pushed the track around. `uwb_fix`'s positions are
+  kept only to relock. In replay over three recorded seeds, tight beat loose
+  in normal driving on every one; live on seed 123 it took the global error
+  from 8 to 3.8 cm rms and from about 20 to 8 cm worst. `coupling:=loose`
+  fuses `uwb/pose` instead. A measurement waits for the twist whose period it falls in and is fused in
   time order inside it: each twist is the mean over the period it closes, and
   carrying the previous one forward to a fix instead kicks the heading at every
-  start and stop of a turn, which the filter took for gyro bias. Fixes past a
-  chi-square gate are turned away, and after
-  `relock_after` seconds of nothing else the filter takes the next one whole.
+  start and stop of a turn, which the filter took for gyro bias. After
+  `relock_after` seconds of nothing but gated measurements the filter takes
+  the next fix whole.
   The sim publishes the true values on `sim/gyro_bias` and `sim/slip` to set
   against `global_ekf/gyro_bias` and `global_ekf/slip`
 - the biases are only as learnable as the twist's covariance is honest.
@@ -326,9 +339,10 @@ twist and goes quiet; the board's watchdog is the fallback, not the brake.
 `command()` is the pure control law, importable without a running graph.
 
 `host/uwb_fix.py` turns one robot's `uwb/range` into `uwb/pose`
-(`PoseWithCovarianceStamped` in `map`) for the global EKF. An anchor is
-whatever frame a range names, looked up in TF, so nothing restates the anchor
-positions. It solves once at least three anchors have answered within
+(`PoseWithCovarianceStamped` in `map`): what the global EKF relocks on, and
+what it fuses when loosely coupled. An anchor is whatever frame a range
+names, looked up in TF (`Anchors`, which the global EKF shares), so nothing
+restates the anchor positions. It solves once at least three anchors have answered within
 `max_age`, and the covariance comes from the fit's geometry, so anchors bunched
 to one side give an honestly wide fix. `trilaterate()` is the pure part.
 
@@ -342,9 +356,7 @@ the possible drops land more than `ambiguity` apart there is no fix rather
 than a guess. Breaking that tie with the previous fix was tried: one wrong
 pick became the prior for the next, and the fix stayed wrong for the whole
 blockage. Fewest drops wins over lowest misfit, since fewer survivors always
-fit better. Three anchors that disagree give no fix at all. The
-global EKF's gate catches fixes that agree with each
-other but not with the track.
+fit better. Three anchors that disagree give no fix at all.
 
 The sim's ranges carry what the DW1000 gets wrong (`World::range`): Gaussian
 noise, an antenna-delay bias per anchor (shared by every robot) and per robot, non-line-of-sight blockage, and dropped exchanges.
