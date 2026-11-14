@@ -30,6 +30,10 @@ from global_ekf import DEFAULTS, Filter, wrap  # noqa: E402
 from uwb_fix import Fixer, Settings  # noqa: E402
 
 
+# s before the bias error counts: the filter starts knowing nothing of it
+SETTLED = 30.0
+
+
 def setting(text):
     name, value = text.split("=", 1)
     return name, json.loads(value)
@@ -44,7 +48,7 @@ def rms(values):
     return math.sqrt(sum(v * v for v in values) / len(values)) if values else math.nan
 
 
-class Truth:
+class Series:
     def __init__(self, events):
         self.times = [e["t"] for e in events]
         self.events = events
@@ -62,7 +66,9 @@ def replay(events, overrides, outage, twist_scale):
         by_kind[e["kind"]].append(e)
 
     anchors = {e["frame"]: (e["x"], e["y"]) for e in by_kind["anchor"]}
-    truth = Truth(sorted(by_kind["truth"], key=lambda e: e["t"]))
+    truth = Series(sorted(by_kind["truth"], key=lambda e: e["t"]))
+    true_bias = Series(sorted(by_kind["gyro_bias"], key=lambda e: e["t"])) \
+        if by_kind["gyro_bias"] else None
     fix_settings = by_kind["fixer"][0] if by_kind["fixer"] else {}
     sigma = math.hypot(fix_settings.get("range_sigma", 0.05),
                        fix_settings.get("range_bias", 0.0))
@@ -80,16 +86,19 @@ def replay(events, overrides, outage, twist_scale):
     ekf = Filter((start["x"], start["y"], start["theta"]),
                  {**DEFAULTS, **{k: v for k, v in overrides.items() if k in DEFAULTS}})
 
-    errors, yaws, in_outage = [], [], []
+    errors, yaws, in_outage, bias_errors = [], [], [], []
     outcomes = defaultdict(int)
 
     for e in stream:
         if e["kind"] == "twist":
-            ekf.on_twist(e["t"], e["twist"], np.asarray(e["cov"]) * twist_scale)
+            for outcome in ekf.on_twist(e["t"], e["twist"], np.asarray(e["cov"]) * twist_scale):
+                outcomes[outcome] += 1
             real = truth.at(e["t"])
             error = math.hypot(ekf.state[0] - real["x"], ekf.state[1] - real["y"])
             errors.append(error)
             yaws.append(math.degrees(abs(wrap(ekf.state[2] - real["theta"]))))
+            if true_bias and e["t"] - first >= SETTLED:
+                bias_errors.append(ekf.state[3] - true_bias.at(e["t"])["value"])
             if outage and outage[0] <= e["t"] - first <= outage[1]:
                 in_outage.append(error)
             continue
@@ -108,10 +117,10 @@ def replay(events, overrides, outage, twist_scale):
             continue
 
         position, cov = result
-        outcomes[ekf.on_fix(e["t"], position, np.asarray(cov))] += 1
+        ekf.on_fix(e["t"], position, np.asarray(cov))
 
     return {
-        "errors": errors, "yaws": yaws, "outage": in_outage, "outcomes": outcomes,
+        "errors": errors, "yaws": yaws, "bias_errors": bias_errors, "outage": in_outage, "outcomes": outcomes,
         "duration": stream[-1]["t"] - first, "state": ekf.state,
         "gyro_bias": [e["value"] for e in by_kind["gyro_bias"]],
         "slip": [e["value"] for e in by_kind["slip"]],
@@ -147,8 +156,11 @@ def main():
                   f"at its end {out['outage'][-1] * 100:5.1f}cm")
 
         _, _, _, bias, slip = out["state"]
-        if out["gyro_bias"]:
-            print(f"  gyro bias {bias:+.4f} rad/s, true {out['gyro_bias'][-1]:+.4f}")
+        if out["bias_errors"]:
+            b = out["bias_errors"]
+            print(f"  gyro bias {bias:+.4f} rad/s, true {out['gyro_bias'][-1]:+.4f}; "
+                  f"error after {SETTLED:.0f} s rms {rms(b):.4f}, "
+                  f"mean {sum(b) / len(b):+.4f}")
         if out["slip"]:
             print(f"  slip      {slip * 100:+5.1f}%, true mean "
                   f"{sum(out['slip']) / len(out['slip']) * 100:+5.1f}%")

@@ -166,15 +166,18 @@ def seconds(stamp):
 
 
 # every tunable with its default, in one place: the node declares them as
-# parameters and sim/replay.py overrides them by name. The sim's own models
-# are tighter and faster; these say what an unknown floor and a calibrated
-# gyro could plausibly do, slowly
+# parameters and sim/replay.py overrides them by name. These say what an
+# unknown floor and a calibrated gyro could plausibly do, slowly. The gyro
+# bias and wander were swept with replay over runs recorded on sim seeds 7
+# and 123, and checked on 42: the bias settings barely move the result, but
+# every bit of wander is a way to explain sideways drift without heading, and
+# heading is what trains the bias
 DEFAULTS = {
-    "gyro_bias_sigma": 0.005,
-    "gyro_bias_time": 120.0,
+    "gyro_bias_sigma": 0.002,
+    "gyro_bias_time": 300.0,
     "slip_sigma": 0.05,
     "slip_time": 120.0,
-    "wander": 1e-4,
+    "wander": 3e-6,
     "initial_sigma": [0.05, 0.05, 0.05],
     # s of nothing but gated fixes before the filter takes the fixes' word
     # over its own: a track the gate trusts too much would otherwise turn
@@ -201,10 +204,8 @@ class Filter:
         self.at = None
         self.twist = np.zeros(3)
         self.twist_cov = np.zeros((3, 3))
+        self.waiting = []
 
-    # each twist is the mean over the period it closes, so it moves the state
-    # up to its own stamp. A fix between twists is met by carrying the last
-    # twist forward to it
     def advance(self, to):
         if self.at is not None:
             dt = min(to - self.at, MAX_STEP)
@@ -214,13 +215,27 @@ class Filter:
 
         self.at = to if self.at is None else max(self.at, to)
 
+    # a fix waits for the twist whose period it falls in. Each twist is the
+    # mean over the period it closes, so only once it has arrived is the
+    # motion up to the fix known; carrying the last twist forward to it
+    # instead turns every start and stop of a turn into a heading kick of
+    # (change in rate) * (time into the period), which the filter then reads
+    # as gyro bias
+    def on_fix(self, t, position, position_cov):
+        self.waiting.append((t, position, np.asarray(position_cov)))
+
+    # one outcome per fix it fused: "fused", "gated", or "relocked"
     def on_twist(self, t, twist, twist_cov):
         self.twist = np.asarray(twist, dtype=float)
         self.twist_cov = np.asarray(twist_cov, dtype=float)
+        due = sorted((w for w in self.waiting if w[0] <= t), key=lambda w: w[0])
+        self.waiting = [w for w in self.waiting if w[0] > t]
+        outcomes = [self.fuse(*w) for w in due]
         self.advance(t)
 
-    # "fused", "gated", or "relocked"
-    def on_fix(self, t, position, position_cov):
+        return outcomes
+
+    def fuse(self, t, position, position_cov):
         self.advance(t)
         result = update(self.state, self.cov, position, position_cov)
 
@@ -270,11 +285,17 @@ class GlobalEkf(Node):
     def on_twist(self, msg):
         t = msg.twist.twist
         c = msg.twist.covariance
-        self.filter.on_twist(seconds(msg.header.stamp),
-                             (t.linear.x, t.linear.y, t.angular.z),
-                             [[c[0], c[1], c[5]], [c[6], c[7], c[11]],
-                              [c[30], c[31], c[35]]])
+        outcomes = self.filter.on_twist(seconds(msg.header.stamp),
+                                        (t.linear.x, t.linear.y, t.angular.z),
+                                        [[c[0], c[1], c[5]], [c[6], c[7], c[11]],
+                                         [c[30], c[31], c[35]]])
         self.publish(msg.header.stamp)
+
+        if "relocked" in outcomes:
+            self.get_logger().warn(f"relocked on a fix after {self.filter.relock:.0f} s "
+                                   "of gated ones")
+        elif "gated" in outcomes:
+            self.get_logger().info("gated a fix", throttle_duration_sec=1.0)
 
     def on_fix(self, msg):
         if msg.header.frame_id != self.map_frame:
@@ -284,15 +305,8 @@ class GlobalEkf(Node):
 
         p = msg.pose.pose.position
         c = msg.pose.covariance
-        outcome = self.filter.on_fix(seconds(msg.header.stamp), (p.x, p.y),
-                                     np.array([[c[0], c[1]], [c[6], c[7]]]))
-
-        if outcome == "gated":
-            self.get_logger().info(f"gated fix ({p.x:.2f}, {p.y:.2f})",
-                                   throttle_duration_sec=1.0)
-        elif outcome == "relocked":
-            self.get_logger().warn(f"relocked on ({p.x:.2f}, {p.y:.2f}) after "
-                                   f"{self.filter.relock:.0f} s of gated fixes")
+        self.filter.on_fix(seconds(msg.header.stamp), (p.x, p.y),
+                           np.array([[c[0], c[1]], [c[6], c[7]]]))
 
     def publish(self, stamp):
         x, y, theta, bias, slip = self.filter.state

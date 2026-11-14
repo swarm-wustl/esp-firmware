@@ -261,7 +261,11 @@ constant the sim needs belongs there, not restated in `sim/`.
   noise could only widen the covariance by root t. Slip is one number, a
   scale on forward speed, because heading comes from the gyro, which turns
   with the robot whatever its wheels do. `predict` and `update` are the pure
-  part. Fixes past a chi-square gate are turned away, and after
+  part. A fix waits for the twist whose period it falls in and is fused in
+  time order inside it: each twist is the mean over the period it closes, and
+  carrying the previous one forward to a fix instead kicks the heading at every
+  start and stop of a turn, which the filter took for gyro bias. Fixes past a
+  chi-square gate are turned away, and after
   `relock_after` seconds of nothing else the filter takes the next one whole.
   The sim publishes the true values on `sim/gyro_bias` and `sim/slip` to set
   against `global_ekf/gyro_bias` and `global_ekf/slip`
