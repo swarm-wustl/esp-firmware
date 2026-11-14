@@ -1,6 +1,7 @@
 #include <chrono>
 #include <cmath>
 #include <memory>
+#include <numbers>
 #include <optional>
 #include <random>
 #include <string>
@@ -81,8 +82,10 @@ public:
         odom_frame_(frame(Robot::ODOM_FRAME)),
         base_frame_(frame(Robot::BASE_FRAME)),
         truth_frame_(frame("truth")) {
-    robot_bias_ = gauss(range_rng_, declare_parameter("robot_bias", 0.03));
-    anchor_bias_ = declare_anchor_bias();
+    const double pattern = declare_parameter("antenna_pattern", 0.0);
+    radio_ = {.bias = gauss(range_rng_, declare_parameter("robot_bias", 0.03)),
+              .antenna = {pattern, phase(range_rng_)}};
+    hidden_ = declare_anchors(pattern);
 
     cmd_vel_ = create_subscription<Twist>(
         Robot::CMD_VEL_TOPIC, rclcpp::SensorDataQoS(),
@@ -151,16 +154,35 @@ private:
     return std::mt19937{seq};
   }
 
-  std::unordered_map<std::string, double> declare_anchor_bias() {
+  // what an anchor is that its TF frame doesn't say: the frame is where it
+  // was surveyed, and the survey is off by a few centimetres
+  struct Hidden {
+    double dx;
+    double dy;
+    World::Radio radio;
+  };
+
+  // the bias is drawn first, so a seed keeps the anchor biases it had before
+  // the rest was modelled
+  std::unordered_map<std::string, Hidden> declare_anchors(double pattern) {
     const double sigma = declare_parameter("anchor_bias", 0.03);
-    std::unordered_map<std::string, double> out;
+    const double survey = declare_parameter("anchor_survey", 0.0);
+    std::unordered_map<std::string, Hidden> out;
 
     for (const auto &anchor : anchors_) {
       auto gen = stream(anchor);
-      out[anchor] = gauss(gen, sigma);
+      const double bias = gauss(gen, sigma);
+      const double dx = gauss(gen, survey);
+      const double dy = gauss(gen, survey);
+      out[anchor] = {dx, dy, {bias, {pattern, phase(gen)}}};
     }
 
     return out;
+  }
+
+  static double phase(std::mt19937 &gen) {
+    return std::uniform_real_distribution<double>{-std::numbers::pi,
+                                                  std::numbers::pi}(gen);
   }
 
   World::SlipModel declare_slip() {
@@ -252,8 +274,8 @@ private:
       return;
     }
 
-    const double distance =
-        std::hypot(world_.pose.x - at.x, world_.pose.y - at.y);
+    const auto &hidden = hidden_.at(anchor);
+    const World::Anchor truth{at.x + hidden.dx, at.y + hidden.dy, hidden.radio};
 
     // each link is ranged once a round, so that is the chain's step
     const double round =
@@ -263,7 +285,8 @@ private:
                            std::exponential_distribution<double>{1.0}(range_rng_));
 
     const auto measured =
-        World::range(distance, robot_bias_ + anchor_bias_.at(anchor), path,
+        World::range(World::distance(world_.pose, truth),
+                     World::link_delay(world_.pose, radio_, truth), path,
                      range_errors_,
                      {.noise = gauss(range_rng_, 1.0), .dropout = uniform(range_rng_)});
 
@@ -334,8 +357,8 @@ private:
   World::RangeErrors range_errors_;
   World::Blockage blockage_;
   std::unordered_map<std::string, World::Path> paths_;
-  double robot_bias_ = 0.0;
-  std::unordered_map<std::string, double> anchor_bias_;
+  World::Radio radio_{};
+  std::unordered_map<std::string, Hidden> hidden_;
 
   World::State world_;
   Base::State<Robot::STYLE> base_{};

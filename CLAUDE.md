@@ -360,6 +360,14 @@ fit better. Three anchors that disagree give no fix at all.
 
 The sim's ranges carry what the DW1000 gets wrong (`World::range`): Gaussian
 noise, an antenna-delay bias per anchor (shared by every robot) and per robot, non-line-of-sight blockage, and dropped exchanges.
+The delay also follows each antenna's pattern (`World::link_delay`): one
+cosine harmonic of the angle the signal arrives from, at a phase of its own,
+in map for an anchor and in the robot's frame for the robot, so turning on
+the spot moves the range. And an anchor's TF frame is where it was surveyed,
+not where it is: the sim ranges from the frame plus a seeded offset
+(`anchor_survey`) the filters never see. Both are there so the filters'
+range model -- one constant per link -- is wrong the way it would be on the
+bench, rather than exactly right.
 Blockage is a two-state Markov chain per link (`World::obstruct`), so a blocked
 anchor reads long for seconds at a time with one held excess, as when someone
 stands in the way, rather than one range in twenty at random. All of it is set in `sim.sh`, which also hands `uwb_fix` the

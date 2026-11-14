@@ -101,11 +101,20 @@ ANCHORS=(anchor_0:-1.5,-1.5 anchor_1:2.5,-1.5 anchor_2:2.5,2.5 anchor_3:-1.5,2.5
 RANGE_NOISE=0.05
 ANCHOR_BIAS=0.03
 ROBOT_BIAS=0.03
+# antenna delay also shifts with the angle a signal arrives from, by about
+# this much either way at each end, and anchors are only where the tape
+# measure said, to about this per axis
+ANTENNA_PATTERN=0.03
+ANCHOR_SURVEY=0.03
 NLOS_FRACTION=0.05
 NLOS_DURATION=2.0
 NLOS_EXCESS=0.3
 RANGE_DROPOUT=0.05
-RANGE_BIAS="$(awk "BEGIN{printf \"%.4f\", sqrt($ANCHOR_BIAS^2 + $ROBOT_BIAS^2)}")"
+# everything systematic a range carries, as one sigma: the two constant
+# delays, the survey error along the line of sight, and a cosine pattern of
+# amplitude A at each end, whose variance is A^2/2
+RANGE_BIAS="$(awk "BEGIN{printf \"%.4f\", sqrt($ANCHOR_BIAS^2 + $ROBOT_BIAS^2 + \
+  $ANCHOR_SURVEY^2 + $ANTENNA_PATTERN^2)}")"
 
 anchors=""
 anchor_names=""
@@ -130,6 +139,7 @@ for ns in "${namespaces[@]}"; do
     -p start:=[0.0,$y,0.0] -p anchors:=[$anchor_names] \
     -p range_noise:=$RANGE_NOISE -p anchor_bias:=$ANCHOR_BIAS \
     -p robot_bias:=$ROBOT_BIAS -p seed:=$SIM_SEED \
+    -p antenna_pattern:=$ANTENNA_PATTERN -p anchor_survey:=$ANCHOR_SURVEY \
     -p nlos_fraction:=$NLOS_FRACTION -p nlos_duration:=$NLOS_DURATION \
     -p nlos_excess:=$NLOS_EXCESS \
     -p range_dropout:=$RANGE_DROPOUT & "

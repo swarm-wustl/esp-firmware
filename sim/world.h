@@ -129,8 +129,52 @@ inline Path obstruct(const Path &path, const Blockage &blockage, double dt,
   return {true, path.blocked ? path.excess : blockage.excess * exponential};
 }
 
-// what a DW1000 range gets wrong on top of the antenna-delay bias, which the
-// caller sums from the two ends of the link, and the path's blockage
+// an antenna's delay is not one number: it shifts with the angle the signal
+// arrives from. This is the first harmonic of that pattern, around the
+// constant part calibration leaves, at a phase each antenna has its own of
+struct Antenna {
+  double amplitude; // m
+  double phase;     // rad
+};
+
+constexpr double delay(const Antenna &antenna, double angle) {
+  return antenna.amplitude * std::cos(angle - antenna.phase);
+}
+
+// one end of a link: the constant part of its antenna delay and its pattern
+struct Radio {
+  double bias; // m
+  Antenna antenna;
+};
+
+// an anchor where it really is, which is not quite where it was surveyed
+struct Anchor {
+  double x;
+  double y;
+  Radio radio;
+};
+
+inline double distance(const Pose &robot, const Anchor &anchor) {
+  return std::hypot(robot.x - anchor.x, robot.y - anchor.y);
+}
+
+// the delay both ends add to one range. The anchor sees the robot at a
+// bearing fixed in map; the robot's antenna turns with it, so the angle it
+// hears the anchor from is in its own frame, and turning on the spot moves
+// the range
+inline double link_delay(const Pose &robot, const Radio &radio,
+                         const Anchor &anchor) {
+  const double toward_robot =
+      std::atan2(robot.y - anchor.y, robot.x - anchor.x);
+  const double toward_anchor = toward_robot + std::numbers::pi;
+
+  return radio.bias + anchor.radio.bias +
+         delay(radio.antenna, toward_anchor - robot.theta) +
+         delay(anchor.radio.antenna, toward_robot);
+}
+
+// what a DW1000 range gets wrong on top of the antenna delay, which
+// link_delay sums from the two ends, and the path's blockage
 struct RangeErrors {
   double noise;   // m, sigma
   double dropout; // per range
