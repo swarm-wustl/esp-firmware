@@ -55,11 +55,12 @@ void respond_with(Transcript &transcript, const std::array<std::byte, 14> &b) {
   transcript.read_response.assign(b.begin(), b.end());
 }
 
-void check_write(const std::vector<std::byte> &write, MPU6050::Reg reg,
+// addresses as the register map prints them, not read back from Map, so a
+// wrong number there fails here
+void check_write(const std::vector<std::byte> &write, uint8_t reg,
                  uint8_t value) {
   TEST_ASSERT_EQUAL_UINT32(2, write.size());
-  TEST_ASSERT_EQUAL_HEX8(static_cast<uint8_t>(reg),
-                         static_cast<uint8_t>(write[0]));
+  TEST_ASSERT_EQUAL_HEX8(reg, static_cast<uint8_t>(write[0]));
   TEST_ASSERT_EQUAL_HEX8(value, static_cast<uint8_t>(write[1]));
 }
 } // namespace
@@ -75,13 +76,12 @@ TEST_CASE("configure: the ranges and filter reach their registers",
 
   // the reset value keeps SLEEP set beside the reset bit, which a reset
   // sets again anyway
-  check_write(writes[0], MPU6050::Reg::PWR_MGMT_1, 0xC0);
-  check_write(writes[1], MPU6050::Reg::PWR_MGMT_1, 0x01);
-  check_write(writes[2], MPU6050::Reg::CONFIG,
-              static_cast<uint8_t>(MPU6050::Dlpf::Hz44));
-  check_write(writes[3], MPU6050::Reg::SMPLRT_DIV, 9);
-  check_write(writes[4], MPU6050::Reg::GYRO_CONFIG, 0x08);
-  check_write(writes[5], MPU6050::Reg::ACCEL_CONFIG, 0x08);
+  check_write(writes[0], 0x6B, 0xC0);
+  check_write(writes[1], 0x6B, 0x01);
+  check_write(writes[2], 0x1A, static_cast<uint8_t>(MPU6050::Dlpf::Hz44));
+  check_write(writes[3], 0x19, 9);
+  check_write(writes[4], 0x1B, 0x08);
+  check_write(writes[5], 0x1C, 0x08);
 }
 
 TEST_CASE("configure: a failed write stops the sequence", "[mpu6050]") {
@@ -113,7 +113,7 @@ TEST_CASE("read_raw: one burst becomes big-endian accel, temp and gyro",
   TEST_ASSERT_EQUAL_INT16(0, reading->gyro.z);
 
   TEST_ASSERT_EQUAL_UINT32(1, fixture.transcript.reads);
-  TEST_ASSERT_EQUAL_HEX8(static_cast<uint8_t>(MPU6050::Reg::ACCEL_XOUT_H),
+  TEST_ASSERT_EQUAL_HEX8(0x3B,
                          static_cast<uint8_t>(fixture.transcript.writes[0][0]));
 }
 

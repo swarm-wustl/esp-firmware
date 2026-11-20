@@ -21,15 +21,9 @@
 // https://invensense.tdk.com/wp-content/uploads/2015/02/MPU-6000-Register-Map1.pdf
 // https://invensense.tdk.com/wp-content/uploads/2015/02/MPU-6000-Datasheet1.pdf
 namespace MPU6050 {
-enum class Reg : uint8_t {
-  SMPLRT_DIV = 0x19,
-  CONFIG = 0x1A,
-  GYRO_CONFIG = 0x1B,
-  ACCEL_CONFIG = 0x1C,
-  ACCEL_XOUT_H = 0x3B,
-  PWR_MGMT_1 = 0x6B,
-  WHO_AM_I = 0x75,
-};
+// a register number on this part. It names no values -- each register states
+// its own beside its layout -- so it only marks a register as the MPU6050's
+enum class Address : uint8_t {};
 
 // PWR_MGMT_1 CLKSEL=1: the gyro X PLL, which the register map recommends over
 // the internal 8 MHz oscillator for stability
@@ -83,32 +77,32 @@ using WHO_AM_I = Registers::field<"WHO_AM_I", uint8_t, 7, 0>;
 namespace Map {
 using Registers::Access;
 
-using SMPLRT_DIV = Registers::reg<Reg::SMPLRT_DIV, {}, MPU6050::SMPLRT_DIV>;
-using CONFIG = Registers::reg<Reg::CONFIG, {}, DLPF_CFG>;
-using GYRO_CONFIG = Registers::reg<Reg::GYRO_CONFIG, {}, FS_SEL>;
-using ACCEL_CONFIG = Registers::reg<Reg::ACCEL_CONFIG, {}, AFS_SEL>;
+using SMPLRT_DIV = Registers::reg<Address{0x19}, {}, MPU6050::SMPLRT_DIV>;
+using CONFIG = Registers::reg<Address{0x1A}, {}, DLPF_CFG>;
+using GYRO_CONFIG = Registers::reg<Address{0x1B}, {}, FS_SEL>;
+using ACCEL_CONFIG = Registers::reg<Address{0x1C}, {}, AFS_SEL>;
 // accel, temperature and gyro sit in one contiguous big-endian block, so a
 // sample is a single 14-octet burst rather than six reads
 using ACCEL_XOUT_H = Registers::reg<
-    Reg::ACCEL_XOUT_H, {.bytes = 14, .access = Access::ReadOnly}>;
+    Address{0x3B}, {.bytes = 14, .access = Access::ReadOnly}>;
 // the part powers up asleep
-using PWR_MGMT_1 = Registers::reg<Reg::PWR_MGMT_1, {.reset = 0x40},
+using PWR_MGMT_1 = Registers::reg<Address{0x6B}, {.reset = 0x40},
                                   DEVICE_RESET, SLEEP, CLKSEL>;
-using WHO_AM_I = Registers::reg<Reg::WHO_AM_I,
+using WHO_AM_I = Registers::reg<Address{0x75},
                                 {.access = Access::ReadOnly, .reset = 0x68},
                                 MPU6050::WHO_AM_I>;
 } // namespace Map
 
 // AD0 tied low or high. Nothing else on the part is address-selectable, so a
 // second MPU6050 on the same bus is the only reason to pass High
-enum class Address : uint8_t { Low = 0x68, High = 0x69 };
+enum class I2cAddress : uint8_t { Low = 0x68, High = 0x69 };
 
 // WHO_AM_I reports the 7-bit address with bit 0 cleared, so a High part reads
 // back 0x68 as well
 inline constexpr uint8_t kWhoAmI = Map::WHO_AM_I::reset;
 
 template <HAL::GenericI2CController I2C, HAL::GenericGPIOController GPIO,
-          Config Cfg, typename Bus, Address Addr = Address::Low>
+          Config Cfg, typename Bus, I2cAddress Addr = I2cAddress::Low>
 class Sensor {
 public:
   static constexpr std::array<HAL::Claim, 0> claims{};
@@ -206,7 +200,7 @@ private:
             Imu::be16(raw[6], raw[7])};
   }
 
-  template <Registers::at<Reg> R> [[nodiscard]] auto read() {
+  template <Registers::at<Address> R> [[nodiscard]] auto read() {
     const std::array tx{static_cast<std::byte>(R::address)};
     std::array<std::byte, R::bytes> rx{};
 
@@ -214,7 +208,7 @@ private:
         [rx] { return Registers::decode<R>(rx); });
   }
 
-  template <Registers::at<Reg> R, Registers::Field... Fs>
+  template <Registers::at<Address> R, Registers::Field... Fs>
     requires Registers::writable_with<R, Fs...>
   [[nodiscard]] std::expected<void, HAL::I2cError> write(Fs... fs) {
     return i2c_.write(Registers::frame<R>(

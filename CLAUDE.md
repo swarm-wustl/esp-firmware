@@ -219,8 +219,10 @@ write<Map::PWR_MGMT_1>(SLEEP{false}, CLKSEL{Clock::PllGyroX});
 - a field the register doesn't hold, a field named twice, a write to a
   read-only register, and a read-modify-write of a write-one-to-clear register
   don't compile; neither does a description whose fields overlap or overrun it
-- the address is a template parameter of the driver's own type (`MPU6050::Reg`),
-  so `Registers::at<R, Reg>` keeps another device's registers out
+- the address is a template parameter of the driver's own type -- for the
+  MPU6050 an empty `enum class Address : uint8_t {}`, written `Address{0x1B}`
+  beside the layout -- so `Registers::at<R, Address>` keeps another device's
+  registers out without a second list of register names
 - `frame<R>(header, fields...)` is header plus value, the one thing every bus
   write sends; the header -- a register number, an SPI command -- is the
   driver's
