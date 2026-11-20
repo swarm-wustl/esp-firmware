@@ -23,7 +23,7 @@ constexpr auto map(const std::array<T, N> &in, F f) {
   }(std::make_index_sequence<N>{});
 }
 
-// a device that owns a sub-device owns its claims too: an L298N driver holds a
+// a device that owns a sub-device owns its claims too: a TB6612 driver holds a
 // PWM, a DW1000 holds an SPI, and the config has to see all of it
 template <typename T, size_t... Ns>
 constexpr auto concat(const std::array<T, Ns> &...arrays) {

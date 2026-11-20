@@ -10,6 +10,10 @@
 #include "fixed_string.h"
 #include "resources.h"
 
+namespace Swarm::detail {
+struct mint;
+}
+
 namespace HAL {
 using Strings::fixed_string;
 
@@ -19,18 +23,10 @@ inline constexpr size_t kMaxLabel = 16;
 // the same type
 using Label = fixed_string<kMaxLabel>;
 
-template <fixed_string S> constexpr auto operator""_p() { return S; }
-
-// the only way to name a pin. Its constructor is private to PinSet, so every
-// Pin in the program came out of a declaration that also published the claim
-//
-// TODO: that only holds by convention. operator[] works on any PinSet, so a
-// free-standing HAL::pins(...) that no declared peripheral publishes still
-// mints Pins whose claims never reach a system's conflict check. Close it by
-// minting from the key instead: a device publishes `pins` (or `pin_rows` for a
-// table), claims_of folds them in, and Swarm::pin<"cs">(Assembly<T>) becomes
-// the only friend of operator[]. Devices that need a pin after construction
-// keep their key as a [[no_unique_address]] member
+// the only way to name a pin. Its constructor is private to PinSet, whose
+// lookup is private to Swarm's mint, which only reads the set a declaration
+// publishes as `pins` or `pin_rows` and only for the holder of its key -- so
+// every Pin in the program is one a system's conflict check has seen
 class Pin {
 public:
   constexpr int number() const { return number_; }
@@ -62,6 +58,7 @@ template <size_t N> struct PinSet {
     return out;
   }
 
+private:
   template <size_t M> consteval Pin operator[](fixed_string<M> label) const {
     for (const NamedPin &entry : entries) {
       if (entry.label.view() == label.view()) {
@@ -72,6 +69,8 @@ template <size_t N> struct PinSet {
     // an unmatched pin will trigger a compile error
     std::unreachable();
   }
+
+  friend struct Swarm::detail::mint;
 };
 
 template <std::same_as<NamedPin>... Entries>
@@ -87,19 +86,35 @@ consteval auto pins(Entries... es) {
   std::unreachable();
 }
 
-template <auto Table, fixed_string L> consteval auto pin_column() {
-  return [&]<size_t... I>(std::index_sequence<I...>) {
-    return std::array<Pin, sizeof...(I)>{Table[I].pins()[L]...};
-  }(std::make_index_sequence<Table.size()>{});
-}
+template <typename T>
+concept PublishesPins = requires {
+  { T::pins.claims() } -> ClaimList;
+};
 
-// a row of a pin table takes its pins plus whatever one channel it names -- a
-// PWM channel, a PCNT unit
-template <auto Table, typename F> consteval auto row_claims(F channel) {
-  return [&]<size_t... I>(std::index_sequence<I...>) {
-    return Arrays::concat(Arrays::concat(Table[I].pins().claims(),
-                                         std::array{channel(Table[I])})...);
-  }(std::make_index_sequence<Table.size()>{});
+// a table of rows, each with its own pins() -- a motor's in_a/in_b/enable, an
+// encoder's a/b
+template <typename T>
+concept PublishesPinRows = requires {
+  { T::pin_rows[0].pins().claims() } -> ClaimList;
+};
+
+// anything the system config is handed must say what hardware it takes, even
+// if that is nothing
+template <typename T>
+concept Claiming =
+    ClaimsDeclared<T> || PublishesPins<T> || PublishesPinRows<T>;
+
+template <typename T> consteval auto pin_claims() {
+  if constexpr (PublishesPins<T>) {
+    return T::pins.claims();
+  } else if constexpr (PublishesPinRows<T>) {
+    return []<size_t... I>(std::index_sequence<I...>) {
+      return Arrays::concat(std::array<Claim, 0>{},
+                            T::pin_rows[I].pins().claims()...);
+    }(std::make_index_sequence<T::pin_rows.size()>{});
+  } else {
+    return std::array<Claim, 0>{};
+  }
 }
 } // namespace HAL
 

@@ -237,8 +237,6 @@ constexpr std::string_view to_string_view(PRF prf) noexcept {
   return "UNKNOWN PRF"sv;
 }
 
-using HAL::operator""_p;
-
 template <HAL::GenericSPIController SPI, HAL::GenericGPIOController GPIO,
           auto Pins, typename Bus>
 class DWM {
@@ -246,13 +244,13 @@ class DWM {
                 "DWM1000 requires little-endian architecture");
 
 public:
-  static constexpr auto claims = Pins.claims();
+  static constexpr auto pins = Pins;
 
   using owns = Swarm::owns<SPI, GPIO>;
   using needs = Swarm::needs<Bus>;
 
   DWM(Swarm::Assembly<DWM> key, Bus &bus)
-      : spi_{Swarm::make<SPI>(key, bus, Pins["cs"_p])},
+      : key_{key}, spi_{Swarm::make<SPI>(key, bus, Swarm::pin<"cs">(key))},
         gpio_{Swarm::make<GPIO>(key)} {
     hard_reset();
   }
@@ -324,7 +322,7 @@ public:
   }
 
   template <HAL::InterruptSignal Signal> void raise_on_irq(Signal &signal) {
-    gpio_.raise_on_rising_edge(Pins["irq"_p], signal);
+    gpio_.raise_on_rising_edge(Swarm::pin<"irq">(key_), signal);
   }
 
   std::expected<uint32_t, HAL::SpiError> get_device_id() {
@@ -645,7 +643,7 @@ private:
   }
 
   void hard_reset() {
-    constexpr HAL::Pin reset = Pins["reset"_p];
+    const HAL::Pin reset = Swarm::pin<"reset">(key_);
 
     gpio_.set_direction(reset, HAL::PinMode::Output);
     gpio_.set_level(reset, HAL::Voltage::LOW);
@@ -689,6 +687,7 @@ private:
     });
   }
 
+  [[no_unique_address]] Swarm::Assembly<DWM> key_;
   SPI spi_;
   GPIO gpio_;
 };

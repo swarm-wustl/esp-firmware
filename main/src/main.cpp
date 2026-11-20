@@ -3,7 +3,7 @@
 #include "dwm.h"
 #include "encoder_bank.h"
 #include "esp32.h"
-#include "l298n.h"
+#include "tb6612.h"
 #include "mpu6050.h"
 #include "odometry.h"
 #include "robot.h"
@@ -71,14 +71,13 @@ using PWM = ESP32::PWM;
 // M3 and M4 are the only motors with encoders, so they are the differential
 // pair; M1/M2 are the UMC below. LEFT/RIGHT is a guess at which connector is
 // which side -- swap the two names if the robot spins on a forward twist
-// TODO: no longer L298N, fix to proper name. but implementation is identical
 constexpr auto MOTOR_PINS =
-    L298N::motors(L298N::MotorPins{Motor::Name::LEFT, GPIO_NUM_26, GPIO_NUM_27,
+    TB6612::motors(TB6612::MotorPins{Motor::Name::LEFT, GPIO_NUM_26, GPIO_NUM_27,
                                    GPIO_NUM_19, 0},
-                  L298N::MotorPins{Motor::Name::RIGHT, GPIO_NUM_32, GPIO_NUM_33,
+                  TB6612::MotorPins{Motor::Name::RIGHT, GPIO_NUM_32, GPIO_NUM_33,
                                    GPIO_NUM_25, 1});
 
-using MotorDriver = L298N::MotorDriver<GPIO, PWM, MOTOR_PINS>;
+using MotorDriver = TB6612::MotorDriver<GPIO, PWM, MOTOR_PINS>;
 
 // the universal module connector: two high-torque motors raising and lowering
 // the face that modules bolt to. No encoder and no geometry -- the pair always
@@ -88,12 +87,12 @@ using MotorDriver = L298N::MotorDriver<GPIO, PWM, MOTOR_PINS>;
 // (BIN1/BIN2/PWMB), both through header J2. Swap a row's in_a/in_b if its
 // motor raises the face on a negative effort
 constexpr auto UMC_PINS =
-    L298N::motors(L298N::MotorPins{Motor::Name::FRONT_UMC_A, GPIO_NUM_16,
+    TB6612::motors(TB6612::MotorPins{Motor::Name::FRONT_UMC_A, GPIO_NUM_16,
                                    GPIO_NUM_17, GPIO_NUM_4, 2},
-                  L298N::MotorPins{Motor::Name::FRONT_UMC_B, GPIO_NUM_22,
+                  TB6612::MotorPins{Motor::Name::FRONT_UMC_B, GPIO_NUM_22,
                                    GPIO_NUM_23, GPIO_NUM_5, 3});
 
-using UmcDriver = L298N::MotorDriver<GPIO, PWM, UMC_PINS>;
+using UmcDriver = TB6612::MotorDriver<GPIO, PWM, UMC_PINS>;
 
 // one PCNT unit per wheel. 34/35/36/39 are input-only and have no internal
 // pull-up, so an open-collector hall output needs an external one

@@ -2,6 +2,7 @@
 #include "differential_drive.h"
 #include "drive.h"
 #include "resources.h"
+#include "system.h"
 #include "unity.h"
 
 namespace {
@@ -78,6 +79,47 @@ struct AlsoSharesTimer {
   using owns = Swarm::owns<SharedLeaf>;
 };
 
+constexpr auto kLoosePins = HAL::pins(HAL::NamedPin{"cs", 15});
+
+template <auto Set>
+concept indexable = requires { Set[Strings::fixed_string{"cs"}]; };
+
+struct PinsOnly {
+  static constexpr auto pins = HAL::pins(HAL::NamedPin{"cs", 15},
+                                         HAL::NamedPin{"irq", 13});
+
+  explicit PinsOnly(Swarm::Assembly<PinsOnly> key)
+      : cs{Swarm::pin<"cs">(key)} {}
+
+  HAL::Pin cs;
+};
+
+struct AlsoOnFifteen {
+  static constexpr std::array claims{Claim{Resource::Gpio, 15, Use::Exclusive}};
+};
+
+struct PinRow {
+  int a;
+  int b;
+
+  consteval auto pins() const {
+    return HAL::pins(HAL::NamedPin{"a", a}, HAL::NamedPin{"b", b});
+  }
+};
+
+struct RowsAndChannels {
+  static constexpr std::array pin_rows{PinRow{1, 2}, PinRow{3, 4}};
+  static constexpr std::array claims{Claim{Resource::PcntUnit, 0, Use::Exclusive}};
+
+  explicit RowsAndChannels(Swarm::Assembly<RowsAndChannels> key)
+      : b{Swarm::pin_column<"b">(key)} {}
+
+  std::array<HAL::Pin, 2> b;
+};
+
+template <typename T>
+concept mints_cs = requires(Swarm::Assembly<T> key) { Swarm::pin<"cs">(key); };
+
 template <typename Sub, typename Owner>
 concept makes = requires(Swarm::Assembly<Owner> key) { Swarm::make<Sub>(key); };
 
@@ -119,6 +161,27 @@ TEST_CASE("keys: an owner builds only what it lists", "[resources]") {
   static_assert(!std::default_initializable<Swarm::Assembly<Leaf>>);
   static_assert(!std::constructible_from<Leaf, Swarm::Assembly<Parent>>);
   TEST_ASSERT_TRUE(true);
+}
+
+TEST_CASE("pins: only a published set mints, and its pins are claimed",
+          "[resources]") {
+  static_assert(!indexable<kLoosePins>);
+  static_assert(HAL::Claiming<PinsOnly>);
+  static_assert(HAL::Claiming<RowsAndChannels>);
+  static_assert(mints_cs<PinsOnly>);
+  static_assert(!mints_cs<RowsAndChannels>);
+  static_assert(Swarm::claims_of<PinsOnly>().size() == 2);
+  static_assert(Swarm::claims_of<RowsAndChannels>().size() == 5);
+  static_assert(!Swarm::no_resource_conflicts<PinsOnly, AlsoOnFifteen>);
+  TEST_ASSERT_TRUE(true);
+}
+
+TEST_CASE("pins: a key resolves the published numbers", "[resources]") {
+  auto &parts = Swarm::system<PinsOnly, RowsAndChannels>::take();
+
+  TEST_ASSERT_EQUAL_INT(15, parts.get<PinsOnly>().cs.number());
+  TEST_ASSERT_EQUAL_INT(2, parts.get<RowsAndChannels>().b[0].number());
+  TEST_ASSERT_EQUAL_INT(4, parts.get<RowsAndChannels>().b[1].number());
 }
 
 TEST_CASE("claims: distinct resources never conflict", "[resources]") {

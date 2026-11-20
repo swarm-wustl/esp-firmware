@@ -23,8 +23,6 @@
 #include "swarm_hal.h"
 
 namespace ESP32 {
-using HAL::operator""_p;
-
 // the bus owns the peripheral: spi_bus_initialize/free happen once here, and
 // devices attach to it. SPI2_HOST is Exclusive -- a second initialize on the
 // same host fails at runtime and only gets logged
@@ -112,14 +110,14 @@ template <auto Pins, int Port = 0> class I2cBus {
 public:
   static constexpr int port = Port;
 
-  static constexpr auto claims =
-      Arrays::concat(Pins.claims(),
-                     std::array{HAL::Claim{HAL::Resource::I2cPort, Port,
-                                           HAL::Use::Exclusive}});
+  static constexpr auto pins = Pins;
 
-  explicit I2cBus(Swarm::Assembly<I2cBus>)
-      : handle_{detail::i2c_open_bus(Port, Pins["sda"_p].number(),
-                                     Pins["scl"_p].number())} {}
+  static constexpr std::array claims{
+      HAL::Claim{HAL::Resource::I2cPort, Port, HAL::Use::Exclusive}};
+
+  explicit I2cBus(Swarm::Assembly<I2cBus> key)
+      : handle_{detail::i2c_open_bus(Port, Swarm::pin<"sda">(key).number(),
+                                     Swarm::pin<"scl">(key).number())} {}
 
   ~I2cBus() { detail::i2c_close_bus(handle_); }
 

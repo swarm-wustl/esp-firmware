@@ -4,8 +4,6 @@
 #include "unity.h"
 
 namespace {
-using HAL::operator""_p;
-
 constexpr auto DWM_PINS = HAL::pins(HAL::NamedPin{"cs", GPIO_NUM_4},
                                     HAL::NamedPin{"reset", GPIO_NUM_27},
                                     HAL::NamedPin{"irq", GPIO_NUM_34});
@@ -14,15 +12,15 @@ constexpr auto DWM_PINS = HAL::pins(HAL::NamedPin{"cs", GPIO_NUM_4},
 // and selecting it, which needs an Assembly -- so it is a declared peripheral
 // like anything else, and the one that publishes DWM_PINS
 struct RegisterBus {
-  static constexpr auto claims = DWM_PINS.claims();
+  static constexpr auto pins = DWM_PINS;
 
   using owns = Swarm::owns<ESP32::SPI, ESP32::GPIO>;
   using needs = Swarm::needs<ESP32::SpiBus>;
 
   RegisterBus(Swarm::Assembly<RegisterBus> key, ESP32::SpiBus &bus)
-      : spi{Swarm::make<ESP32::SPI>(key, bus, DWM_PINS["cs"_p])} {
+      : spi{Swarm::make<ESP32::SPI>(key, bus, Swarm::pin<"cs">(key))} {
     auto gpio = Swarm::make<ESP32::GPIO>(key);
-    constexpr HAL::Pin reset = DWM_PINS["reset"_p];
+    const HAL::Pin reset = Swarm::pin<"reset">(key);
 
     gpio.set_direction(reset, HAL::PinMode::Output);
     gpio.set_level(reset, HAL::Voltage::LOW);

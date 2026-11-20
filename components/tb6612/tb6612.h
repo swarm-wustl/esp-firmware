@@ -1,5 +1,5 @@
-#ifndef L298N_H
-#define L298N_H
+#ifndef TB6612_H
+#define TB6612_H
 
 #include <algorithm>
 #include <array>
@@ -12,7 +12,7 @@
 #include "motor.h"
 #include "swarm_hal.h"
 
-namespace L298N {
+namespace TB6612 {
 struct MotorPins {
   Motor::Name name;
   int in_a;
@@ -48,18 +48,21 @@ public:
   // the LEDC timer belongs to the PWM this driver owns
   using owns = Swarm::owns<GPIO, PWM>;
 
+  static constexpr auto pin_rows = Rows;
+
   static constexpr auto claims =
-      HAL::row_claims<Rows>([](const MotorPins &motor) {
+      Arrays::map(Rows, [](const MotorPins &motor) {
         return HAL::Claim{HAL::Resource::PwmChannel, motor.pwm_channel,
                           HAL::Use::Exclusive};
       });
 
   explicit MotorDriver(Swarm::Assembly<MotorDriver> key)
-      : gpio_{Swarm::make<GPIO>(key)}, pwm_{Swarm::make<PWM>(key)} {
+      : key_{key}, gpio_{Swarm::make<GPIO>(key)}, pwm_{Swarm::make<PWM>(key)} {
     for (size_t i = 0; i < Rows.size(); ++i) {
-      gpio_.set_direction(kInA[i], HAL::PinMode::Output);
-      gpio_.set_direction(kInB[i], HAL::PinMode::Output);
-      pwm_.configure_channel(Rows[i].pwm_channel, kEnable[i]);
+      gpio_.set_direction(in_a()[i], HAL::PinMode::Output);
+      gpio_.set_direction(in_b()[i], HAL::PinMode::Output);
+      pwm_.configure_channel(Rows[i].pwm_channel,
+                             Swarm::pin_column<"enable">(key_)[i]);
     }
   }
 
@@ -86,10 +89,10 @@ public:
 private:
   // resolved once, at compile time: a label the declaration does not carry is
   // a build error, and nothing here can name a pin that was never claimed
-  static constexpr auto kInA = HAL::pin_column<Rows, "in_a">();
-  static constexpr auto kInB = HAL::pin_column<Rows, "in_b">();
-  static constexpr auto kEnable = HAL::pin_column<Rows, "enable">();
+  const auto &in_a() const { return Swarm::pin_column<"in_a">(key_); }
+  const auto &in_b() const { return Swarm::pin_column<"in_b">(key_); }
 
+  [[no_unique_address]] Swarm::Assembly<MotorDriver> key_;
   GPIO gpio_;
   PWM pwm_;
 
@@ -115,12 +118,12 @@ private:
       break;
     }
 
-    gpio_.set_level(kInA[slot], level_a);
-    gpio_.set_level(kInB[slot], level_b);
+    gpio_.set_level(in_a()[slot], level_a);
+    gpio_.set_level(in_b()[slot], level_b);
     pwm_.set_duty_ratio(Rows[slot].pwm_channel,
                         std::clamp(cmd.pwm_ratio, 0.0, 1.0));
   }
 };
-} // namespace L298N
+} // namespace TB6612
 
 #endif

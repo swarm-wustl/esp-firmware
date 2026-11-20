@@ -43,7 +43,8 @@ using TestSystem = Swarm::system<TestBank>;
 
 static_assert(Drive::covered_by<TestBank::motors, Drive::Style::DIFFERENTIAL>);
 static_assert(TestBank::spec.counts_per_rev() == 5880);
-static_assert(HAL::no_conflicts(TestBank::claims));
+static_assert(Swarm::claims_of<TestBank>().size() == 6);
+static_assert(Swarm::no_resource_conflicts<TestBank>);
 
 TestBank &bank() {
   static TestBank &instance = TestSystem::take().get<TestBank>();

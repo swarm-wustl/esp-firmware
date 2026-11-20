@@ -55,14 +55,19 @@ public:
 
   using owns = Swarm::owns<Counter>;
 
-  static constexpr auto claims = HAL::row_claims<Table>([](const Row &row) {
+  static constexpr auto pin_rows = Table;
+
+  static constexpr auto claims = Arrays::map(Table, [](const Row &row) {
     return HAL::Claim{HAL::Resource::PcntUnit, row.unit, HAL::Use::Exclusive};
   });
 
   explicit Bank(Swarm::Assembly<Bank> key)
       : counter_{Swarm::make<Counter>(key)} {
+    const auto &channel_a = Swarm::pin_column<"a">(key);
+    const auto &channel_b = Swarm::pin_column<"b">(key);
+
     for (size_t i = 0; i < Table.size(); ++i) {
-      counter_.configure_unit(Table[i].unit, kChannelA[i], kChannelB[i]);
+      counter_.configure_unit(Table[i].unit, channel_a[i], channel_b[i]);
     }
   }
 
@@ -101,9 +106,6 @@ public:
   }
 
 private:
-  static constexpr auto kChannelA = HAL::pin_column<Table, "a">();
-  static constexpr auto kChannelB = HAL::pin_column<Table, "b">();
-
   Counter counter_;
   std::array<Encoder::Tracker, Table.size()> trackers_{};
 };

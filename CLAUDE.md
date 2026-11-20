@@ -78,9 +78,9 @@ from them:
   `requires(... and bus_for<Bus, Registers>)`
 
 `components/swarm_hal/drive.h`, `components/swarm_hal/system.h` and
-`components/l298n/l298n.h` are the worked example: a drive style is one `constexpr` array of inverse-kinematic
+`components/tb6612/tb6612.h` are the worked example: a drive style is one `constexpr` array of inverse-kinematic
 coefficients, and the motor count, names, frame size, `Frame` type and
-pin-table checks all derive from it. `L298N::with_drive_style<S>(rows...)`
+pin-table checks all derive from it. `TB6612::with_drive_style<S>(rows...)`
 builds the config and refuses to produce one whose rows don't match the style.
 Adding a platform means declaring a `wheels<Style::X>()` specialisation and its
 pin rows -- no algorithm is written or specialised. `Swarm::chassis` pairs a
@@ -88,7 +88,7 @@ geometry with a driver and only exists if they fit; `HAL::Claim` lets every
 peripheral declare the pins and channels it takes, so a collision between two
 unrelated subsystems is a build error rather than a mystery on the bench. A
 device lists its sub-devices in `using owns = Swarm::owns<...>` (`DWM` its SPI
-and GPIO, `L298N::MotorDriver` its GPIO and PWM), and that one list does two
+and GPIO, `TB6612::MotorDriver` its GPIO and PWM), and that one list does two
 jobs: `Swarm::claims_of` walks it, so the config sees the whole tree from the
 types it is handed, and it is the only thing `Swarm::make<Sub>(key)` will build.
 Every key is `Swarm::Assembly<T>`, minted by a system that declared `T` or by
@@ -105,7 +105,7 @@ sign for direction, into the `Motor::Frame` a driver runs. The roster comes
 from `UmcDriver::motors`, so the pin table is the only place the motors are
 named.
 
-`Motor::Frame<N>` is what `L298N::MotorDriver::run` takes, and `Drive::Frame<S>`
+`Motor::Frame<N>` is what `TB6612::MotorDriver::run` takes, and `Drive::Frame<S>`
 is that frame sized by a style -- which is why the same driver template serves
 both the wheels and the UMC with no second algorithm. A UMC motor mounted facing
 the other way gets its `in_a`/`in_b` swapped in the pin row.

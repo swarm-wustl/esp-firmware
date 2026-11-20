@@ -50,12 +50,13 @@ consteval bool no_conflicts(const std::array<Claim, N> &claims) {
   return true;
 }
 
-// anything the system config is handed must say what hardware it takes, even
-// if that is nothing
+template <typename R>
+concept ClaimList = std::ranges::range<R> &&
+                    std::same_as<std::ranges::range_value_t<R>, Claim>;
+
 template <typename T>
-concept Claiming = requires {
-  { T::claims } -> std::ranges::range;
-  requires std::same_as<std::ranges::range_value_t<decltype(T::claims)>, Claim>;
+concept ClaimsDeclared = requires {
+  { T::claims } -> ClaimList;
 };
 
 } // namespace HAL
