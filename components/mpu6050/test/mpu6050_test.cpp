@@ -73,8 +73,10 @@ TEST_CASE("configure: the ranges and filter reach their registers",
   const auto &writes = fixture.transcript.writes;
   TEST_ASSERT_EQUAL_UINT32(6, writes.size());
 
-  check_write(writes[0], MPU6050::Reg::PWR_MGMT_1, 0x80);
-  check_write(writes[1], MPU6050::Reg::PWR_MGMT_1, MPU6050::PLL_GYRO_X);
+  // the reset value keeps SLEEP set beside the reset bit, which a reset
+  // sets again anyway
+  check_write(writes[0], MPU6050::Reg::PWR_MGMT_1, 0xC0);
+  check_write(writes[1], MPU6050::Reg::PWR_MGMT_1, 0x01);
   check_write(writes[2], MPU6050::Reg::CONFIG,
               static_cast<uint8_t>(MPU6050::Dlpf::Hz44));
   check_write(writes[3], MPU6050::Reg::SMPLRT_DIV, 9);

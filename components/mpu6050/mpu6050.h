@@ -12,6 +12,7 @@
 #include "assembly.h"
 #include "imu.h"
 #include "peripheral_hal.h"
+#include "registers.h"
 #include "resources.h"
 #include "system.h"
 
@@ -30,67 +31,9 @@ enum class Reg : uint8_t {
   WHO_AM_I = 0x75,
 };
 
-enum class Access : uint8_t { ReadOnly, ReadWrite };
-
-template <Reg R> struct Info;
-
-template <> struct Info<Reg::SMPLRT_DIV> {
-  static constexpr size_t size = 1;
-  static constexpr Access access = Access::ReadWrite;
-};
-template <> struct Info<Reg::CONFIG> {
-  static constexpr size_t size = 1;
-  static constexpr Access access = Access::ReadWrite;
-};
-template <> struct Info<Reg::GYRO_CONFIG> {
-  static constexpr size_t size = 1;
-  static constexpr Access access = Access::ReadWrite;
-};
-template <> struct Info<Reg::ACCEL_CONFIG> {
-  static constexpr size_t size = 1;
-  static constexpr Access access = Access::ReadWrite;
-};
-// accel, temperature and gyro sit in one contiguous big-endian block, so a
-// sample is a single 14-octet burst rather than six reads
-template <> struct Info<Reg::ACCEL_XOUT_H> {
-  static constexpr size_t size = 14;
-  static constexpr Access access = Access::ReadOnly;
-};
-template <> struct Info<Reg::PWR_MGMT_1> {
-  static constexpr size_t size = 1;
-  static constexpr Access access = Access::ReadWrite;
-};
-template <> struct Info<Reg::WHO_AM_I> {
-  static constexpr size_t size = 1;
-  static constexpr Access access = Access::ReadOnly;
-};
-
-template <Reg R>
-concept Writable = Info<R>::access == Access::ReadWrite;
-
-struct Field {
-  uint8_t width;
-  uint8_t offset;
-
-  constexpr uint8_t mask() const {
-    return static_cast<uint8_t>(((1u << width) - 1u) << offset);
-  }
-
-  constexpr uint8_t encode(uint8_t value) const {
-    return static_cast<uint8_t>((value << offset) & mask());
-  }
-};
-
-inline constexpr Field FS_SEL{2, 3};
-inline constexpr Field AFS_SEL{2, 3};
-inline constexpr Field DLPF_CFG{3, 0};
-inline constexpr Field CLKSEL{3, 0};
-inline constexpr Field SLEEP{1, 6};
-inline constexpr Field DEVICE_RESET{1, 7};
-
 // PWR_MGMT_1 CLKSEL=1: the gyro X PLL, which the register map recommends over
 // the internal 8 MHz oscillator for stability
-inline constexpr uint8_t PLL_GYRO_X = 1;
+enum class Clock : uint8_t { Internal = 0, PllGyroX = 1 };
 
 // the on-chip low-pass. 0 is the widest band and the 8 kHz gyro rate; 3 is
 // 42 Hz, which is where a chassis-mounted part stops reporting frame buzz
@@ -128,13 +71,41 @@ consteval Config config(Config value) {
   return value;
 }
 
+using SMPLRT_DIV = Registers::field<"SMPLRT_DIV", uint8_t, 7, 0>;
+using DLPF_CFG = Registers::field<"DLPF_CFG", Dlpf, 2, 0>;
+using FS_SEL = Registers::field<"FS_SEL", Imu::GyroRange, 4, 3>;
+using AFS_SEL = Registers::field<"AFS_SEL", Imu::AccelRange, 4, 3>;
+using DEVICE_RESET = Registers::field<"DEVICE_RESET", bool, 7, 7>;
+using SLEEP = Registers::field<"SLEEP", bool, 6, 6>;
+using CLKSEL = Registers::field<"CLKSEL", Clock, 2, 0>;
+using WHO_AM_I = Registers::field<"WHO_AM_I", uint8_t, 7, 0>;
+
+namespace Map {
+using Registers::Access;
+
+using SMPLRT_DIV = Registers::reg<Reg::SMPLRT_DIV, {}, MPU6050::SMPLRT_DIV>;
+using CONFIG = Registers::reg<Reg::CONFIG, {}, DLPF_CFG>;
+using GYRO_CONFIG = Registers::reg<Reg::GYRO_CONFIG, {}, FS_SEL>;
+using ACCEL_CONFIG = Registers::reg<Reg::ACCEL_CONFIG, {}, AFS_SEL>;
+// accel, temperature and gyro sit in one contiguous big-endian block, so a
+// sample is a single 14-octet burst rather than six reads
+using ACCEL_XOUT_H = Registers::reg<
+    Reg::ACCEL_XOUT_H, {.bytes = 14, .access = Access::ReadOnly}>;
+// the part powers up asleep
+using PWR_MGMT_1 = Registers::reg<Reg::PWR_MGMT_1, {.reset = 0x40},
+                                  DEVICE_RESET, SLEEP, CLKSEL>;
+using WHO_AM_I = Registers::reg<Reg::WHO_AM_I,
+                                {.access = Access::ReadOnly, .reset = 0x68},
+                                MPU6050::WHO_AM_I>;
+} // namespace Map
+
 // AD0 tied low or high. Nothing else on the part is address-selectable, so a
 // second MPU6050 on the same bus is the only reason to pass High
 enum class Address : uint8_t { Low = 0x68, High = 0x69 };
 
 // WHO_AM_I reports the 7-bit address with bit 0 cleared, so a High part reads
 // back 0x68 as well
-inline constexpr uint8_t kWhoAmI = 0x68;
+inline constexpr uint8_t kWhoAmI = Map::WHO_AM_I::reset;
 
 template <HAL::GenericI2CController I2C, HAL::GenericGPIOController GPIO,
           Config Cfg, typename Bus, Address Addr = Address::Low>
@@ -157,41 +128,35 @@ public:
   void operator=(Sensor &&) = delete;
 
   [[nodiscard]] std::expected<uint8_t, HAL::I2cError> who_am_i() {
-    return read<Reg::WHO_AM_I>().transform(
-        [](const auto &bytes) { return static_cast<uint8_t>(bytes[0]); });
+    return read<Map::WHO_AM_I>().transform(
+        [](const auto &id) { return id.template get<WHO_AM_I>(); });
   }
 
   [[nodiscard]] std::expected<void, HAL::I2cError> configure() {
     // the part wakes into sleep with the internal oscillator selected, and a
     // reset needs ~100 ms before any register write sticks
-    return write<Reg::PWR_MGMT_1>(DEVICE_RESET.encode(1))
+    return write<Map::PWR_MGMT_1>(DEVICE_RESET{true})
         .and_then([this] {
           gpio_.delay_ms(100);
 
-          return write<Reg::PWR_MGMT_1>(SLEEP.encode(0) |
-                                        CLKSEL.encode(PLL_GYRO_X));
+          return write<Map::PWR_MGMT_1>(SLEEP{false},
+                                        CLKSEL{Clock::PllGyroX});
         })
         .and_then([this] {
           gpio_.delay_ms(10);
 
-          return write<Reg::CONFIG>(
-              DLPF_CFG.encode(static_cast<uint8_t>(Cfg.dlpf)));
+          return write<Map::CONFIG>(DLPF_CFG{Cfg.dlpf});
         })
         .and_then([this] {
-          return write<Reg::SMPLRT_DIV>(Cfg.sample_rate_divider);
+          return write<Map::SMPLRT_DIV>(SMPLRT_DIV{Cfg.sample_rate_divider});
         })
-        .and_then([this] {
-          return write<Reg::GYRO_CONFIG>(
-              FS_SEL.encode(static_cast<uint8_t>(Cfg.gyro)));
-        })
-        .and_then([this] {
-          return write<Reg::ACCEL_CONFIG>(
-              AFS_SEL.encode(static_cast<uint8_t>(Cfg.accel)));
-        });
+        .and_then([this] { return write<Map::GYRO_CONFIG>(FS_SEL{Cfg.gyro}); })
+        .and_then(
+            [this] { return write<Map::ACCEL_CONFIG>(AFS_SEL{Cfg.accel}); });
   }
 
   [[nodiscard]] std::expected<Imu::Reading, HAL::I2cError> read_raw() {
-    return read<Reg::ACCEL_XOUT_H>().transform(decode);
+    return read<Map::ACCEL_XOUT_H>().transform(decode);
   }
 
   [[nodiscard]] std::expected<Imu::Sample, HAL::I2cError> read_sample() {
@@ -241,24 +206,19 @@ private:
             Imu::be16(raw[6], raw[7])};
   }
 
-  template <Reg R>
-  [[nodiscard]] std::expected<std::array<std::byte, Info<R>::size>,
-                              HAL::I2cError>
-  read() {
-    const std::array tx{static_cast<std::byte>(R)};
-    std::array<std::byte, Info<R>::size> rx{};
+  template <Registers::at<Reg> R> [[nodiscard]] auto read() {
+    const std::array tx{static_cast<std::byte>(R::address)};
+    std::array<std::byte, R::bytes> rx{};
 
-    return i2c_.write_read(tx, rx).transform([rx] { return rx; });
+    return i2c_.write_read(tx, rx).transform(
+        [rx] { return Registers::decode<R>(rx); });
   }
 
-  template <Reg R>
-  [[nodiscard]] std::expected<void, HAL::I2cError> write(uint8_t value)
-    requires Writable<R> && (Info<R>::size == 1)
-  {
-    const std::array tx{static_cast<std::byte>(R),
-                        static_cast<std::byte>(value)};
-
-    return i2c_.write(tx);
+  template <Registers::at<Reg> R, Registers::Field... Fs>
+    requires Registers::writable_with<R, Fs...>
+  [[nodiscard]] std::expected<void, HAL::I2cError> write(Fs... fs) {
+    return i2c_.write(Registers::frame<R>(
+        std::array{static_cast<std::byte>(R::address)}, fs...));
   }
 
   I2C i2c_;

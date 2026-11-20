@@ -195,11 +195,39 @@ The MPU6050 hangs off the same I2C bus as the UMC. The split is the usual one:
 `Imu::Sample` (g, dps, degC), the sensitivity derived from the selected full
 scale, and `Imu::Accumulator`, which averages readings taken at rest into the
 `Imu::Offsets` later samples are corrected by, keeping 1 g on whichever axis
-points up. `components/mpu6050/mpu6050.h` is the device: a register
-description (`Reg`, `Info<R>`, `Field`) a write to a read-only register cannot
-compile against, one `Config` whose sample rate and calibration interval derive
-from the DLPF setting, and a 14-octet burst that becomes a `Reading`. Nothing
-in either file touches IDF, so both run in the `host` tier over `MockI2C`.
+points up. `components/mpu6050/mpu6050.h` is the device: its register map
+(`MPU6050::Map`, built on `Registers`, below), one `Config` whose sample rate
+and calibration interval derive from the DLPF setting, and a 14-octet burst
+that becomes a `Reading`. Nothing in either file touches IDF, so both run in
+the `host` tier over `MockI2C`.
+
+## Registers
+
+`components/swarm_hal/registers.h` is the register description every driver
+shares, after groov. A `Registers::field<"NAME", T, msb, lsb>` is typed -- an
+enum, a bool, an unsigned -- and a `Registers::reg<Address, Layout, Fields...>`
+lists its fields beside its size, access, endianness and reset value. A field
+type also carries a value, so a write names what it sets:
+
+```cpp
+write<Map::PWR_MGMT_1>(SLEEP{false}, CLKSEL{Clock::PllGyroX});
+```
+
+- unnamed fields take the register's reset value, so a write is "the datasheet
+  default plus what I named", whatever the register held; `modify_word` keeps
+  them instead, and is a read-modify-write
+- a field the register doesn't hold, a field named twice, a write to a
+  read-only register, and a read-modify-write of a write-one-to-clear register
+  don't compile; neither does a description whose fields overlap or overrun it
+- the address is a template parameter of the driver's own type (`MPU6050::Reg`),
+  so `Registers::at<R, Reg>` keeps another device's registers out
+- `frame<R>(header, fields...)` is header plus value, the one thing every bus
+  write sends; the header -- a register number, an SPI command -- is the
+  driver's
+
+The helpers are `always_inline` and expand packs rather than loop: at `-Og`,
+the IDF default, neither happens on its own, and the encoding was left as real
+64-bit shifts. Each write's octet now folds to a constant.
 
 `ESP32::I2cBus<Pins, Port>` owns the port (Exclusive) and declares SDA/SCL as
 Shared, the same shape as `SpiBus`; `ESP32::I2C<Bus>` is one addressed device
