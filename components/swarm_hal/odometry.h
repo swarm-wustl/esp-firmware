@@ -62,6 +62,36 @@ constexpr Pose integrate(const Pose &pose, const Drive::Twist &body,
           .y = pose.y + s * forward + c * left,
           .theta = wrap(pose.theta + turn)};
 }
+// the constant twist that carries `from` to `to` in dt: integrate's inverse, so
+// a consumer integrating it at a slow publish rate retraces the path the
+// control loop integrated at its own, instead of extrapolating one sample.
+// A turn past pi in one interval aliases, which no wheel reaches in 200ms
+constexpr Drive::Twist twist_between(const Pose &from, const Pose &to,
+                                     double dt) {
+  if (dt <= 0.0) {
+    return {};
+  }
+
+  const double turn = wrap(to.theta - from.theta);
+  const double angular_z = turn / dt;
+
+  const bool straight = std::abs(turn) < 1e-9;
+  const double along = straight ? dt : std::sin(turn) / angular_z;
+  const double across = straight ? 0.0 : (1.0 - std::cos(turn)) / angular_z;
+
+  const double c = std::cos(from.theta);
+  const double s = std::sin(from.theta);
+  const double forward = c * (to.x - from.x) + s * (to.y - from.y);
+  const double left = -s * (to.x - from.x) + c * (to.y - from.y);
+
+  // integrate maps (vx, vy) through [[along, -across], [across, along]], a
+  // rotation and a scale, so its inverse is the transpose over the determinant
+  const double scale = along * along + across * across;
+
+  return {.linear_x = (along * forward + across * left) / scale,
+          .linear_y = (along * left - across * forward) / scale,
+          .angular_z = angular_z};
+}
 } // namespace Odometry
 
 #endif

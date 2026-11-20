@@ -1,0 +1,324 @@
+#ifndef SIM_WORLD_H
+#define SIM_WORLD_H
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <numbers>
+#include <optional>
+
+#include "arrays.h"
+#include "differential_drive.h"
+#include "encoder.h"
+#include "motor.h"
+#include "robot.h"
+
+// the plant the firmware's controller drives. Its kinematics are written out
+// here rather than taken from Drive:: on purpose: a sign error shared by the
+// controller and the world it is tested against would cancel and pass
+namespace World {
+static_assert(Robot::STYLE == Drive::Style::DIFFERENTIAL,
+              "the world only models a differential base");
+
+// the ESP32's PCNT, which is the counter the sim stands in for, decodes X4
+inline constexpr Encoder::Spec ENCODER{Robot::WHEEL_ENCODER,
+                                       Encoder::Decoding::X4};
+
+constexpr size_t N = Drive::motor_count<Robot::STYLE>;
+
+struct Wheel {
+  Motor::Name name;
+  double gain;  // top speed relative to Robot::MAX_WHEEL_SPEED
+  double speed; // rad/s at the rim
+  double angle; // rad, what the encoder sees
+};
+
+struct Pose {
+  double x;
+  double y;
+  double theta;
+};
+
+struct State {
+  std::array<Wheel, N> wheels;
+  Pose pose;
+  double yaw_rate;
+};
+
+// fractional ground speed lost or gained against the rim: the encoders turn
+// with the wheel, the robot moves with the ground
+struct Slip {
+  double left;
+  double right;
+};
+
+// a value that wanders around a mean and forgets itself over
+// correlation_time (a first-order Gauss-Markov process). A correlation_time of
+// zero is white noise around the mean
+struct GaussMarkov {
+  double mean;
+  double sigma;            // spread around the mean
+  double correlation_time; // s
+};
+
+// draw is one standard normal sample, so the randomness stays in the node and
+// this stays a function
+inline double wander(const GaussMarkov &process, double now, double draw,
+                     double dt) {
+  const double keep = process.correlation_time > 0.0
+                          ? std::exp(-dt / process.correlation_time)
+                          : 0.0;
+  // scaled so the spread holds at sigma whatever dt and correlation_time are
+  const double kick = process.sigma * std::sqrt(1.0 - keep * keep);
+
+  return process.mean + (now - process.mean) * keep + kick * draw;
+}
+
+// slip that wanders around a mean. Fresh noise every step would cancel as it
+// integrated; a floor that eats 3% keeps eating it, and that is the error
+// odometry cannot see and UWB has to pull back. sigma is a fraction of rim
+// speed
+struct SlipModel {
+  GaussMarkov left;
+  GaussMarkov right;
+};
+
+// innovation is one standard normal draw per wheel
+inline Slip drift(const Slip &slip, const Slip &innovation,
+                  const SlipModel &model, double dt) {
+  return {wander(model.left, slip.left, innovation.left, dt),
+          wander(model.right, slip.right, innovation.right, dt)};
+}
+
+// someone standing between a robot and an anchor blocks it for seconds, not
+// for one range in twenty, so blockage is a two-state Markov chain per link
+// rather than a coin flip per range: the same anchor reads long for several
+// rounds running
+struct Blockage {
+  double fraction; // of the time a link is blocked
+  double duration; // s, mean length of one blockage
+  double excess;   // m, mean extra path while blocked
+};
+
+struct Path {
+  bool blocked;
+  double excess; // m, held for the whole blockage: one obstacle, one reflection
+};
+
+// the chain's exact transition over dt, so it holds whatever the gap between
+// ranges of one link. Rates in from clear and out from blocked are fixed by
+// the fraction and duration; together they forget the state at rate 1/memory
+inline Path obstruct(const Path &path, const Blockage &blockage, double dt,
+                     double uniform, double exponential) {
+  if (blockage.fraction <= 0.0 || blockage.duration <= 0.0) {
+    return {false, 0.0};
+  }
+
+  const double memory = blockage.duration * (1.0 - blockage.fraction);
+  const double fade = std::exp(-dt / memory);
+  const double p_blocked =
+      path.blocked ? blockage.fraction + (1.0 - blockage.fraction) * fade
+                   : blockage.fraction * (1.0 - fade);
+  const bool blocked = uniform < p_blocked;
+
+  if (!blocked) {
+    return {false, 0.0};
+  }
+
+  return {true, path.blocked ? path.excess : blockage.excess * exponential};
+}
+
+// an antenna's delay is not one number: it shifts with the angle the signal
+// arrives from. This is the first harmonic of that pattern, around the
+// constant part calibration leaves, at a phase each antenna has its own of
+struct Antenna {
+  double amplitude; // m
+  double phase;     // rad
+};
+
+constexpr double delay(const Antenna &antenna, double angle) {
+  return antenna.amplitude * std::cos(angle - antenna.phase);
+}
+
+// one end of a link: the constant part of its antenna delay and its pattern
+struct Radio {
+  double bias; // m
+  Antenna antenna;
+};
+
+// an anchor where it really is, which is not quite where it was surveyed
+struct Anchor {
+  double x;
+  double y;
+  Radio radio;
+};
+
+inline double distance(const Pose &robot, const Anchor &anchor) {
+  return std::hypot(robot.x - anchor.x, robot.y - anchor.y);
+}
+
+// the delay both ends add to one range. The anchor sees the robot at a
+// bearing fixed in map; the robot's antenna turns with it, so the angle it
+// hears the anchor from is in its own frame, and turning on the spot moves
+// the range
+inline double link_delay(const Pose &robot, const Radio &radio,
+                         const Anchor &anchor) {
+  const double toward_robot =
+      std::atan2(robot.y - anchor.y, robot.x - anchor.x);
+  const double toward_anchor = toward_robot + std::numbers::pi;
+
+  return radio.bias + anchor.radio.bias +
+         delay(radio.antenna, toward_anchor - robot.theta) +
+         delay(anchor.radio.antenna, toward_robot);
+}
+
+// what a DW1000 range gets wrong on top of the antenna delay, which
+// link_delay sums from the two ends, and the path's blockage
+struct RangeErrors {
+  double noise;   // m, sigma
+  double dropout; // per range
+};
+
+// one range's worth of randomness, drawn by the node
+struct RangeDraw {
+  double noise;   // standard normal
+  double dropout; // uniform in [0, 1)
+};
+
+// a blocked direct path makes the radio lock onto a reflection, which is
+// always longer, so non-line-of-sight only ever adds. Empty is an exchange
+// that timed out
+inline std::optional<double> range(double distance, double bias,
+                                   const Path &path, const RangeErrors &errors,
+                                   const RangeDraw &draw) {
+  if (draw.dropout < errors.dropout) {
+    return std::nullopt;
+  }
+
+  return std::max(0.0,
+                  distance + bias + path.excess + errors.noise * draw.noise);
+}
+
+// two motors off one production line are never the same speed. A positive
+// mismatch slows the right wheel, so an open-loop robot pulls right and the
+// integral has something to do
+inline State initial(double mismatch, const Pose &start) {
+  return {.wheels = Arrays::map(
+              Drive::wheels<Robot::STYLE>(),
+              [mismatch](const Drive::Wheel &w) {
+                const double side = w.angular_z > 0.0 ? -1.0 : 1.0;
+                return Wheel{w.name, 1.0 + side * mismatch / 2.0, 0.0, 0.0};
+              }),
+          .pose = start,
+          .yaw_rate = 0.0};
+}
+
+constexpr double signed_duty(const Motor::Command &command) {
+  switch (command.dir) {
+  case Motor::Direction::FORWARD:
+    return command.pwm_ratio;
+  case Motor::Direction::REVERSE:
+    return -command.pwm_ratio;
+  case Motor::Direction::STOP:
+    return 0.0;
+  }
+
+  return 0.0;
+}
+
+constexpr double duty_for(const Motor::Frame<N> &frame, Motor::Name name) {
+  const auto it =
+      std::ranges::find(frame.commands, name, &Motor::Command::name);
+
+  return it == frame.commands.end() ? 0.0 : signed_duty(*it);
+}
+
+// first-order lag toward the speed this duty holds at steady state. Full
+// duty_limit is the rated voltage, which is where MAX_WHEEL_SPEED was measured
+inline Wheel spin(const Wheel &wheel, double duty, double time_constant,
+                  double dt) {
+  const double steady = duty / Robot::WHEEL_SUPPLY.duty_limit() *
+                        Robot::MAX_WHEEL_SPEED * wheel.gain;
+  const double speed =
+      steady + (wheel.speed - steady) * std::exp(-dt / time_constant);
+
+  return {wheel.name, wheel.gain, speed,
+          wheel.angle + (wheel.speed + speed) / 2.0 * dt};
+}
+
+constexpr double rim_speed(const State &state, Motor::Name name) {
+  const auto it = std::ranges::find(state.wheels, name, &Wheel::name);
+
+  return it == state.wheels.end() ? 0.0 : it->speed;
+}
+
+// the fraction of rim speed that reaches the floor. On flat ground the floor
+// can only take motion away, never add it. Clamped here rather than in drift
+// so the process itself stays an undistorted OU
+constexpr double ground(double slip) { return 1.0 + std::min(slip, 0.0); }
+
+inline State step(const State &state, const Motor::Frame<N> &frame,
+                  const Slip &slip, double time_constant, double dt) {
+  const auto wheels = Arrays::map(state.wheels, [&](const Wheel &wheel) {
+    return spin(wheel, duty_for(frame, wheel.name), time_constant, dt);
+  });
+
+  const State spun{wheels, state.pose, state.yaw_rate};
+  const double left = rim_speed(spun, Motor::Name::LEFT) * ground(slip.left);
+  const double right = rim_speed(spun, Motor::Name::RIGHT) * ground(slip.right);
+
+  const double v = Drive::kWheelRadius * (left + right) / 2.0;
+  const double w =
+      Drive::kWheelRadius * (right - left) / (2.0 * Drive::kHalfTrack);
+  const double mid = state.pose.theta + w * dt / 2.0;
+
+  return {.wheels = wheels,
+          .pose = {.x = state.pose.x + v * std::cos(mid) * dt,
+                   .y = state.pose.y + v * std::sin(mid) * dt,
+                   .theta = std::remainder(state.pose.theta + w * dt,
+                                           2.0 * std::numbers::pi)},
+          .yaw_rate = w};
+}
+
+// what one odometry message gets wrong, as variances, from what this plant
+// actually does: white gyro noise averaged over the period's control steps,
+// and encoder quantization, which only bites at the period's two ends because
+// the counts are cumulative. Slip is left out on purpose: it is a bias, and a
+// filter that carries it in its state is meant to learn it, not be told the
+// twist is noisy enough to hide it
+struct TwistNoise {
+  double vx;
+  double vy;
+  double wz;
+};
+
+inline TwistNoise twist_noise(std::optional<double> gyro_noise, double period,
+                              double step) {
+  const double count =
+      2.0 * std::numbers::pi * Drive::kWheelRadius / ENCODER.counts_per_rev();
+  // one wheel's travel over the period: a uniform rounding at each end
+  const double travel = count * count / 6.0;
+  const double v = travel / (2.0 * period * period);
+  const double w =
+      gyro_noise ? *gyro_noise * *gyro_noise / std::round(period / step)
+                 : 2.0 * travel /
+                       std::pow(2.0 * Drive::kHalfTrack * period, 2.0);
+
+  // nothing in the plant slides sideways, but a zero would read as certainty
+  return {.vx = v, .vy = v, .wz = w};
+}
+
+// cumulative, like a PCNT unit: the firmware's Tracker takes the difference
+inline std::array<Encoder::Reading, N> counts(const State &state) {
+  return Arrays::map(state.wheels, [](const Wheel &wheel) {
+    const double per_radian =
+        ENCODER.counts_per_rev() / (2.0 * std::numbers::pi);
+
+    return Encoder::Reading{
+        wheel.name, static_cast<int32_t>(std::floor(wheel.angle * per_radian))};
+  });
+}
+} // namespace World
+
+#endif

@@ -58,23 +58,6 @@ concept Claiming = requires {
   requires std::same_as<std::ranges::range_value_t<decltype(T::claims)>, Claim>;
 };
 
-template <Claiming... Decls> consteval auto claims_of() {
-  constexpr size_t total = (0 + ... + Decls::claims.size());
-
-  std::array<Claim, total> all{};
-  size_t next = 0;
-
-  const auto append = [&all, &next](const auto &claims) {
-    for (const Claim &claim : claims) {
-      all[next++] = claim;
-    }
-  };
-
-  (append(Decls::claims), ...);
-
-  return all;
-}
-
 } // namespace HAL
 
 #endif

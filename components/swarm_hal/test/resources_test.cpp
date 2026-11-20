@@ -1,3 +1,4 @@
+#include "assembly.h"
 #include "differential_drive.h"
 #include "drive.h"
 #include "resources.h"
@@ -48,6 +49,38 @@ struct WrongElementType {
   static constexpr std::array claims{1, 2, 3};
 };
 
+struct Leaf {
+  static constexpr std::array claims{Claim{Resource::Gpio, 5, Use::Exclusive}};
+  explicit Leaf(Swarm::Assembly<Leaf>) {}
+};
+
+struct SharedLeaf {
+  static constexpr std::array claims{Claim{Resource::LedcTimer, 0, Use::Shared}};
+  explicit SharedLeaf(Swarm::Assembly<SharedLeaf>) {}
+};
+
+struct Parent {
+  static constexpr std::array claims{Claim{Resource::Gpio, 6, Use::Exclusive}};
+  using owns = Swarm::owns<Leaf, SharedLeaf>;
+};
+
+struct Grandparent {
+  static constexpr std::array<Claim, 0> claims{};
+  using owns = Swarm::owns<Parent>;
+};
+
+struct AlsoOnFive {
+  static constexpr std::array claims{Claim{Resource::Gpio, 5, Use::Exclusive}};
+};
+
+struct AlsoSharesTimer {
+  static constexpr std::array<Claim, 0> claims{};
+  using owns = Swarm::owns<SharedLeaf>;
+};
+
+template <typename Sub, typename Owner>
+concept makes = requires(Swarm::Assembly<Owner> key) { Swarm::make<Sub>(key); };
+
 constexpr std::array kDifferentialRoster{Motor::Name::LEFT,
                                          Motor::Name::RIGHT};
 constexpr std::array kMissingRight{Motor::Name::LEFT, Motor::Name::UPPER_LEFT};
@@ -61,6 +94,30 @@ TEST_CASE("declarations must say what hardware they take", "[resources]") {
   static_assert(HAL::Claiming<ClaimsNothing>);
   static_assert(!HAL::Claiming<NotADeclaration>);
   static_assert(!HAL::Claiming<WrongElementType>);
+  TEST_ASSERT_TRUE(true);
+}
+
+TEST_CASE("claims: an owner carries what it owns, all the way down",
+          "[resources]") {
+  static_assert(Swarm::claims_of<Leaf>().size() == 1);
+  static_assert(Swarm::claims_of<Parent>().size() == 3);
+  static_assert(Swarm::claims_of<Grandparent>().size() == 3);
+  TEST_ASSERT_TRUE(true);
+}
+
+TEST_CASE("claims: a sub-device collides like a declared one", "[resources]") {
+  static_assert(!Swarm::no_resource_conflicts<Parent, AlsoOnFive>);
+  static_assert(!Swarm::no_resource_conflicts<Grandparent, AlsoOnFive>);
+  static_assert(Swarm::no_resource_conflicts<Parent, AlsoSharesTimer>);
+  TEST_ASSERT_TRUE(true);
+}
+
+TEST_CASE("keys: an owner builds only what it lists", "[resources]") {
+  static_assert(makes<Leaf, Parent>);
+  static_assert(!makes<Leaf, Grandparent>);
+  static_assert(!makes<AlsoOnFive, Parent>);
+  static_assert(!std::default_initializable<Swarm::Assembly<Leaf>>);
+  static_assert(!std::constructible_from<Leaf, Swarm::Assembly<Parent>>);
   TEST_ASSERT_TRUE(true);
 }
 

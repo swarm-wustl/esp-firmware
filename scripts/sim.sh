@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+
+
+# Runs simulated robots (sim/sim_base.cpp) that speak the firmware's topics,
+# plus a Foxglove bridge on ws://localhost:8765 to watch them. The node runs the
+# firmware's own control loop and odometry against a simulated plant, built
+# fresh into build_sim/ on every start.
+#
+#   scripts/sim.sh                  one robot, namespaced from sdkconfig
+#   scripts/sim.sh swarm_1 swarm_2  one robot per namespace
+#   scripts/sim.sh teleop [ns]      drive a robot from the keyboard (2nd terminal)
+#   scripts/sim.sh shell            bash in the running sim, for ros2 topic etc.
+#   scripts/sim.sh check [ns...]    drive the running sim round a route and score
+#                                   its estimates against truth (sim/check.py);
+#                                   --legs N for a shorter route
+#   scripts/sim.sh replay [args]    rerun the filters over the last check's
+#                                   recording, in seconds (sim/replay.py)
+#   scripts/sim.sh build            (re)build the sim image
+#
+# Wheel geometry and the default namespace come out of sdkconfig, through the
+# same headers the firmware compiles, so the sim can't drift from the board.
+#
+# The sim runs on its own ROS_DOMAIN_ID (SIM_DOMAIN, default 42): DDS discovery
+# crosses containers, so a fake swarm_1 on domain 0 would publish over the
+# real board's topics whenever swarm-agent is up. SIM_DOMAIN=0 mixes them.
+#
+# Every random draw in the world comes from SIM_SEED, printed at startup, so
+# SIM_SEED=123 scripts/sim.sh repeats a run's noise, slip and blockage. The
+# trajectory still differs a little: when go_to_goal's commands land against
+# the control loop is wall-clock timing.
+
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+IMAGE="swarm-sim:humble"
+DOCKERFILE="$REPO/docker/sim/Dockerfile"
+NAME="swarm-sim"
+DOMAIN="${SIM_DOMAIN:-42}"
+
+die() { echo "sim.sh: $*" >&2; exit 1; }
+command -v docker >/dev/null 2>&1 || die "docker not found in PATH"
+docker info >/dev/null 2>&1 || die "Docker daemon is not running"
+
+config() {
+  sed -n "s/^CONFIG_$1=\"\{0,1\}\([^\"]*\)\"\{0,1\}\$/\1/p" "$REPO/sdkconfig" |
+    tail -1
+}
+
+NAMESPACE="$(config SWARM_ROS_NAMESPACE)"
+[ -n "$NAMESPACE" ] || die "no CONFIG_SWARM_ROS_NAMESPACE in sdkconfig"
+
+build_image() {
+  docker build "$@" -t "$IMAGE" -f "$DOCKERFILE" "$(dirname "$DOCKERFILE")"
+}
+
+in_sim() {
+  docker inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null | grep -q true ||
+    die "sim is not running -- start it with scripts/sim.sh"
+  # -t only from a terminal, so check can run from a script too
+  exec docker exec -i $([ -t 0 ] && echo -t) "$NAME" bash -lc ". /opt/ros/humble/setup.bash && $1"
+}
+
+case "${1:-}" in
+  build)
+    build_image --no-cache
+    exit 0 ;;
+  teleop)
+    in_sim "exec ros2 run teleop_twist_keyboard teleop_twist_keyboard \
+      --ros-args -r cmd_vel:=/${2:-$NAMESPACE}/cmd_vel" ;;
+  shell)
+    in_sim "exec bash" ;;
+  check)
+    shift
+    in_sim "exec python3 sim/check.py --default-namespace $NAMESPACE $*" ;;
+  replay)
+    shift
+    docker image inspect "$IMAGE" >/dev/null 2>&1 || build_image
+    exec docker run --rm -i -v "$REPO:/workspace" -w /workspace "$IMAGE" \
+      bash -lc ". /opt/ros/humble/setup.bash && exec python3 sim/replay.py $*" ;;
+esac
+
+docker image inspect "$IMAGE" >/dev/null 2>&1 || build_image
+
+namespaces=("$@")
+[ "${#namespaces[@]}" -gt 0 ] || namespaces=("$NAMESPACE")
+
+SIM_SEED="${SIM_SEED:-$RANDOM}"
+
+# robots are put down in a row along map's y, so they don't start on top of
+# each other
+SPACING=0.5
+
+# UWB anchors as name:x,y in map. This is the only place they are placed:
+# each becomes a static TF frame, the sim ranges whatever frames it is named,
+# and host/uwb_fix.py looks an anchor up by the frame its range carries
+ANCHORS=(anchor_0:-1.5,-1.5 anchor_1:2.5,-1.5 anchor_2:2.5,2.5 anchor_3:-1.5,2.5)
+# what the sim gets wrong in each range, and what the fix node is told to
+# expect. The biases are antenna delay left over after calibration: one per
+# anchor, the same for every robot, and one per robot, the same for every
+# anchor
+RANGE_NOISE=0.05
+ANCHOR_BIAS=0.03
+ROBOT_BIAS=0.03
+# antenna delay also shifts with the angle a signal arrives from, by about
+# this much either way at each end, and anchors are only where the tape
+# measure said, to about this per axis
+ANTENNA_PATTERN=0.03
+ANCHOR_SURVEY=0.03
+NLOS_FRACTION=0.05
+NLOS_DURATION=2.0
+NLOS_EXCESS=0.3
+RANGE_DROPOUT=0.05
+# everything systematic a range carries, as one sigma: the two constant
+# delays, the survey error along the line of sight, and a cosine pattern of
+# amplitude A at each end, whose variance is A^2/2
+RANGE_BIAS="$(awk "BEGIN{printf \"%.4f\", sqrt($ANCHOR_BIAS^2 + $ROBOT_BIAS^2 + \
+  $ANCHOR_SURVEY^2 + $ANTENNA_PATTERN^2)}")"
+
+anchors=""
+anchor_names=""
+for anchor in "${ANCHORS[@]}"; do
+  name="${anchor%%:*}"
+  IFS=, read -r ax ay <<<"${anchor#*:}"
+  anchors+="ros2 run tf2_ros static_transform_publisher --x $ax --y $ay \
+    --frame-id map --child-frame-id $name >/dev/null 2>&1 & "
+  anchor_names+="${anchor_names:+,}$name"
+done
+
+# each robot gets its own local EKF (sim/ekf.yaml), the filter that will run
+# against the real board too. Frames are <ns>/odom and <ns>/base_link, as
+# Robot::frame_in builds them on the board, so the TF trees stay apart
+robots=""
+i=0
+for ns in "${namespaces[@]}"; do
+  # always with a decimal point: ROS rejects [0.0,0,0.0] as a mixed list
+  y="$(awk "BEGIN{printf \"%.3f\", $i * $SPACING}")"
+
+  robots+="build_sim/sim_base --ros-args -r __ns:=/$ns \
+    -p start:=[0.0,$y,0.0] -p anchors:=[$anchor_names] \
+    -p range_noise:=$RANGE_NOISE -p anchor_bias:=$ANCHOR_BIAS \
+    -p robot_bias:=$ROBOT_BIAS -p seed:=$SIM_SEED \
+    -p antenna_pattern:=$ANTENNA_PATTERN -p anchor_survey:=$ANCHOR_SURVEY \
+    -p nlos_fraction:=$NLOS_FRACTION -p nlos_duration:=$NLOS_DURATION \
+    -p nlos_excess:=$NLOS_EXCESS \
+    -p range_dropout:=$RANGE_DROPOUT & "
+  robots+="ros2 run robot_localization ekf_node --ros-args -r __ns:=/$ns \
+    --params-file sim/ekf.yaml -p odom_frame:=$ns/odom \
+    -p world_frame:=$ns/odom -p base_link_frame:=$ns/base_link & "
+  robots+="python3 host/uwb_fix.py --ros-args -r __ns:=/$ns \
+    -p range_sigma:=$RANGE_NOISE -p range_bias:=$RANGE_BIAS & "
+  # the global filter starts where the robot was put down, which a real robot
+  # would have to estimate rather than know
+  robots+="python3 host/global_ekf.py --ros-args -r __ns:=/$ns \
+    -p odom_frame:=$ns/odom -p base_link_frame:=$ns/base_link \
+    -p range_sigma:=$RANGE_NOISE -p range_bias:=$RANGE_BIAS \
+    -p initial_state:=[0.0,$y,0.0] & "
+  # the 3D panel's pose tool publishes on /move_base_simple/goal, so a click
+  # sends every robot there
+  robots+="python3 host/go_to_goal.py --ros-args -r __ns:=/$ns \
+    -r goal:=/move_base_simple/goal & "
+
+  i=$((i + 1))
+done
+
+echo "sim.sh: ${namespaces[*]} up (SIM_SEED=$SIM_SEED); open Foxglove on ws://localhost:8765" >&2
+
+exec docker run --rm -it --init \
+  --name "$NAME" \
+  -p 8765:8765 \
+  -e ROS_DOMAIN_ID="$DOMAIN" \
+  -v "$REPO:/workspace" -w /workspace \
+  "$IMAGE" bash -lc ". /opt/ros/humble/setup.bash && \
+    cmake -S sim -B build_sim >/dev/null && cmake --build build_sim -j || exit 1
+    $anchors $robots \
+    exec ros2 run foxglove_bridge foxglove_bridge --ros-args -p port:=8765"

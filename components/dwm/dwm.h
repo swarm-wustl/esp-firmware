@@ -3,11 +3,11 @@
 
 #include "arrays.h"
 #include "assembly.h"
-#include "system.h"
 #include "dwm_data.h"
 #include "dwm_regs.h"
 #include "peripheral_hal.h"
 #include "resources.h"
+#include "system.h"
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -246,13 +246,14 @@ class DWM {
                 "DWM1000 requires little-endian architecture");
 
 public:
-  static constexpr auto claims =
-      Arrays::concat(Pins.claims(), GPIO::claims, SPI::claims);
+  static constexpr auto claims = Pins.claims();
 
+  using owns = Swarm::owns<SPI, GPIO>;
   using needs = Swarm::needs<Bus>;
 
-  DWM(Swarm::Assembly assembly, Bus &bus)
-      : spi_{assembly, bus, Pins["cs"_p]}, gpio_{assembly} {
+  DWM(Swarm::Assembly<DWM> key, Bus &bus)
+      : spi_{Swarm::make<SPI>(key, bus, Pins["cs"_p])},
+        gpio_{Swarm::make<GPIO>(key)} {
     hard_reset();
   }
 
@@ -451,6 +452,8 @@ public:
    *   t_reply = tx(reply) - rx(poll)          [measured by responder, sent
    * back] tof     = (t_round - t_reply) / 2
    */
+  // TODO: split this function up into pure parts (I/O, decode, math)
+  // also have it read cleaner with monadic chaining where applicable
   std::expected<double, HAL::SpiError> range() {
     std::array<std::byte, 1> poll{RANGE_POLL};
     if (auto r = transmit(poll); !r) {
@@ -532,6 +535,8 @@ private:
 
   // sub-addressed SPI header (manual 2.2.1.2): 1 octet non-indexed, 2 for an
   // offset <= 0x7F, 3 with the extended-address flag for larger offsets
+  // TODO: maybe integrate this directly with RegView stuff
+  // instead of having two separate APIs for writing to registers.
   static uint8_t make_header(std::array<std::byte, 3> &hdr, bool write,
                              uint8_t reg, uint16_t offset) {
     uint8_t b0 = (write ? 0x80 : 0x00) | (reg & 0x3F) | (offset ? 0x40 : 0x00);

@@ -1,0 +1,288 @@
+#!/usr/bin/env python3
+
+# turns one robot's UWB ranges into a position fix for the global EKF: ranges
+# in, uwb/pose out in map. An anchor is any frame a range names that resolves
+# in map, so anchors are declared once, as TF, and nowhere else
+
+import math
+from dataclasses import dataclass, fields
+
+import rclpy
+from geometry_msgs.msg import PoseWithCovarianceStamped
+from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from rclpy.time import Time
+from sensor_msgs.msg import Range
+from tf2_ros import Buffer, TransformException, TransformListener
+
+MIN_ANCHORS = 3
+ITERATIONS = 10
+CONVERGED = 1e-6  # m
+UNMEASURED = 1e6  # variance the EKF reads as "ignore", not as certainty
+
+# 99% points of chi-square by degrees of freedom (anchors - 2). A fix whose
+# squared residuals sum past this is not explained by the noise alone
+CHI2_99 = {1: 6.63, 2: 9.21, 3: 11.34, 4: 13.28, 5: 15.09, 6: 16.81}
+
+
+def invert(m):
+    (a, b), (c, d) = m
+    det = a * d - b * c
+
+    if abs(det) < 1e-9:
+        return None
+
+    return ((d / det, -b / det), (-c / det, a / det))
+
+
+# Gauss-Newton over [((ax, ay), range)]. The covariance is sigma^2 (J^T J)^-1,
+# so anchors bunched on one side give a fix that is honestly wide across them
+def trilaterate(observations, guess, sigma):
+    x, y = guess
+    inverse = None
+
+    for _ in range(ITERATIONS):
+        jtj = [[0.0, 0.0], [0.0, 0.0]]
+        jtr = [0.0, 0.0]
+
+        for (ax, ay), r in observations:
+            dx, dy = x - ax, y - ay
+            d = math.hypot(dx, dy)
+
+            if d < CONVERGED:
+                return None
+
+            u = (dx / d, dy / d)
+            residual = r - d
+
+            for i in range(2):
+                jtr[i] += u[i] * residual
+                for j in range(2):
+                    jtj[i][j] += u[i] * u[j]
+
+        inverse = invert(jtj)
+
+        if inverse is None:
+            return None
+
+        step = (inverse[0][0] * jtr[0] + inverse[0][1] * jtr[1],
+                inverse[1][0] * jtr[0] + inverse[1][1] * jtr[1])
+        x, y = x + step[0], y + step[1]
+
+        if math.hypot(*step) < CONVERGED:
+            break
+
+    s2 = sigma * sigma
+    covariance = ((s2 * inverse[0][0], s2 * inverse[0][1]),
+                  (s2 * inverse[1][0], s2 * inverse[1][1]))
+
+    return (x, y), covariance
+
+
+def residuals(observations, position):
+    x, y = position
+    return [r - math.hypot(x - ax, y - ay) for (ax, ay), r in observations]
+
+
+def misfit(observations, position, sigma):
+    return sum(e * e for e in residuals(observations, position)) / (sigma * sigma)
+
+
+def consistent(observations, position, sigma):
+    return misfit(observations, position, sigma) <= CHI2_99.get(
+        len(observations) - 2, math.inf)
+
+
+# drops anchors until the rest agree, and gives no fix when it can't tell
+# which to drop. Largest residual is the wrong pick: least squares spreads one
+# bad range over the others. So each anchor is left out in turn, and a drop is
+# a candidate if it reads long against the rest's fit, since a blocked path
+# makes the radio lock onto a reflection and only ever adds, and the rest then
+# agree. In a square, three anchors barely over-determine a fix, so leaving
+# out the blocked corner and leaving out the opposite one both fit: when the
+# candidates land more than `ambiguity` apart there is no telling them apart
+# from ranges alone, and breaking the tie with the last fix makes one wrong
+# pick the reason for the next, for as long as the blockage lasts
+def consistent_fix(observations, guess, sigma, ambiguity):
+    result = trilaterate(observations, guess, sigma)
+
+    if result is None:
+        return None, list(observations)
+
+    position, _ = result
+
+    if consistent(observations, position, sigma):
+        return result, []
+
+    if len(observations) <= MIN_ANCHORS:
+        return None, list(observations)
+
+    candidates = []
+
+    for i, ((ax, ay), r) in enumerate(observations):
+        rest = observations[:i] + observations[i + 1:]
+        kept, dropped = consistent_fix(rest, position, sigma, ambiguity)
+
+        if kept is None or r <= math.dist(kept[0], (ax, ay)):
+            continue
+
+        survivors = [o for o in rest if o not in dropped]
+        candidates.append((misfit(survivors, kept[0], sigma), kept,
+                           [observations[i]] + dropped))
+
+    points = [kept[0] for _, kept, _ in candidates]
+    spread = max((math.dist(a, b) for a in points for b in points), default=0.0)
+
+    if not candidates or spread > ambiguity:
+        return None, list(observations)
+
+    # fewest ranges thrown away first: fewer survivors always fit better
+    _, kept, dropped = min(candidates, key=lambda c: (len(c[2]), c[0]))
+
+    return kept, dropped
+
+
+@dataclass(frozen=True)
+class Settings:
+    reject_outliers: bool = True
+    # s: ranges older than this are dropped from a fix. A robot moving while
+    # the anchors are ranged in turn smears the fix by speed * max_age, so
+    # keep it just over one round of anchors
+    max_age: float = 0.5
+    # m: two ways of dropping a range that fit as well as each other and land
+    # further apart than this give no fix. A few sigma of the fix
+    ambiguity: float = 0.15
+    # s: the last fix seeds the next solve while it is this recent
+    guess_age: float = 1.0
+
+
+# what the node does with each range, without the node, so a recorded run can
+# be replayed through it (sim/replay.py). Times are seconds
+class Fixer:
+    def __init__(self, sigma, settings=Settings()):
+        self.sigma = sigma
+        self.settings = settings
+        self.latest = {}
+        self.guess = None
+        self.guessed = None
+
+    # (result, dropped, fresh): result is ((x, y), covariance) or None, and
+    # dropped names the anchors left out of it, or all of them when there was
+    # no fix. Nothing to say until enough anchors have answered
+    def add(self, frame, anchor, r, t):
+        self.latest[frame] = (anchor, r, t)
+        fresh = {f: (a, rr) for f, (a, rr, heard) in self.latest.items()
+                 if t - heard <= self.settings.max_age}
+        observations = list(fresh.values())
+
+        if len(observations) < MIN_ANCHORS:
+            return None, [], fresh
+
+        recent = self.guessed is not None and t - self.guessed <= self.settings.guess_age
+        guess = self.guess if recent else tuple(
+            sum(a[i] for a, _ in observations) / len(observations)
+            for i in range(2))
+
+        if self.settings.reject_outliers:
+            result, dropped = consistent_fix(observations, guess, self.sigma,
+                                             self.settings.ambiguity)
+        else:
+            result, dropped = trilaterate(observations, guess, self.sigma), []
+
+        if result is not None:
+            self.guess, self.guessed = result[0], t
+
+        return result, [f for f, o in fresh.items() if o in dropped], fresh
+
+
+# an anchor is any frame a range names that resolves in map, looked up once
+class Anchors:
+    def __init__(self, node, map_frame, tf=None):
+        self.node = node
+        self.map_frame = map_frame
+        self.known = {}
+        self.tf = tf or Buffer()
+        self.listener = None if tf else TransformListener(self.tf, node)
+
+    def __call__(self, frame):
+        if frame not in self.known:
+            try:
+                t = self.tf.lookup_transform(self.map_frame, frame, Time())
+            except TransformException as e:
+                self.node.get_logger().warn(f"no {frame} in {self.map_frame}: {e}",
+                                            throttle_duration_sec=2.0)
+                return None
+
+            self.known[frame] = (t.transform.translation.x,
+                                 t.transform.translation.y)
+
+        return self.known[frame]
+
+
+class UwbFix(Node):
+    def __init__(self):
+        super().__init__("uwb_fix")
+
+        self.map_frame = self.declare_parameter("map_frame", "map").value
+        # the antenna-delay bias goes into the fix's sigma alongside the
+        # noise: it is constant per link, so it is not independent from fix to
+        # fix, but leaving it out tells the EKF the fix is better than it is
+        noise = self.declare_parameter("range_sigma", 0.05).value
+        bias = self.declare_parameter("range_bias", 0.0).value
+        settings = Settings(**{
+            f.name: self.declare_parameter(f.name, f.default).value
+            for f in fields(Settings)})
+        self.fixer = Fixer(math.hypot(noise, bias), settings)
+        self.anchor = Anchors(self, self.map_frame)
+
+        self.create_subscription(Range, "uwb/range", self.on_range,
+                                 qos_profile_sensor_data)
+        self.fix = self.create_publisher(PoseWithCovarianceStamped, "uwb/pose", 10)
+
+    def on_range(self, msg):
+        at = self.anchor(msg.header.frame_id)
+
+        if at is None:
+            return
+
+        t = Time.from_msg(msg.header.stamp).nanoseconds * 1e-9
+        result, dropped, _ = self.fixer.add(msg.header.frame_id, at, msg.range, t)
+        self.report(result, dropped)
+
+        if result is not None:
+            (x, y), cov = result
+            self.fix.publish(self.pose(msg.header.stamp, x, y, cov))
+
+    def report(self, result, dropped):
+        if not dropped:
+            return
+
+        names = ", ".join(dropped)
+        self.get_logger().info(
+            f"rejected {names}" if result else f"no fix from {names}",
+            throttle_duration_sec=1.0)
+
+    def pose(self, stamp, x, y, cov):
+        msg = PoseWithCovarianceStamped()
+        msg.header.stamp = stamp
+        msg.header.frame_id = self.map_frame
+        msg.pose.pose.position.x = x
+        msg.pose.pose.position.y = y
+        msg.pose.pose.orientation.w = 1.0
+
+        c = [0.0] * 36
+        c[0], c[1], c[6], c[7] = cov[0][0], cov[0][1], cov[1][0], cov[1][1]
+        for i in (14, 21, 28, 35):
+            c[i] = UNMEASURED
+        msg.pose.covariance = c
+
+        return msg
+
+
+def main():
+    rclpy.init()
+    rclpy.spin(UwbFix())
+
+
+if __name__ == "__main__":
+    main()

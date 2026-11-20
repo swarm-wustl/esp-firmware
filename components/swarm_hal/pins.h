@@ -7,40 +7,30 @@
 #include <utility>
 
 #include "arrays.h"
+#include "fixed_string.h"
 #include "resources.h"
 
 namespace HAL {
+using Strings::fixed_string;
+
 inline constexpr size_t kMaxLabel = 16;
 
-// one string type for both jobs: deduced to its exact length when used as a
-// template parameter, padded to kMaxLabel when stored in a NamedPin so every
-// entry of a PinSet has the same type
-template <size_t N = kMaxLabel> struct fixed_string {
-  char value[N]{};
-
-  constexpr fixed_string() = default;
-
-  template <size_t M>
-    requires(M <= N)
-  consteval fixed_string(const char (&text)[M]) {
-    for (size_t i = 0; i < M; ++i) {
-      value[i] = text[i];
-    }
-  }
-
-  constexpr std::string_view view() const { return value; }
-
-  constexpr bool operator==(const fixed_string &) const = default;
-};
-
-// template deduction guide since CTAD no longer applies
-// this helps the compiler know what N should be given M
-template <size_t M> fixed_string(const char (&)[M]) -> fixed_string<M>;
+// padded to kMaxLabel when stored in a NamedPin so every entry of a PinSet has
+// the same type
+using Label = fixed_string<kMaxLabel>;
 
 template <fixed_string S> constexpr auto operator""_p() { return S; }
 
 // the only way to name a pin. Its constructor is private to PinSet, so every
 // Pin in the program came out of a declaration that also published the claim
+//
+// TODO: that only holds by convention. operator[] works on any PinSet, so a
+// free-standing HAL::pins(...) that no declared peripheral publishes still
+// mints Pins whose claims never reach a system's conflict check. Close it by
+// minting from the key instead: a device publishes `pins` (or `pin_rows` for a
+// table), claims_of folds them in, and Swarm::pin<"cs">(Assembly<T>) becomes
+// the only friend of operator[]. Devices that need a pin after construction
+// keep their key as a [[no_unique_address]] member
 class Pin {
 public:
   constexpr int number() const { return number_; }
@@ -54,7 +44,7 @@ private:
 };
 
 struct NamedPin {
-  fixed_string<> label;
+  Label label;
   int number;
   Use use = Use::Exclusive;
 };
@@ -86,7 +76,7 @@ template <size_t N> struct PinSet {
 
 template <std::same_as<NamedPin>... Entries>
 consteval auto pins(Entries... es) {
-  const std::array<fixed_string<>, sizeof...(Entries)> labels{es.label...};
+  const std::array<Label, sizeof...(Entries)> labels{es.label...};
 
   // a repeated label would make the lookup silently resolve to whichever
   // entry came first while still claiming both pins

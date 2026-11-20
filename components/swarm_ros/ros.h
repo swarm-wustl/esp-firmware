@@ -10,19 +10,10 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "fixed_string.h"
+
 namespace ROS {
-template <size_t N> struct name {
-  char value[N]{};
-
-  consteval name(const char (&literal)[N]) {
-    for (size_t i = 0; i < N; ++i) {
-      value[i] = literal[i];
-    }
-  }
-
-  constexpr operator const char *() const { return value; }
-  static constexpr size_t size = N - 1;
-};
+template <size_t N> using name = Strings::fixed_string<N>;
 
 template <typename Msg> struct message;
 

@@ -1,0 +1,394 @@
+#include <chrono>
+#include <cmath>
+#include <memory>
+#include <numbers>
+#include <optional>
+#include <random>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/transform_stamped.hpp>
+#include <geometry_msgs/msg/twist.hpp>
+#include <geometry_msgs/msg/twist_with_covariance_stamped.hpp>
+#include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/range.hpp>
+#include <std_msgs/msg/float64.hpp>
+#include <tf2/exceptions.h>
+#include <tf2_msgs/msg/tf_message.hpp>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
+
+#include "encoder.h"
+#include "robot.h"
+#include "sdkconfig.h"
+#include "watchdog.h"
+#include "world.h"
+
+using geometry_msgs::msg::PoseStamped;
+using geometry_msgs::msg::TransformStamped;
+using geometry_msgs::msg::Twist;
+using geometry_msgs::msg::TwistWithCovarianceStamped;
+using sensor_msgs::msg::Range;
+using std_msgs::msg::Float64;
+using tf2_msgs::msg::TFMessage;
+
+// HW::POLL_PERIOD_MS, which main.cpp keeps with the ranging task
+constexpr std::chrono::milliseconds RANGE_PERIOD{100};
+
+// the one frame every robot shares, and the one the anchors are placed in. The
+// world is simulated in it; each robot's odom starts wherever it was put down
+constexpr char MAP_FRAME[] = "map";
+
+World::Pose pose_from(const std::vector<double> &xyt) {
+  return {xyt.at(0), xyt.at(1), xyt.at(2)};
+}
+
+class SimBase : public rclcpp::Node {
+public:
+  SimBase()
+      : Node(Robot::NODE, CONFIG_SWARM_ROS_NAMESPACE),
+        slip_model_(declare_slip()),
+        slip_{slip_model_.left.mean, slip_model_.right.mean},
+        time_constant_(declare_parameter("time_constant", 0.08)),
+        gyro_noise_(declare_parameter("gyro_noise", 0.005)),
+        // the sim hands the yaw rate straight to Robot::drive, past the
+        // board's at-rest calibration, so the mean is what calibration leaves
+        // and the wander is the bias creeping with temperature after it
+        gyro_bias_model_{
+            .mean = declare_parameter("gyro_bias", 0.002),
+            .sigma = declare_parameter("gyro_bias_drift", 0.002),
+            .correlation_time = declare_parameter("gyro_bias_time", 60.0)},
+        gyro_bias_(gyro_bias_model_.mean),
+        imu_(declare_parameter("imu", true)),
+        // the board's kTwistCovariance is a placeholder until it is measured.
+        // The sim knows its own noise, so by default it says so, which is
+        // what lets a filter tell a bias from the noise around it
+        true_covariance_(declare_parameter("true_covariance", true)),
+        anchors_(declare_parameter("anchors", std::vector<std::string>{})),
+        seed_(declare_parameter("seed", 0)),
+        range_errors_{
+            .noise = declare_parameter("range_noise", 0.05),
+            .dropout = declare_parameter("range_dropout", 0.05)},
+        blockage_{.fraction = declare_parameter("nlos_fraction", 0.05),
+                  .duration = declare_parameter("nlos_duration", 2.0),
+                  .excess = declare_parameter("nlos_excess", 0.3)},
+        world_(World::initial(
+            declare_parameter("motor_mismatch", 0.05),
+            pose_from(declare_parameter("start",
+                                        std::vector<double>{0.0, 0.0, 0.0})))),
+        odom_frame_(frame(Robot::ODOM_FRAME)),
+        base_frame_(frame(Robot::BASE_FRAME)),
+        truth_frame_(frame("truth")) {
+    const double pattern = declare_parameter("antenna_pattern", 0.0);
+    radio_ = {.bias = gauss(range_rng_, declare_parameter("robot_bias", 0.03)),
+              .antenna = {pattern, phase(range_rng_)}};
+    hidden_ = declare_anchors(pattern);
+
+    cmd_vel_ = create_subscription<Twist>(
+        Robot::CMD_VEL_TOPIC, rclcpp::SensorDataQoS(),
+        [this](const Twist &msg) { newest_ = Robot::read_twist(msg); });
+
+    twist_pub_ = create_publisher<TwistWithCovarianceStamped>(
+        Robot::ODOM_TOPIC, rclcpp::SensorDataQoS());
+    range_pub_ =
+        create_publisher<Range>(Robot::UWB_TOPIC, rclcpp::SensorDataQoS());
+    truth_pub_ = create_publisher<PoseStamped>("sim/truth", 10);
+    odom_pub_ = create_publisher<PoseStamped>("sim/odom", 10);
+    gyro_bias_pub_ = create_publisher<Float64>("sim/gyro_bias", 10);
+    slip_pub_ = create_publisher<Float64>("sim/slip", 10);
+    tf_pub_ = create_publisher<TFMessage>("/tf", 100);
+
+    control_timer_ = create_wall_timer(
+        std::chrono::milliseconds(Robot::DRIVE_PERIOD_MS), [this] { step(); });
+    pose_timer_ =
+        create_wall_timer(std::chrono::milliseconds(Robot::ODOMETRY_PERIOD_MS),
+                          [this] { publish_odometry(); });
+    range_timer_ = create_wall_timer(RANGE_PERIOD, [this] { publish_range(); });
+  }
+
+private:
+  // the motion task's pipeline from main.cpp, against World instead of GPIO
+  // and PCNT: watched cmd_vel, inverse kinematics, Robot::drive, motors.run
+  void step() {
+    feed_ = Watchdog::observe(feed_, std::exchange(newest_, std::nullopt),
+                              {.safe = Drive::Twist{},
+                               .timeout_ms = Robot::CMD_VEL_TIMEOUT_MS,
+                               .period_ms = Robot::DRIVE_PERIOD_MS});
+
+    const auto targets = Drive::inverse_kinematics<Robot::STYLE>(feed_.value);
+    const auto [next, frame] = Robot::drive<World::ENCODER>(
+        base_, targets, advance(World::counts(world_)), gyro());
+    base_ = next;
+
+    slip_ = World::drift(slip_, {gauss(motion_rng_, 1.0), gauss(motion_rng_, 1.0)},
+                         slip_model_, Robot::CONTROL.period);
+    gyro_bias_ = World::wander(gyro_bias_model_, gyro_bias_,
+                               gauss(motion_rng_, 1.0), Robot::CONTROL.period);
+    world_ = World::step(world_, frame, slip_,
+                         time_constant_, Robot::CONTROL.period);
+
+    publish_truth();
+  }
+
+  std::array<Encoder::Reading, World::N>
+  advance(std::array<Encoder::Reading, World::N> counts) {
+    for (size_t i = 0; i < counts.size(); ++i) {
+      counts[i].counts = trackers_[i].advance(counts[i].counts);
+    }
+
+    return counts;
+  }
+
+  // every draw comes from the one seed, so a run can be repeated. Each
+  // stream is keyed by what it belongs to: an anchor's antenna delay is the
+  // anchor's, so every robot process must draw the same one, while a robot's
+  // own noise must differ from its neighbours'. Motion and ranging draw from
+  // separate engines because their timers interleave differently run to run
+  std::mt19937 stream(const std::string &key) const {
+    std::seed_seq seq{static_cast<uint64_t>(seed_),
+                      std::hash<std::string>{}(key)};
+
+    return std::mt19937{seq};
+  }
+
+  // what an anchor is that its TF frame doesn't say: the frame is where it
+  // was surveyed, and the survey is off by a few centimetres
+  struct Hidden {
+    double dx;
+    double dy;
+    World::Radio radio;
+  };
+
+  // the bias is drawn first, so a seed keeps the anchor biases it had before
+  // the rest was modelled
+  std::unordered_map<std::string, Hidden> declare_anchors(double pattern) {
+    const double sigma = declare_parameter("anchor_bias", 0.03);
+    const double survey = declare_parameter("anchor_survey", 0.0);
+    std::unordered_map<std::string, Hidden> out;
+
+    for (const auto &anchor : anchors_) {
+      auto gen = stream(anchor);
+      const double bias = gauss(gen, sigma);
+      const double dx = gauss(gen, survey);
+      const double dy = gauss(gen, survey);
+      out[anchor] = {dx, dy, {bias, {pattern, phase(gen)}}};
+    }
+
+    return out;
+  }
+
+  static double phase(std::mt19937 &gen) {
+    return std::uniform_real_distribution<double>{-std::numbers::pi,
+                                                  std::numbers::pi}(gen);
+  }
+
+  World::SlipModel declare_slip() {
+    const double sigma = declare_parameter("slip", 0.03);
+    const double time = declare_parameter("slip_time", 3.0);
+
+    // a negative mean is ground lost under the wheel. The right wheel
+    // losing more is the slow pull a real floor gives odometry
+    return {.left = {declare_parameter("slip_mean_left", -0.02), sigma, time},
+            .right = {declare_parameter("slip_mean_right", -0.03), sigma,
+                      time}};
+  }
+
+  // an empty mailbox -- no IMU, bus down -- is the firmware's encoder fallback
+  std::optional<double> gyro() {
+    if (!imu_) {
+      return std::nullopt;
+    }
+
+    return world_.yaw_rate + gyro_bias_ + gauss(motion_rng_, gyro_noise_);
+  }
+
+  static double uniform(std::mt19937 &gen) {
+    return std::uniform_real_distribution<double>{}(gen);
+  }
+
+  static double gauss(std::mt19937 &gen, double sigma) {
+    return sigma > 0.0 ? std::normal_distribution<double>{0.0, sigma}(gen)
+                       : 0.0;
+  }
+
+  // the odometry task from main.cpp. sim/odom is extra: the pose the board
+  // integrates but no longer publishes, to set against sim/truth
+  void publish_odometry() {
+    const auto pose = base_.pose;
+    const auto previous = std::exchange(last_pose_, pose);
+    const auto stamp = now();
+
+    if (previous) {
+      TwistWithCovarianceStamped msg;
+      msg.header.stamp = stamp;
+      msg.header.frame_id = base_frame_;
+      Robot::fill_twist(
+          msg, Odometry::twist_between(*previous, pose,
+                                       Robot::ODOMETRY_PERIOD_MS / 1000.0));
+      if (true_covariance_) {
+        const auto noise = World::twist_noise(
+            imu_ ? std::optional{gyro_noise_} : std::nullopt,
+            Robot::ODOMETRY_PERIOD_MS / 1000.0, Robot::CONTROL.period);
+        msg.twist.covariance[0] = noise.vx;
+        msg.twist.covariance[7] = noise.vy;
+        msg.twist.covariance[35] = noise.wz;
+      }
+      twist_pub_->publish(msg);
+    }
+
+    odom_pub_->publish(
+        pose_stamped(odom_frame_, pose.x, pose.y, pose.theta, stamp));
+    publish_biases();
+  }
+
+  // what a global filter that carries the biases in its state should find.
+  // Slip as one number is the part of it that scales forward speed, which is
+  // all a robot whose heading comes from the gyro can see of it
+  void publish_biases() {
+    gyro_bias_pub_->publish(Float64{}.set__data(imu_ ? gyro_bias_ : 0.0));
+    slip_pub_->publish(Float64{}.set__data(
+        (World::ground(slip_.left) + World::ground(slip_.right)) / 2.0 - 1.0));
+  }
+
+  // one anchor per period, in turn, the way one radio has to range them.
+  // frame_id names the anchor rather than the robot's antenna: Range has no
+  // other field to say which peer answered, and the anchor's frame is where
+  // the fix node looks up its position
+  void publish_range() {
+    if (anchors_.empty()) {
+      return;
+    }
+
+    const auto &anchor = anchors_[next_anchor_++ % anchors_.size()];
+    geometry_msgs::msg::Vector3 at;
+
+    try {
+      at = tf_.lookupTransform(MAP_FRAME, anchor, tf2::TimePointZero)
+               .transform.translation;
+    } catch (const tf2::TransformException &e) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "no %s: %s",
+                           anchor.c_str(), e.what());
+      return;
+    }
+
+    const auto &hidden = hidden_.at(anchor);
+    const World::Anchor truth{at.x + hidden.dx, at.y + hidden.dy, hidden.radio};
+
+    // each link is ranged once a round, so that is the chain's step
+    const double round =
+        std::chrono::duration<double>(RANGE_PERIOD).count() * anchors_.size();
+    auto &path = paths_[anchor];
+    path = World::obstruct(path, blockage_, round, uniform(range_rng_),
+                           std::exponential_distribution<double>{1.0}(range_rng_));
+
+    const auto measured =
+        World::range(World::distance(world_.pose, truth),
+                     World::link_delay(world_.pose, radio_, truth), path,
+                     range_errors_,
+                     {.noise = gauss(range_rng_, 1.0), .dropout = uniform(range_rng_)});
+
+    if (!measured) {
+      return;
+    }
+
+    Range msg;
+    msg.header.stamp = now();
+    msg.header.frame_id = anchor;
+    Robot::fill_range(msg, *measured);
+    range_pub_->publish(msg);
+  }
+
+  // sim-only, like sim/truth: the EKF will own odom -> base_link, so this
+  // frame must not be base_link
+  void publish_truth() {
+    const auto truth = pose_stamped(MAP_FRAME, world_.pose.x, world_.pose.y,
+                                    world_.pose.theta, now());
+    truth_pub_->publish(truth);
+
+    TransformStamped transform;
+    transform.header = truth.header;
+    transform.child_frame_id = truth_frame_;
+    transform.transform.translation.x = world_.pose.x;
+    transform.transform.translation.y = world_.pose.y;
+    transform.transform.rotation = truth.pose.orientation;
+
+    TFMessage tf;
+    tf.transforms.push_back(transform);
+    tf_pub_->publish(tf);
+  }
+
+  // Robot::frame_in at runtime: one binary serves every namespace, so the
+  // sim can't fix its frames at compile time the way the board does
+  std::string frame(const char *name) const {
+    const std::string ns = std::string(get_namespace()).substr(1);
+
+    return ns.empty() ? name : ns + "/" + name;
+  }
+
+  static PoseStamped pose_stamped(const std::string &frame, double x, double y,
+                                  double theta, const rclcpp::Time &stamp) {
+    const auto [z, w] = Odometry::heading(theta);
+
+    PoseStamped msg;
+    msg.header.stamp = stamp;
+    msg.header.frame_id = frame;
+    msg.pose.position.x = x;
+    msg.pose.position.y = y;
+    msg.pose.orientation.z = z;
+    msg.pose.orientation.w = w;
+
+    return msg;
+  }
+
+  World::SlipModel slip_model_;
+  World::Slip slip_;
+  double time_constant_;
+  double gyro_noise_;
+  World::GaussMarkov gyro_bias_model_;
+  double gyro_bias_;
+  bool imu_;
+  bool true_covariance_;
+  std::vector<std::string> anchors_;
+  int64_t seed_;
+  size_t next_anchor_ = 0;
+  World::RangeErrors range_errors_;
+  World::Blockage blockage_;
+  std::unordered_map<std::string, World::Path> paths_;
+  World::Radio radio_{};
+  std::unordered_map<std::string, Hidden> hidden_;
+
+  World::State world_;
+  Base::State<Robot::STYLE> base_{};
+  std::array<Encoder::Tracker, World::N> trackers_{};
+  Watchdog::Feed<Drive::Twist> feed_{Drive::Twist{}, 0};
+  std::optional<Drive::Twist> newest_;
+  std::optional<Odometry::Pose> last_pose_;
+  std::string odom_frame_;
+  std::string base_frame_;
+  std::string truth_frame_;
+  std::mt19937 motion_rng_{stream(frame("motion"))};
+  std::mt19937 range_rng_{stream(frame("range"))};
+  tf2_ros::Buffer tf_{get_clock()};
+  tf2_ros::TransformListener tf_listener_{tf_};
+
+  rclcpp::Subscription<Twist>::SharedPtr cmd_vel_;
+  rclcpp::Publisher<TwistWithCovarianceStamped>::SharedPtr twist_pub_;
+  rclcpp::Publisher<Range>::SharedPtr range_pub_;
+  rclcpp::Publisher<PoseStamped>::SharedPtr truth_pub_;
+  rclcpp::Publisher<PoseStamped>::SharedPtr odom_pub_;
+  rclcpp::Publisher<Float64>::SharedPtr gyro_bias_pub_;
+  rclcpp::Publisher<Float64>::SharedPtr slip_pub_;
+  rclcpp::Publisher<TFMessage>::SharedPtr tf_pub_;
+  rclcpp::TimerBase::SharedPtr control_timer_;
+  rclcpp::TimerBase::SharedPtr pose_timer_;
+  rclcpp::TimerBase::SharedPtr range_timer_;
+};
+
+int main(int argc, char **argv) {
+  rclcpp::init(argc, argv);
+  rclcpp::spin(std::make_shared<SimBase>());
+  rclcpp::shutdown();
+}

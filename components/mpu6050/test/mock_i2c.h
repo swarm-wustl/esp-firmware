@@ -29,7 +29,7 @@ struct Transcript {
 struct MockBus {
   static constexpr std::array<HAL::Claim, 0> claims{};
 
-  explicit MockBus(Swarm::Assembly) {}
+  explicit MockBus(Swarm::Assembly<MockBus>) {}
 
   MockBus(const MockBus &) = delete;
   void operator=(const MockBus &) = delete;
@@ -41,7 +41,7 @@ class MockI2C {
 public:
   static constexpr std::array<HAL::Claim, 0> claims{};
 
-  MockI2C(Swarm::Assembly, MockBus &bus, uint8_t address)
+  MockI2C(Swarm::Assembly<MockI2C>, MockBus &bus, uint8_t address)
       : transcript_{&bus.transcript}, address_{address} {}
 
   std::expected<void, HAL::I2cError> write(std::span<const std::byte> tx) {
@@ -84,7 +84,7 @@ class MockGPIO {
 public:
   static constexpr std::array<HAL::Claim, 0> claims{};
 
-  explicit MockGPIO(Swarm::Assembly) {}
+  explicit MockGPIO(Swarm::Assembly<MockGPIO>) {}
 
   void set_direction(HAL::Pin, HAL::PinMode) {}
   void set_level(HAL::Pin, HAL::Voltage) {}

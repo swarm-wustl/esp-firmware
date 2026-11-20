@@ -16,9 +16,6 @@
 #include "resources.h"
 
 namespace Swarm {
-template <typename... Decls>
-concept no_resource_conflicts = HAL::no_conflicts(HAL::claims_of<Decls...>());
-
 // the relation between an independently declared geometry and an
 // independently declared actuator: can this driver serve this style?
 template <typename Driver, Drive::Style S>
@@ -39,23 +36,26 @@ struct needs_of<T> {
   using type = typename T::needs;
 };
 
-template <HAL::Claiming... Peripherals> struct system_impl {
+template <HAL::Claiming... Peripherals>
+  requires no_resource_conflicts<Peripherals...>
+struct system_impl {
   template <typename T>
   static constexpr bool declared = (std::same_as<T, Peripherals> || ...);
 
   // This method ensures only things declared in the system at comptime
-  // can be created at runtime. We also pass in the Assembly{} tag/passkey
-  // so that any class opting in can include Assembly in their ctor,
+  // can be created at runtime. We also pass in the Assembly<T>{} tag/passkey
+  // so that any class opting in can include Assembly<T> in their ctor,
   // which prevents said class from being made outside of this method.
   //
   // This is better than friendship because the passkey can be passed along
   // to sub-classes (e.g., DWM making GPIO and SPI), doesn't require explicit
   // friend declarations for every new subscriber, works with
-  // emplace/factories/etc. The passkey is transferable!
+  // emplace/factories/etc. The passkey is transferable, but only to what the
+  // holder lists in its owns<...>
   template <typename T, typename... Args>
     requires declared<T>
   static T make(Args &&...args) {
-    return T{Assembly{}, std::forward<Args>(args)...};
+    return T{Assembly<T>{}, std::forward<Args>(args)...};
   }
 
   template <typename T> static constexpr size_t index_of() {
@@ -102,11 +102,12 @@ template <HAL::Claiming... Peripherals> struct system_impl {
 private:
   template <typename T, typename... Needs>
   static void emplace_needing(Instances &into, needs<Needs...>) {
+    // Topological sort for peripheral needs
     static_assert(((index_of<Needs>() < index_of<T>()) && ...),
                   "a peripheral must be listed after the peripherals it needs");
 
     std::get<std::optional<T>>(into.store_)
-        .emplace(Assembly{}, into.template get<Needs>()...);
+        .emplace(Assembly<T>{}, into.template get<Needs>()...);
   }
 
   template <typename T> static void emplace(Instances &into) {
@@ -115,11 +116,10 @@ private:
 };
 
 template <HAL::Claiming... Peripherals>
-  requires no_resource_conflicts<Peripherals...>
 using system = system_impl<Peripherals...>;
 
 template <Drive::Style S, typename Driver, HAL::Claiming... Peripherals>
-  requires drives<Driver, S> && no_resource_conflicts<Driver, Peripherals...>
+  requires drives<Driver, S>
 struct chassis : system_impl<Driver, Peripherals...> {
   static constexpr Drive::Style style = S;
 

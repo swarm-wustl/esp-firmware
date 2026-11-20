@@ -8,7 +8,10 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 IMAGE="swarm-idf:latest"
 NAME="swarm-clangd"
 INDEX_VOLUME="swarm-clangd-index"
-QUERY_DRIVER='/opt/esp/tools/**/xtensa-esp32-elf*'
+QUERY_DRIVER='/opt/esp/tools/**/xtensa-esp32-elf*,/usr/bin/g++*'
+# sim/ compiles against ROS humble, which only the sim image has; scripts/sim.sh
+# builds it, and without it sim/ just goes unindexed
+SIM_IMAGE="swarm-sim:humble"
 
 die() {
   echo "clangd.sh: $*" >&2
@@ -26,9 +29,16 @@ up() {
   docker image inspect "$IMAGE" >/dev/null 2>&1 ||
     die "image $IMAGE missing -- run: scripts/shell.sh build"
   docker rm -f "$NAME" >/dev/null 2>&1 || true
+
+  local ros=()
+  if docker image inspect "$SIM_IMAGE" >/dev/null 2>&1; then
+    ros=(--mount "type=image,source=$SIM_IMAGE,target=/opt/ros/humble,image-subpath=opt/ros/humble")
+  fi
+
   docker run -d --name "$NAME" \
     -v "$REPO:/workspace" \
     -v "$INDEX_VOLUME:/root/.cache/clangd" \
+    "${ros[@]}" \
     -w /workspace \
     --entrypoint sleep \
     "$IMAGE" infinity >/dev/null

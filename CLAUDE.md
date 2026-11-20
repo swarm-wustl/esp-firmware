@@ -87,9 +87,13 @@ pin rows -- no algorithm is written or specialised. `Swarm::chassis` pairs a
 geometry with a driver and only exists if they fit; `HAL::Claim` lets every
 peripheral declare the pins and channels it takes, so a collision between two
 unrelated subsystems is a build error rather than a mystery on the bench. A
-device owns its sub-devices and folds in their claims (`DWM` holds its SPI,
-`L298N::MotorDriver` its PWM), so the config sees the whole tree from the two
-types it is handed.
+device lists its sub-devices in `using owns = Swarm::owns<...>` (`DWM` its SPI
+and GPIO, `L298N::MotorDriver` its GPIO and PWM), and that one list does two
+jobs: `Swarm::claims_of` walks it, so the config sees the whole tree from the
+types it is handed, and it is the only thing `Swarm::make<Sub>(key)` will build.
+Every key is `Swarm::Assembly<T>`, minted by a system that declared `T` or by
+the key of an owner that lists it, so a sub-device the owner forgot to list
+doesn't compile, and neither does handing it the owner's own key.
 
 ## The UMC
 
@@ -116,7 +120,24 @@ ros2 topic pub -1 /<CONFIG_SWARM_ROS_NAMESPACE>/umc/front std_msgs/Float32 '{dat
 That is both subscriptions libmicroros was built for
 (`RMW_UXRCE_MAX_SUBSCRIPTIONS 2`); a third needs `colcon.meta` raised and
 libmicroros rebuilt. Publishers are full the same way: `uwb/range` and
-`odom/pose` (`RMW_UXRCE_MAX_PUBLISHERS 2`).
+`odom/twist` (`RMW_UXRCE_MAX_PUBLISHERS 2`).
+
+## Odometry
+
+The board publishes velocity, not pose: `geometry_msgs/TwistWithCovarianceStamped`
+on `odom/twist`, frame `base_link`, at 5 Hz. Velocity error doesn't grow with
+distance, so a constant covariance (`Robot::kTwistCovariance`) is honest, and
+the EKF does the integrating -- its `odometry/filtered` is the
+`nav_msgs/Odometry` everything downstream consumes. Two constraints shaped it:
+
+- each message is the *mean* twist over the period, `Odometry::twist_between`
+  (the exact inverse of `Odometry::integrate`) applied to consecutive poses, so
+  an EKF integrating at 5 Hz retraces what the control loop integrated at 50 Hz
+  rather than extrapolating one sample
+- `nav_msgs/Odometry` is ~720 octets and the XRCE UDP MTU is 512; a best-effort
+  stream cannot fragment, so it would fail at `rcl_publish`. The twist message
+  is ~364. Check any new streamed type against that limit -- the sim, on full
+  DDS, will never show it
 
 ## The cmd_vel watchdog
 
@@ -193,6 +214,171 @@ TODO: the bus is declared on placeholder pins. NEWMCPCBV2 routes the UMC's
 SDA/SCL to pins the motors and the Makerfabs carrier already hold. The imu task
 in `main.cpp` is spawned anyway, but it will likely sit retrying `who_am_i`
 until the real pair goes in.
+
+## The sim
+
+`scripts/sim.sh [ns...]` runs one simulated base per namespace plus a Foxglove
+bridge on `ws://localhost:8765` (Lichtblick works). `sim/sim_base.cpp` is an
+rclcpp node that runs the firmware's own motion loop -- `Watchdog::observe`,
+`Drive::inverse_kinematics`, `Robot::drive` -- against `sim/world.h`, a plant
+with motor lag, motor mismatch, wheel slip and a gyro. Slip is correlated
+(`World::drift`, a Gauss-Markov process around a per-wheel mean), not fresh
+noise each step: white slip cancels as it integrates and leaves odometry
+nearly perfect, so UWB would have nothing to correct. Only the plant is new
+code; its kinematics are written out independently on purpose, so a sign error
+shared by controller and world can't cancel.
+
+What makes that work is `main/src/robot.h`: everything about the robot that
+isn't wiring (style, control constants, periods, topic and frame names,
+covariance, the message helpers). `main.cpp` and the sim both include it, so
+it must stay free of IDF and ROS headers. The message helpers are templates
+because the micro-ROS C structs and the rclcpp classes share field names. A
+constant the sim needs belongs there, not restated in `sim/`.
+
+- the sim builds `sdkconfig.h` from `sdkconfig` itself (`sim/CMakeLists.txt`),
+  so wheel geometry and the default namespace match the board's
+- the image is humble to match the agent, with g++ 13 from the toolchain PPA:
+  `swarm_hal` needs `std::unreachable` and `ranges::fold_left`, which jammy's
+  g++ 11 lacks
+- the sim is on `ROS_DOMAIN_ID=42` (`SIM_DOMAIN`): DDS discovery crosses
+  containers, so on domain 0 a simulated `swarm_1` publishes over the real one
+- `sim/truth` (in `map`) and the `<ns>/truth` TF frame are ground truth,
+  sim-only, and `sim/odom` (in `<ns>/odom`) is the pose the firmware
+  integrates but doesn't publish
+- each robot also runs robot_localization's local EKF (`sim/ekf.yaml`):
+  `odom/twist` in, `odometry/filtered` and `odom -> base_link` out. It is the
+  filter meant for the real board too, and it subscribes best-effort, which
+  is what makes it compatible with micro-ROS's publisher
+- the local filter sets `process_noise_covariance` from what the twist can't
+  see (slip, gyro bias); robot_localization's defaults say nothing about the
+  robot
+- and a global EKF, `host/global_ekf.py`: the same twist plus UWB,
+  `odometry/global` and `map -> <ns>/odom` out. UWB's jumps land in that link,
+  so `odom -> base_link` stays smooth. It is our own rather than
+  robot_localization's because its state carries the two biases, gyro and
+  slip, beside x, y, theta: each a Gauss-Markov state that the fixes correct
+  through the cross-covariance and that comes off the twist, where process
+  noise could only widen the covariance by root t. Slip is one number, a
+  scale on forward speed, because heading comes from the gyro, which turns
+  with the robot whatever its wheels do. `predict`, `update` and
+  `update_range` are the pure part
+- it is tightly coupled (`coupling`): each `uwb/range` is its own measurement
+  against the distance the state predicts to that anchor, so a round with
+  fewer than three good anchors still counts, each range lands at its own
+  time, and a blocked anchor stands out against the track rather than against
+  the other anchors. The gate is one-sided (`long_gate` 2 sigma, `short_gate`
+  4), since a blocked path only reads long. Each anchor's antenna delay, plus
+  the robot's own, which no state could tell apart from it, is a state of its
+  own, appended when the anchor is first heard: folded into sigma, a constant
+  error posed as white and pushed the track around. `uwb_fix`'s positions are
+  kept only to relock. In replay over three recorded seeds, tight beat loose
+  in normal driving on every one; live on seed 123 it took the global error
+  from 8 to 3.8 cm rms and from about 20 to 8 cm worst. `coupling:=loose`
+  fuses `uwb/pose` instead. A measurement waits for the twist whose period it falls in and is fused in
+  time order inside it: each twist is the mean over the period it closes, and
+  carrying the previous one forward to a fix instead kicks the heading at every
+  start and stop of a turn, which the filter took for gyro bias. After
+  `relock_after` seconds of nothing but gated measurements the filter takes
+  the next fix whole.
+- at rest the gyro reads its own bias, so whenever two twists running show
+  the encoders still and the gyro turning slower than any spin go_to_goal
+  makes (`zero_rate`), the filter takes the yaw rate as a measurement of the
+  bias. It is far more direct than what the track says about heading, which
+  is all the filter has while driving, but it only helps a robot that stops:
+  `check --pause S` stands at each goal so a recorded run has stops in it
+  The sim publishes the true values on `sim/gyro_bias` and `sim/slip` to set
+  against `global_ekf/gyro_bias` and `global_ekf/slip`
+- the biases are only as learnable as the twist's covariance is honest.
+  `kTwistCovariance` is a placeholder until the bench measures it, and gives
+  the yaw rate 0.05 rad/s of noise, ten times the sim's gyro: a 0.003 rad/s
+  bias hides in that. So the sim by default (`true_covariance`) reports its
+  own noise instead, `World::twist_noise`: gyro noise averaged over the
+  period's control steps, and encoder rounding at its two ends. Slip is left
+  out of it on purpose -- it is the filter's to learn. With the placeholders,
+  a 30 s outage cost about twice the error. Heading in `map` is the integrated yaw rate, pulled straight
+  by the fixes only while the robot moves
+- anchors are declared once, in `sim.sh`'s `ANCHORS`, as static `map ->
+  anchor_N` frames. The sim ranges them in turn, one per period, and puts the
+  anchor's frame in the `Range`'s `header.frame_id`, since `Range` has no other
+  way to say which peer answered. TODO: the board still stamps its own
+  `uwb_link`, and DWM frames carry no address to range a chosen anchor with,
+  so `uwb_fix` drops the board's ranges until both change
+- frames are per robot: `<ns>/odom`, `<ns>/base_link`, `<ns>/uwb_link`, with
+  only `map` shared. `Robot::frame_in` joins them at compile time on the board,
+  from `CONFIG_SWARM_ROS_NAMESPACE`; the sim, one binary for every namespace,
+  joins the same suffixes at runtime, and `sim.sh` hands the EKF its frames as
+  `-p` overrides
+- the world is simulated in `map`. Robots are put down 0.5 m apart along y
+  (`start`), and the global EKF is handed that pose as `initial_state` -- a
+  real robot would have to estimate it
+- every draw the world makes comes from `SIM_SEED` (printed at startup),
+  split into streams keyed by what they belong to: per anchor, so every robot
+  process draws the same antenna delay, and per robot for motion and ranging,
+  kept apart because their timers interleave differently each run. The seed
+  fixes the noise, not the trajectory -- when go_to_goal's commands land is
+  wall-clock -- so a repeat matches in its totals, not leg by leg
+- `scripts/sim.sh check [ns...]` (`sim/check.py`) drives the running sim round
+  a fixed route and prints, per leg and over the whole run, how far each
+  estimate is from `sim/truth`: the global EKF, `map -> base_link`, dead
+  reckoning and heading. Compare changes on the same `SIM_SEED`, from a fresh
+  start; `--legs N` drives a shorter route
+- check also records what the filters were fed and the truth to
+  `build_sim/check.jsonl`, and `scripts/sim.sh replay` (`sim/replay.py`) reruns
+  `uwb_fix` and the global filter over it in about a second, through the
+  `Fixer` and `Filter` classes the nodes wrap -- the nodes only add ROS. Every
+  variant sees the same inputs, so a difference is the change, not the run:
+  `--set name=value` for any `Settings` field or `global_ekf.DEFAULTS` entry,
+  `--outage a:b` to drop fixes, `--twist-cov k` to scale the twist covariance.
+  It is open loop (the recorded trajectory, where live the estimate steers),
+  so a plant change, or a final number, still wants a live check
+- untested here: Sched timing, the micro-ROS session, the ESP32 drivers
+
+## Host nodes
+
+`host/` holds the nodes that run off the robot and only speak topics, so the
+same code drives the sim and the board. `host/go_to_goal.py` steers one robot
+to a point on `odometry/filtered`: goal on `goal` (the sim remaps it to the 3D
+panel's `/move_base_simple/goal`, so a click sends every robot), `cmd_vel` at
+10 Hz. The goal is moved into the odometry frame through TF, so it keeps
+working once `map -> odom` is a real correction. It stops with an explicit zero
+twist and goes quiet; the board's watchdog is the fallback, not the brake.
+`command()` is the pure control law, importable without a running graph.
+
+`host/uwb_fix.py` turns one robot's `uwb/range` into `uwb/pose`
+(`PoseWithCovarianceStamped` in `map`): what the global EKF relocks on, and
+what it fuses when loosely coupled. An anchor is whatever frame a range
+names, looked up in TF (`Anchors`, which the global EKF shares), so nothing
+restates the anchor positions. It solves once at least three anchors have answered within
+`max_age`, and the covariance comes from the fit's geometry, so anchors bunched
+to one side give an honestly wide fix. `trilaterate()` is the pure part.
+
+Ranges that disagree are dropped before the fix (`consistent_fix`): each anchor
+is left out in turn and the one whose absence leaves the best fit goes,
+provided it reads long, since non-line-of-sight only adds. Largest residual is
+the wrong rule -- least squares spreads one bad range over the rest. With
+three anchors left a set holding the bad range can fit as well as the clean
+one (in a square, a long corner fits like a short opposite corner), so when
+the possible drops land more than `ambiguity` apart there is no fix rather
+than a guess. Breaking that tie with the previous fix was tried: one wrong
+pick became the prior for the next, and the fix stayed wrong for the whole
+blockage. Fewest drops wins over lowest misfit, since fewer survivors always
+fit better. Three anchors that disagree give no fix at all.
+
+The sim's ranges carry what the DW1000 gets wrong (`World::range`): Gaussian
+noise, an antenna-delay bias per anchor (shared by every robot) and per robot, non-line-of-sight blockage, and dropped exchanges.
+The delay also follows each antenna's pattern (`World::link_delay`): one
+cosine harmonic of the angle the signal arrives from, at a phase of its own,
+in map for an anchor and in the robot's frame for the robot, so turning on
+the spot moves the range. And an anchor's TF frame is where it was surveyed,
+not where it is: the sim ranges from the frame plus a seeded offset
+(`anchor_survey`) the filters never see. Both are there so the filters'
+range model -- one constant per link -- is wrong the way it would be on the
+bench, rather than exactly right.
+Blockage is a two-state Markov chain per link (`World::obstruct`), so a blocked
+anchor reads long for seconds at a time with one held excess, as when someone
+stands in the way, rather than one range in twenty at random. All of it is set in `sim.sh`, which also hands `uwb_fix` the
+combined bias so the fix's covariance includes it. The numbers are guesses
+until the antenna delay is calibrated on the bench.
 
 ## DW1000 references
 

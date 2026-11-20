@@ -27,7 +27,7 @@ static HAL::SpiError from_esp_err(esp_err_t err) {
   }
 }
 
-SpiBus::SpiBus(Swarm::Assembly) : owns_bus_{true} {
+SpiBus::SpiBus(Swarm::Assembly<SpiBus>) : owns_bus_{true} {
   spi_bus_config_t config{
       .mosi_io_num = SPI_MOSI,
       .miso_io_num = SPI_MISO,
@@ -68,7 +68,7 @@ SpiBus &SpiBus::operator=(SpiBus &&other) {
 
 void SpiBus::swap(SpiBus &other) { std::swap(owns_bus_, other.owns_bus_); }
 
-SPI::SPI(Swarm::Assembly, SpiBus &, HAL::Pin cs) : cs_{cs.number()} {
+SPI::SPI(Swarm::Assembly<SPI>, SpiBus &, HAL::Pin cs) : cs_{cs.number()} {
   spi_device_interface_config_t dev_config{
       // Command and address bits are for specific command and address phases of
       // SPI
