@@ -10,6 +10,7 @@
 #include <span>
 #include <initializer_list>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -177,6 +178,28 @@ TEST_CASE("device id: four octets read little-endian", "[dwm_mock]") {
   TEST_ASSERT_EQUAL_UINT32(1, fixture.transcript.transfers.size());
   check_bytes(bytes({0x00}), fixture.transcript.transfers[0].tx);
   TEST_ASSERT_EQUAL_UINT32(4, fixture.transcript.transfers[0].rx);
+}
+
+TEST_CASE("timestamp: all 40 bits come back, low ones included",
+          "[dwm_mock]") {
+  Fixture fixture = Fixture::get();
+  fixture.transcript.read_response = bytes({0x01, 0x02, 0x03, 0x04, 0xFF});
+
+  const auto t = fixture.dwm.get_rx_timestamp();
+
+  TEST_ASSERT_TRUE(t.has_value());
+  TEST_ASSERT_EQUAL_HEX64(0xFF04030201, std::to_underlying(*t));
+  check_bytes(bytes({0x15}), fixture.transcript.transfers[0].tx);
+  TEST_ASSERT_EQUAL_UINT32(5, fixture.transcript.transfers[0].rx);
+}
+
+TEST_CASE("timestamp: a difference across the 40-bit wrap stays small",
+          "[dwm_mock]") {
+  using dw1000::Ticks;
+  using dw1000::Timestamp;
+
+  static_assert(Timestamp{0x30} - Timestamp{0x10} == Ticks{0x20});
+  static_assert(Timestamp{0x10} - Timestamp{0xFF'FFFF'FFF0} == Ticks{0x20});
 }
 
 TEST_CASE("device id: a failed transfer reaches the caller", "[dwm_mock]") {

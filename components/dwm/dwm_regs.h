@@ -2,10 +2,12 @@
 #define DWM_REGS_H
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
 #include <tuple>
+#include <utility>
 
 #include "registers.h"
 
@@ -141,8 +143,23 @@ using RxErrors = std::tuple<RXPHE, RXFCE, RXRFSL, RXRFTO, RXPTO, RXSFDTO>;
 using RXFLEN = Registers::field<"RXFLEN", uint8_t, 6, 0>;
 using RXFLE = Registers::field<"RXFLE", uint8_t, 9, 7>;
 
-using RX_STAMP = Registers::field<"RX_STAMP", uint64_t, 39, 0>;
-using TX_STAMP = Registers::field<"TX_STAMP", uint64_t, 39, 0>;
+// full 40-bit counter. do NOT drop the low bits: the sub-nanosecond flight
+// time that ranging measures lives in them (1 m ~= 213 of these ~15.65 ps
+// ticks, and the low 9 bits span ~8 ns). masking them zeroes the measurement.
+enum class Timestamp : uint64_t {};
+
+using RX_STAMP = Registers::field<"RX_STAMP", Timestamp, 39, 0>;
+using TX_STAMP = Registers::field<"TX_STAMP", Timestamp, 39, 0>;
+
+static_assert(RX_STAMP::mask == TX_STAMP::mask);
+
+using Ticks = std::chrono::duration<uint64_t, std::ratio<1, 63'897'600'000>>; // each bit = ~15.65 ps
+
+// the counter wraps every ~17 s, so a difference is taken mod 2^40
+constexpr Ticks operator-(Timestamp later, Timestamp earlier) {
+  return Ticks{(std::to_underlying(later) - std::to_underlying(earlier)) &
+               RX_STAMP::mask};
+}
 
 using TX_CHAN = Registers::field<"TX_CHAN", uint8_t, 3, 0>;
 using RX_CHAN = Registers::field<"RX_CHAN", uint8_t, 7, 4>;

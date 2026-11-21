@@ -10,8 +10,6 @@
 #include "system.h"
 #include <algorithm>
 #include <array>
-#include <bit>
-#include <chrono>
 #include <cstring>
 #include <expected>
 #include <span>
@@ -22,33 +20,9 @@
 
 // TODO: add noexcept to classes
 
-class DWMTimestamp {
-  // full 40-bit counter. do NOT drop the low bits: the sub-nanosecond flight
-  // time that ranging measures lives in them (1 m ~= 213 of these ~15.65 ps
-  // ticks, and the low 9 bits span ~8 ns). masking them zeroes the measurement.
-  static constexpr uint64_t DW1000_40BIT_MASK = 0xFF'FF'FF'FF'FFULL;
-
-public:
-  using Duration = std::chrono::duration<
-      uint64_t, std::ratio<1, 63'897'600'000>>; // each bit = ~15.65 ps
-
-  DWMTimestamp() = default;
-  DWMTimestamp(uint64_t raw_time) : raw_time_{raw_time & DW1000_40BIT_MASK} {}
-
-  Duration operator-(const DWMTimestamp &other) const {
-    return Duration{(raw_time_ - other.raw_time_) & DW1000_40BIT_MASK};
-  }
-
-private:
-  uint64_t raw_time_{};
-};
-
 template <HAL::GenericSPIController SPI, HAL::GenericGPIOController GPIO,
           auto Pins, typename Bus>
 class DWM {
-  static_assert(std::endian::native == std::endian::little,
-                "DWM1000 requires little-endian architecture");
-
 public:
   static constexpr auto pins = Pins;
 
@@ -124,16 +98,14 @@ public:
   }
 
   // valid only once LDEDONE is set for the corresponding reception
-  std::expected<DWMTimestamp, HAL::SpiError> get_rx_timestamp() {
-    return read<dw1000::Map::RX_TIME>().transform([](auto time) {
-      return DWMTimestamp{time.template get<dw1000::RX_STAMP>()};
-    });
+  std::expected<dw1000::Timestamp, HAL::SpiError> get_rx_timestamp() {
+    return read<dw1000::Map::RX_TIME>().transform(
+        [](auto time) { return time.template get<dw1000::RX_STAMP>(); });
   }
 
-  std::expected<DWMTimestamp, HAL::SpiError> get_tx_timestamp() {
-    return read<dw1000::Map::TX_TIME>().transform([](auto time) {
-      return DWMTimestamp{time.template get<dw1000::TX_STAMP>()};
-    });
+  std::expected<dw1000::Timestamp, HAL::SpiError> get_tx_timestamp() {
+    return read<dw1000::Map::TX_TIME>().transform(
+        [](auto time) { return time.template get<dw1000::TX_STAMP>(); });
   }
 
   template <Registers::at<dw1000::Address> R>
