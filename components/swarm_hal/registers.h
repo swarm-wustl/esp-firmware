@@ -44,12 +44,17 @@ template <FieldValue T> REGISTERS_INLINE constexpr uint64_t to_raw(T value) {
 
 // the name is what tells two fields apart: SLEEP and some other one-bit flag
 // at bit 6 of another register would otherwise be the same type
-template <fixed_string Name, FieldValue T, size_t Msb, size_t Lsb>
+//
+// a field's access only ever narrows its register's: a read-only status bit in
+// an otherwise write-one-to-clear register
+template <fixed_string Name, FieldValue T, size_t Msb, size_t Lsb,
+          Access A = Access::ReadWrite>
   requires(Msb >= Lsb && Msb < 64 && Msb - Lsb + 1 <= digits<T>())
 struct field {
   using type = T;
 
   static constexpr auto name = Name;
+  static constexpr Access access = A;
   static constexpr size_t width = Msb - Lsb + 1;
   static constexpr uint64_t mask =
       (width == 64 ? ~uint64_t{0} : (uint64_t{1} << width) - 1) << Lsb;
@@ -67,8 +72,8 @@ struct field {
 
 template <typename F> constexpr bool is_field = false;
 
-template <fixed_string Name, typename T, size_t Msb, size_t Lsb>
-constexpr bool is_field<field<Name, T, Msb, Lsb>> = true;
+template <fixed_string Name, typename T, size_t Msb, size_t Lsb, Access A>
+constexpr bool is_field<field<Name, T, Msb, Lsb, A>> = true;
 
 template <typename F>
 concept Field = is_field<F>;
@@ -115,7 +120,9 @@ using word_for = std::conditional_t<
 template <auto Address, Layout L, Field... Fs>
   requires describable<L, Fs...>
 struct reg {
-  using word_type = word_for<L.bytes>;
+  // only a word has one; a block is bytes all the way through
+  using word_type =
+      std::conditional_t<(L.bytes <= 8), word_for<L.bytes>, void>;
 
   using address_type = decltype(Address);
 
@@ -150,7 +157,9 @@ concept at = Register<R> && std::same_as<typename R::address_type, Address>;
 
 template <typename R, typename... Fs>
 concept writable_with = Word<R> && R::access != Access::ReadOnly &&
-                        (R::template holds<Fs> && ...) && disjoint<Fs...>();
+                        (R::template holds<Fs> && ...) &&
+                        ((Fs::access != Access::ReadOnly) && ...) &&
+                        disjoint<Fs...>();
 
 // a read-modify-write of a write-one-to-clear register writes back every bit
 // that was set, clearing events nobody asked to clear
@@ -236,6 +245,19 @@ REGISTERS_INLINE constexpr std::array<std::byte, R::bytes> encode(Fs... fs) {
   return to_bytes<R>(write_word<R>(fs...));
 }
 
+// one write, settled at compile time: what a configuration table is a list of.
+// It carries its register in its type, so a table entry is checked like any
+// other write
+template <Word R> struct assignment {
+  typename R::word_type word;
+};
+
+template <typename R, Field... Fs>
+  requires writable_with<R, Fs...>
+REGISTERS_INLINE constexpr assignment<R> set(Fs... fs) {
+  return {static_cast<typename R::word_type>(write_word<R>(fs...))};
+}
+
 // what a bus write sends: the device's own header -- a register number, an
 // SPI command -- followed by the value
 template <typename R, size_t H, Field... Fs>
@@ -243,6 +265,18 @@ template <typename R, size_t H, Field... Fs>
 REGISTERS_INLINE constexpr std::array<std::byte, H + R::bytes>
 frame(const std::array<std::byte, H> &header, Fs... fs) {
   return prefixed<R>(header, write_word<R>(fs...));
+}
+
+template <Word R, size_t H>
+REGISTERS_INLINE constexpr std::array<std::byte, H + R::bytes>
+frame(const std::array<std::byte, H> &header, assignment<R> a) {
+  return prefixed<R>(header, a.word);
+}
+
+template <Word R, size_t H>
+REGISTERS_INLINE constexpr std::array<std::byte, H + R::bytes>
+frame(const std::array<std::byte, H> &header, value<R> v) {
+  return prefixed<R>(header, v.word);
 }
 
 template <Register R>

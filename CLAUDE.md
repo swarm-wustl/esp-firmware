@@ -227,6 +227,15 @@ write<Map::PWR_MGMT_1>(SLEEP{false}, CLKSEL{Clock::PllGyroX});
   write sends; the header -- a register number, an SPI command -- is the
   driver's
 
+The DW1000 uses the same layer (`components/dwm/dwm_regs.h`): its address is
+`dw1000::Address{file, sub}`, from which `dw1000::header<A>()` builds the 1-3
+octet SPI command, and a field can be narrower than its register
+(`field<..., Access::ReadOnly>`, IRQS in write-one-to-clear SYS_STATUS). The
+tuning words the manual gives as bare numbers are one whole-width field each,
+and `DEFAULT_CONFIG` is a tuple of `Registers::set<R>(...)` -- each entry a
+checked write -- that `DWM::write_all` applies in order. `[dwm_mock]` pins
+every octet `configure()` sends.
+
 The helpers are `always_inline` and expand packs rather than loop: at `-Og`,
 the IDF default, neither happens on its own, and the encoding was left as real
 64-bit shifts. Each write's octet now folds to a constant.
@@ -468,7 +477,7 @@ patch applied yet.
 
 Tests live in `components/dwm/test/`, `components/mpu6050/test/`, `components/swarm_hal/test/` and `components/swarm_sched/test/` (tagged Unity `TEST_CASE`s) and split into two tiers, launched via `test/run.py` (which builds the app then hands off to `pytest-embedded`). Run from inside the container:
 
-- `./test/run.py host` — pure value-type, mock-bus and kinematics unit tests (`[dwm_data]`, `[dwm_mock]`, `[drive]`, `[motor]`, `[pid]`, `[odometry]`, `[control]`, `[watchdog]`, `[imu]`, `[mpu6050]`, `[sched]`), built for the `linux` target and run natively, no board
+- `./test/run.py host` — pure value-type, mock-bus and kinematics unit tests (`[registers]`, `[dwm_mock]`, `[drive]`, `[motor]`, `[pid]`, `[odometry]`, `[control]`, `[watchdog]`, `[imu]`, `[mpu6050]`, `[sched]`), built for the `linux` target and run natively, no board
 - `./test/run.py device` — on-device integration tests (`[dwm_reg]`, `[dwm]`) needing a real DW1000; pytest flashes and runs over serial
 - extra args pass through to pytest, e.g. `./test/run.py host -s`
 

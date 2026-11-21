@@ -20,6 +20,7 @@ using MODE = Registers::field<"MODE", Mode, 1, 0>;
 using LOW = Registers::field<"LOW", uint8_t, 7, 0>;
 using HIGH = Registers::field<"HIGH", uint8_t, 15, 8>;
 using DONE = Registers::field<"DONE", bool, 0, 0>;
+using PENDING = Registers::field<"PENDING", bool, 2, 2, Access::ReadOnly>;
 using ERROR = Registers::field<"ERROR", bool, 1, 1>;
 
 // shaped like SLEEP but a different field: the name is the identity
@@ -29,7 +30,7 @@ using POWER =
     Registers::reg<Addr::Power, {.reset = 0x40}, RESET, SLEEP, MODE>;
 using STATUS = Registers::reg<Addr::Status,
                               {.access = Access::WriteOneClear, .reset = 0x03},
-                              DONE, ERROR>;
+                              DONE, ERROR, PENDING>;
 using WIDE_LE = Registers::reg<Addr::Wide, {.bytes = 2}, LOW, HIGH>;
 using WIDE_BE =
     Registers::reg<Addr::Wide, {.bytes = 2, .endian = Endian::Big}, LOW, HIGH>;
@@ -43,11 +44,14 @@ template <typename R, typename... Fs>
 concept writes = requires(Fs... fs) { Registers::write_word<R>(fs...); };
 
 template <typename R, typename... Fs>
+concept sets = requires(Fs... fs) { Registers::set<R>(fs...); };
+
+template <typename R, typename... Fs>
 concept modifies =
     requires(Fs... fs) { Registers::modify_word<R>(uint64_t{}, fs...); };
 
 template <typename R, typename F>
-concept gets = requires(Registers::value<R> v) { v.template get<F>(); };
+concept reads = requires(Registers::value<R> v) { v.template get<F>(); };
 
 template <auto Address, Registers::Layout L, typename... Fs>
 concept describes = requires { typename Registers::reg<Address, L, Fs...>; };
@@ -127,6 +131,31 @@ TEST_CASE("registers: illegal writes don't compile", "[registers]") {
   TEST_ASSERT_TRUE(true);
 }
 
+TEST_CASE("registers: a read-only field can't be written, even in a writable "
+          "register",
+          "[registers]") {
+  static_assert(writes<STATUS, DONE, ERROR>);
+  static_assert(!writes<STATUS, PENDING>);
+  static_assert(!writes<STATUS, DONE, PENDING>);
+  static_assert(reads<STATUS, PENDING>);
+  TEST_ASSERT_TRUE(true);
+}
+
+TEST_CASE("registers: a table entry is a write settled at compile time",
+          "[registers]") {
+  constexpr auto entry = Registers::set<POWER>(MODE{Mode::Fast});
+  static_assert(entry.word == 0x42);
+
+  constexpr auto framed =
+      Registers::frame<POWER>(std::array{std::byte{0x6B}}, entry);
+  static_assert(framed[0] == std::byte{0x6B} && framed[1] == std::byte{0x42});
+
+  static_assert(sets<POWER, MODE>);
+  static_assert(!sets<POWER, LOW>);
+  static_assert(!sets<ID, LOW>);
+  TEST_ASSERT_TRUE(true);
+}
+
 TEST_CASE("registers: write-one-to-clear has no read-modify-write",
           "[registers]") {
   static_assert(modifies<POWER, SLEEP>);
@@ -137,10 +166,10 @@ TEST_CASE("registers: write-one-to-clear has no read-modify-write",
 
 TEST_CASE("registers: only a register's own fields can be read from it",
           "[registers]") {
-  static_assert(gets<POWER, SLEEP>);
-  static_assert(gets<ID, LOW>);
-  static_assert(!gets<POWER, ASLEEP>);
-  static_assert(!gets<POWER, LOW>);
+  static_assert(reads<POWER, SLEEP>);
+  static_assert(reads<ID, LOW>);
+  static_assert(!reads<POWER, ASLEEP>);
+  static_assert(!reads<POWER, LOW>);
   TEST_ASSERT_TRUE(true);
 }
 
