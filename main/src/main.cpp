@@ -10,6 +10,8 @@
 #include "swarm_sched.h"
 #include "system.h"
 #include "sdkconfig.h"
+#include "adc.h"
+#include "battery.h"
 
 #ifdef CONFIG_K_INITIATOR
   constexpr bool K_INITIATOR = true;
@@ -89,6 +91,11 @@ static void fill_pose(geometry_msgs__msg__PoseWithCovarianceStamped &msg,
   msg.pose.pose.orientation.w = w;
 
   std::ranges::copy(kPoseCovariance, msg.pose.covariance);
+}
+
+static void fill_percent(std_msgs__msg__Float32 &msg,
+                         const Battery::Reading &reading) {
+  msg.data = static_cast<float>(reading.percent);
 }
 
 namespace HW {
@@ -180,6 +187,15 @@ constexpr auto IMU_CONFIG =
 
 using Mpu = MPU6050::Sensor<I2C, GPIO, IMU_CONFIG, I2cBus>;
 
+constexpr int BATTERY_TAP1 = GPIO_NUM_32;
+constexpr int BATTERY_TAP2 = GPIO_NUM_33;
+constexpr int BATTERY_TAP3 = GPIO_NUM_34;
+
+using BatterySource = Battery::AdcSource<ESP32::Adc1, BATTERY_TAP1,
+                                         BATTERY_TAP2, BATTERY_TAP3>;
+ 
+static_assert(Battery::Source<BatterySource>);
+
 using Chassis = Swarm::chassis<STYLE, MotorDriver, SpiBus, Dwm, EncoderBank,
                                UmcDriver, I2cBus, Mpu>;
 
@@ -198,8 +214,11 @@ using OdomPose =
     ROS::streams<geometry_msgs__msg__PoseWithCovarianceStamped, "odom/pose",
                  "odom", Odometry::Pose, &fill_pose>;
 
+using BatteryPct = ROS::streams<std_msgs__msg__Float32, "battery/percent",
+                                "battery", Battery::Reading, &fill_percent>;
+
 using Node = ROS::node<"base", CONFIG_SWARM_ROS_NAMESPACE, CmdVel, UmcCmd,
-                       UwbRange, OdomPose>;
+                       UwbRange, OdomPose, BatteryPct>;
 
 using PoseMailbox = Sched::channel<Odometry::Pose, 1>;
 using YawRateMailbox = Sched::channel<double, 1>;
@@ -238,10 +257,13 @@ constexpr uint32_t ODOMETRY_PERIOD_MS = 200;
 constexpr uint32_t IMU_PERIOD_MS = DRIVE_PERIOD_MS;
 
 constexpr uint32_t POLL_PERIOD_MS = 100;
+
+constexpr uint32_t BATTERY_PERIOD_MS = 2000;
 } // namespace HW
 
 static HW::PoseMailbox poses;
 static HW::YawRateMailbox yaw_rates;
+static HW::BatterySource battery_source;
 static ROS::session<HW::Node> session;
 
 extern "C" void app_main(void) {
@@ -372,11 +394,27 @@ extern "C" void app_main(void) {
                  sample.accel.y, sample.accel.z, sample.temperature_c);
       }));
 
+      // slow and non-critical, so it sits below everything else
+  static auto battery = Sched::make_task<4096, configMAX_PRIORITIES - 5>(
+      Sched::every<HW::BATTERY_PERIOD_MS> |
+      Sched::then([] { return battery_source.read_taps(); }) |
+      Sched::then(Battery::estimate) |
+      Sched::to([](const Battery::Reading &reading) {
+        ESP_LOGI(TAG, "cells %.2f %.2f %.2f total %.2f V  %d%%",
+                 reading.cell[0], reading.cell[1], reading.cell[2],
+                 reading.total, reading.percent);
+ 
+        if (!session.send<HW::BatteryPct>(reading)) {
+          ESP_LOGD(TAG, "Dropped battery reading");
+        }
+      }));
+
   ros.spawn("uros");
   motion.spawn("motion");
   odometry.spawn("odometry");
   // may not work until I2C_PINS are corrected: expect who_am_i retries
   imu.spawn("imu");
+  battery.spawn("battery");
 
   if constexpr (K_INITIATOR) {
     ESP_LOGI(TAG, "k initiator true");
