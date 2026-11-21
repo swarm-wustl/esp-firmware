@@ -106,7 +106,7 @@ TEST_CASE("dw1000: the SPI header carries the sub-address in 1 to 3 octets",
 TEST_CASE("dw1000: the map encodes what the hand-computed constants did",
           "[dwm_mock]") {
   // CHAN_CTRL_VALUE, LDE load steps L-1, L-2 and L-3 (manual Table 4)
-  static_assert(std::get<16>(dw1000::DEFAULT_CONFIG).word == 0x21040055);
+  static_assert(std::get<16>(dw1000::DEFAULT_CONFIG).word() == 0x21040055);
   static_assert(Registers::write_word<Map::PMSC_CTRL0>(
                     dw1000::SYSCLKS{dw1000::SysClock::Xti},
                     dw1000::LDE_LOAD_CLKS{0b11}) == 0x0301);

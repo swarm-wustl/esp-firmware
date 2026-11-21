@@ -245,17 +245,35 @@ REGISTERS_INLINE constexpr std::array<std::byte, R::bytes> encode(Fs... fs) {
   return to_bytes<R>(write_word<R>(fs...));
 }
 
+template <Word R> class assignment;
+
+template <typename R, Field... Fs>
+  requires writable_with<R, Fs...>
+REGISTERS_INLINE constexpr assignment<R> set(Fs... fs);
+
 // one write, settled at compile time: what a configuration table is a list of.
 // It carries its register in its type, so a table entry is checked like any
-// other write
-template <Word R> struct assignment {
-  typename R::word_type word;
+// other write. Only set makes one, so a reading can't pass for a checked write
+// -- write it back to a write-one-to-clear register and every event clears
+template <Word R> class assignment {
+public:
+  REGISTERS_INLINE constexpr typename R::word_type word() const { return word_; }
+
+private:
+  REGISTERS_INLINE constexpr explicit assignment(typename R::word_type word)
+      : word_{word} {}
+
+  typename R::word_type word_;
+
+  template <typename R2, Field... Fs>
+    requires writable_with<R2, Fs...>
+  friend constexpr assignment<R2> set(Fs... fs);
 };
 
 template <typename R, Field... Fs>
   requires writable_with<R, Fs...>
 REGISTERS_INLINE constexpr assignment<R> set(Fs... fs) {
-  return {static_cast<typename R::word_type>(write_word<R>(fs...))};
+  return assignment<R>{static_cast<typename R::word_type>(write_word<R>(fs...))};
 }
 
 // what a bus write sends: the device's own header -- a register number, an
@@ -270,7 +288,7 @@ frame(const std::array<std::byte, H> &header, Fs... fs) {
 template <Word R, size_t H>
 REGISTERS_INLINE constexpr std::array<std::byte, H + R::bytes>
 frame(const std::array<std::byte, H> &header, assignment<R> a) {
-  return prefixed<R>(header, a.word);
+  return prefixed<R>(header, a.word());
 }
 
 template <Word R, size_t H>

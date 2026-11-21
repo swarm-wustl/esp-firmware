@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
 namespace {
 using Registers::Access;
@@ -45,6 +46,9 @@ concept writes = requires(Fs... fs) { Registers::write_word<R>(fs...); };
 
 template <typename R, typename... Fs>
 concept sets = requires(Fs... fs) { Registers::set<R>(fs...); };
+
+template <typename R>
+concept forges = requires(typename R::word_type w) { Registers::assignment<R>{w}; };
 
 template <typename R, typename... Fs>
 concept modifies =
@@ -144,7 +148,7 @@ TEST_CASE("registers: a read-only field can't be written, even in a writable "
 TEST_CASE("registers: a table entry is a write settled at compile time",
           "[registers]") {
   constexpr auto entry = Registers::set<POWER>(MODE{Mode::Fast});
-  static_assert(entry.word == 0x42);
+  static_assert(entry.word() == 0x42);
 
   constexpr auto framed =
       Registers::frame<POWER>(std::array{std::byte{0x6B}}, entry);
@@ -153,6 +157,10 @@ TEST_CASE("registers: a table entry is a write settled at compile time",
   static_assert(sets<POWER, MODE>);
   static_assert(!sets<POWER, LOW>);
   static_assert(!sets<ID, LOW>);
+  // a reading, or any number, can't pass for a checked write
+  static_assert(!forges<POWER>);
+  static_assert(!forges<ID>);
+  static_assert(!std::is_default_constructible_v<Registers::assignment<POWER>>);
   TEST_ASSERT_TRUE(true);
 }
 

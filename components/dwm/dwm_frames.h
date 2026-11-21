@@ -107,7 +107,7 @@ private:
   place(const Given &given, std::index_sequence<Is...>) {
     std::array<std::byte, bytes> out{};
     (std::ranges::copy(
-         Registers::to_bytes<Rs>(std::get<Registers::assignment<Rs>>(given).word),
+         Registers::to_bytes<Rs>(std::get<Registers::assignment<Rs>>(given).word()),
          out.begin() + offsets[Is]),
      ...);
     return out;
@@ -202,10 +202,10 @@ decode(std::span<const std::byte> raw) {
     return std::unexpected(FrameError::Length);
   }
 
-  const auto values = Wire::decode(raw.template first<Wire::bytes>());
+  const auto values = Wire::decode(raw.first<Wire::bytes>());
 
   if (std::get<Registers::value<FRAME_CONTROL>>(values).word !=
-      DATA_FRAME.word) {
+      DATA_FRAME.word()) {
     return std::unexpected(FrameError::Control);
   }
   if (unpack<KIND>(values) != M::kind) {

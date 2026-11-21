@@ -46,7 +46,7 @@ TEST_CASE("mac: frame control is a PAN-compressed data frame, short at both "
           "ends",
           "[dwm_frame]") {
   // 0x8841, what arduino-dw1000 and bitcraze's lps firmware send
-  TEST_ASSERT_EQUAL_HEX16(0x8841, mac::DATA_FRAME.word);
+  TEST_ASSERT_EQUAL_HEX16(0x8841, mac::DATA_FRAME.word());
 }
 
 TEST_CASE("mac: a frame's size is its parts'", "[dwm_frame]") {
