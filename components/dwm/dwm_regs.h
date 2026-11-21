@@ -94,10 +94,53 @@ using whole = Registers::field<Name, Registers::word_for<Bytes>, 8 * Bytes - 1, 
 template <Address A, typename F>
 using tuning = Registers::reg<A, {.bytes = (F::width / 8)}, F>;
 
+enum class PanId : uint16_t {};
+enum class ShortAddress : uint16_t {};
+
+// 0xFFFF in either is what every node accepts (manual 5.2.1)
+inline constexpr PanId ANY_PAN{0xFFFF};
+inline constexpr ShortAddress BROADCAST{0xFFFF};
+
+struct Identity {
+  PanId pan;
+  ShortAddress address;
+};
+
 using REV = Registers::field<"REV", uint8_t, 3, 0>;
 using VER = Registers::field<"VER", uint8_t, 7, 4>;
 using MODEL = Registers::field<"MODEL", uint8_t, 15, 8>;
 using RIDTAG = Registers::field<"RIDTAG", uint16_t, 31, 16>;
+
+using SHORT_ADDR = Registers::field<"SHORT_ADDR", ShortAddress, 15, 0>;
+using PAN_ID = Registers::field<"PAN_ID", PanId, 31, 16>;
+
+enum class PhrMode : uint8_t { Standard = 0b00, Long = 0b11 };
+
+using FFEN = Registers::field<"FFEN", bool, 0, 0>;
+using FFBC = Registers::field<"FFBC", bool, 1, 1>;
+using FFAB = Registers::field<"FFAB", bool, 2, 2>;
+using FFAD = Registers::field<"FFAD", bool, 3, 3>;
+using FFAA = Registers::field<"FFAA", bool, 4, 4>;
+using FFAM = Registers::field<"FFAM", bool, 5, 5>;
+using FFAR = Registers::field<"FFAR", bool, 6, 6>;
+using FFA4 = Registers::field<"FFA4", bool, 7, 7>;
+using FFA5 = Registers::field<"FFA5", bool, 8, 8>;
+using HIRQ_POL = Registers::field<"HIRQ_POL", bool, 9, 9>;
+using SPI_EDGE = Registers::field<"SPI_EDGE", bool, 10, 10>;
+using DIS_FCE = Registers::field<"DIS_FCE", bool, 11, 11>;
+using DIS_DRXB = Registers::field<"DIS_DRXB", bool, 12, 12>;
+using DIS_PHE = Registers::field<"DIS_PHE", bool, 13, 13>;
+using DIS_RSDE = Registers::field<"DIS_RSDE", bool, 14, 14>;
+using FCS_INIT2F = Registers::field<"FCS_INIT2F", bool, 15, 15>;
+using PHR_MODE = Registers::field<"PHR_MODE", PhrMode, 17, 16>;
+using DIS_STXP = Registers::field<"DIS_STXP", bool, 18, 18>;
+using RXM110K = Registers::field<"RXM110K", bool, 22, 22>;
+using RXWTOE = Registers::field<"RXWTOE", bool, 28, 28>;
+// without it a rejected frame leaves the receiver idle, so with FFEN on one
+// stray frame ends the listen (manual 7.2.6)
+using RXAUTR = Registers::field<"RXAUTR", bool, 29, 29>;
+using AUTOACK = Registers::field<"AUTOACK", bool, 30, 30>;
+using AACKPEND = Registers::field<"AACKPEND", bool, 31, 31>;
 
 using TFLEN = Registers::field<"TFLEN", uint8_t, 6, 0>;
 using TFLE = Registers::field<"TFLE", uint8_t, 9, 7>;
@@ -133,6 +176,7 @@ using RXRFTO = Registers::field<"RXRFTO", bool, 17, 17>;       // rx frame wait 
 using RXOVRR = Registers::field<"RXOVRR", bool, 20, 20, Access::ReadOnly>;
 using RXPTO = Registers::field<"RXPTO", bool, 21, 21>;         // preamble detection timeout
 using RXSFDTO = Registers::field<"RXSFDTO", bool, 26, 26>;     // sfd timeout
+using AFFREJ = Registers::field<"AFFREJ", bool, 29, 29>;       // frame filter rejection
 using HPDWARN = Registers::field<"HPDWARN", bool, 27, 27, Access::ReadOnly>;
 using HSRBP = Registers::field<"HSRBP", bool, 30, 30, Access::ReadOnly>;
 using ICRBP = Registers::field<"ICRBP", bool, 31, 31, Access::ReadOnly>;
@@ -204,6 +248,13 @@ using DEV_ID = Registers::reg<
 // manual 2.02's bit table shows only TFLEN = 12, but the default mode it
 // describes in 2.5 (16 MHz, 6.8 Mbps, preamble 128) is what the part resets to,
 // and the device test reads 16 MHz back after a reset
+using PANADR = Registers::reg<Address{0x03}, {.bytes = 4, .reset = 0xFFFFFFFF},
+                              SHORT_ADDR, PAN_ID>;
+using SYS_CFG = Registers::reg<
+    Address{0x04}, {.bytes = 4, .reset = 0x00001200}, FFEN, FFBC, FFAB, FFAD,
+    FFAA, FFAM, FFAR, FFA4, FFA5, HIRQ_POL, SPI_EDGE, DIS_FCE, DIS_DRXB,
+    DIS_PHE, DIS_RSDE, FCS_INIT2F, PHR_MODE, DIS_STXP, RXM110K, RXWTOE,
+    RXAUTR, AUTOACK, AACKPEND>;
 using TX_FCTRL = Registers::reg<Address{0x08}, {.bytes = 5, .reset = 0x0015400C},
                                 TFLEN, TFLE, TXBR, TR, TXPRF, TXPSR, PE,
                                 TXBOFFS, IFSDELAY>;
@@ -214,7 +265,7 @@ using SYS_CTRL = Registers::reg<Address{0x0D}, {.bytes = 4}, SFCST, TXSTRT,
 using SYS_STATUS = Registers::reg<
     Address{0x0F}, {.bytes = 5, .access = Access::WriteOneClear}, IRQS, TXFRS,
     LDEDONE, RXPHE, RXDFR, RXFCG, RXFCE, RXRFSL, RXRFTO, RXOVRR, RXPTO,
-    RXSFDTO, HPDWARN, HSRBP, ICRBP, TXPUTE>;
+    RXSFDTO, AFFREJ, HPDWARN, HSRBP, ICRBP, TXPUTE>;
 using RX_FINFO =
     Registers::reg<Address{0x10}, {.bytes = 4, .access = Access::ReadOnly},
                    RXFLEN, RXFLE>;

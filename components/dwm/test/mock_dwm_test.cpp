@@ -116,6 +116,33 @@ TEST_CASE("dw1000: the map encodes what the hand-computed constants did",
   TEST_ASSERT_TRUE(true);
 }
 
+TEST_CASE("dw1000: SYS_CFG keeps its reset bits beside the filter's",
+          "[dwm_mock]") {
+  // HIRQ_POL and DIS_DRXB are what the part resets to (manual 7.2.6)
+  static_assert(Registers::write_word<Map::SYS_CFG>() == 0x00001200);
+  static_assert(Registers::write_word<Map::SYS_CFG>(dw1000::FFEN{true},
+                                                    dw1000::FFAD{true},
+                                                    dw1000::RXAUTR{true}) ==
+                0x20001209);
+  static_assert(Registers::write_word<Map::SYS_STATUS>(dw1000::AFFREJ{true}) ==
+                uint64_t{1} << 29);
+  TEST_ASSERT_TRUE(true);
+}
+
+TEST_CASE("set_identity: PANADR is the short address, then the PAN",
+          "[dwm_mock]") {
+  Fixture fixture = Fixture::get();
+
+  TEST_ASSERT_TRUE(fixture.dwm
+                       .set_identity({.pan = dw1000::PanId{0xDECA},
+                                      .address = dw1000::ShortAddress{0x0A01}})
+                       .has_value());
+
+  const auto writes = fixture.transcript.writes();
+  TEST_ASSERT_EQUAL_UINT32(1, writes.size());
+  check_bytes(bytes({0x83, 0x01, 0x0A, 0xCA, 0xDE}), writes[0]);
+}
+
 TEST_CASE("dw1000: illegal register operations don't compile", "[dwm_mock]") {
   static_assert(writes<Map::SYS_STATUS, dw1000::TXFRS>);
   static_assert(!writes<Map::SYS_STATUS, dw1000::IRQS>);

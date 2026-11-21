@@ -236,6 +236,12 @@ and `DEFAULT_CONFIG` is a tuple of `Registers::set<R>(...)` -- each entry a
 checked write -- that `DWM::write_all` applies in order. `[dwm_mock]` pins
 every octet `configure()` sends.
 
+Radio frames are described the same way (`components/dwm/dwm_frames.h`): an
+IEEE 802.15.4 data frame, PAN-compressed with short addresses at both ends,
+since that is the one shape the DW1000's filter matches against `PANADR`. Its
+parts are `Registers` fields in one `layout` list that both `mac::encode` and
+`mac::decode<M>` read, and `mac::accepts` is the filter's rule in software.
+
 The helpers are `always_inline` and expand packs rather than loop: at `-Og`,
 the IDF default, neither happens on its own, and the encoding was left as real
 64-bit shifts. Each write's octet now folds to a constant.
@@ -477,7 +483,7 @@ patch applied yet.
 
 Tests live in `components/dwm/test/`, `components/mpu6050/test/`, `components/swarm_hal/test/` and `components/swarm_sched/test/` (tagged Unity `TEST_CASE`s) and split into two tiers, launched via `test/run.py` (which builds the app then hands off to `pytest-embedded`). Run from inside the container:
 
-- `./test/run.py host` — pure value-type, mock-bus and kinematics unit tests (`[registers]`, `[dwm_mock]`, `[drive]`, `[motor]`, `[pid]`, `[odometry]`, `[control]`, `[watchdog]`, `[imu]`, `[mpu6050]`, `[sched]`), built for the `linux` target and run natively, no board
+- `./test/run.py host` — pure value-type, mock-bus and kinematics unit tests (`[registers]`, `[dwm_mock]`, `[dwm_frame]`, `[drive]`, `[motor]`, `[pid]`, `[odometry]`, `[control]`, `[watchdog]`, `[imu]`, `[mpu6050]`, `[sched]`), built for the `linux` target and run natively, no board
 - `./test/run.py device` — on-device integration tests (`[dwm_reg]`, `[dwm]`) needing a real DW1000; pytest flashes and runs over serial
 - extra args pass through to pytest, e.g. `./test/run.py host -s`
 

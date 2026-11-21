@@ -97,6 +97,11 @@ public:
     return modify<dw1000::Map::TX_FCTRL>(dw1000::TXPRF{prf});
   }
 
+  std::expected<void, HAL::SpiError> set_identity(dw1000::Identity self) {
+    return write<dw1000::Map::PANADR>(dw1000::SHORT_ADDR{self.address},
+                                      dw1000::PAN_ID{self.pan});
+  }
+
   // valid only once LDEDONE is set for the corresponding reception
   std::expected<dw1000::Timestamp, HAL::SpiError> get_rx_timestamp() {
     return read<dw1000::Map::RX_TIME>().transform(

@@ -1,5 +1,5 @@
 # host-runnable unit tests (pure value types + mock SPI); build on every target
-set(srcs "mock_dwm_test.cpp")
+set(srcs "mock_dwm_test.cpp" "frame_test.cpp")
 set(reqs unity dwm)
 
 # hardware integration tests need real ESP32 peripherals, so skip on the host
