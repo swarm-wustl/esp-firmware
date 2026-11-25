@@ -238,9 +238,12 @@ every octet `configure()` sends.
 
 Radio frames are described the same way (`components/dwm/dwm_frames.h`): an
 IEEE 802.15.4 data frame, PAN-compressed with short addresses at both ends,
-since that is the one shape the DW1000's filter matches against `PANADR`. Its
-parts are `Registers` fields in one `layout` list that both `mac::encode` and
-`mac::decode<M>` read, and `mac::accepts` is the filter's rule in software.
+since that is the one shape the DW1000's filter matches against `PANADR`. A
+`mac::layout` is the frame's chunks in order, each a whole-octet field or a
+register of fields (frame control), and both `mac::encode` and `mac::decode<M>`
+read it. Every field name sits in exactly one chunk, so `layout::get<F>` reads
+`DEST_MODE` out of frame control the same way it reads `SEQUENCE` on its own.
+`mac::accepts` is the filter's rule in software.
 
 The helpers are `always_inline` and expand packs rather than loop: at `-Og`,
 the IDF default, neither happens on its own, and the encoding was left as real

@@ -113,7 +113,8 @@ TEST_CASE("registers: octet order follows the register's endianness",
 
 TEST_CASE("registers: a read decodes each field to its own type",
           "[registers]") {
-  constexpr auto power = Registers::decode<POWER>({std::byte{0x43}});
+  constexpr std::array power_raw{std::byte{0x43}};
+  constexpr auto power = Registers::decode<POWER>(power_raw);
 
   static_assert(power.get<MODE>() == Mode::Max);
   static_assert(power.get<SLEEP>());

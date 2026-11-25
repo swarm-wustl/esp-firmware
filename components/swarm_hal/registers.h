@@ -1,12 +1,15 @@
 #ifndef REGISTERS_H
 #define REGISTERS_H
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <span>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 
@@ -90,8 +93,7 @@ template <Field... Fs> constexpr uint64_t mask_of() {
 }
 
 template <Field... Fs> constexpr bool disjoint() {
-  return std::popcount(mask_of<Fs...>()) ==
-         (0 + ... + std::popcount(Fs::mask));
+  return std::popcount(mask_of<Fs...>()) == (0 + ... + std::popcount(Fs::mask));
 }
 
 template <Layout L> constexpr bool within(uint64_t bits) {
@@ -105,9 +107,9 @@ template <Layout L> constexpr bool within(uint64_t bits) {
 // fields live in a word, so only a register of at most eight octets has any;
 // anything longer is a block of bytes, like a burst or a frame buffer
 template <Layout L, Field... Fs>
-constexpr bool describable = L.bytes > 0 && (L.bytes <= 8 || (sizeof...(Fs) == 0 && L.reset == 0)) &&
-                             within<L>(L.reset) && within<L>(mask_of<Fs...>()) &&
-                             disjoint<Fs...>();
+constexpr bool describable =
+    L.bytes > 0 && (L.bytes <= 8 || (sizeof...(Fs) == 0 && L.reset == 0)) &&
+    within<L>(L.reset) && within<L>(mask_of<Fs...>()) && disjoint<Fs...>();
 
 // the narrowest integer that holds the register, so a one-octet read isn't
 // carried around as a 64-bit pair on a 32-bit core
@@ -121,8 +123,7 @@ template <auto Address, Layout L, Field... Fs>
   requires describable<L, Fs...>
 struct reg {
   // only a word has one; a block is bytes all the way through
-  using word_type =
-      std::conditional_t<(L.bytes <= 8), word_for<L.bytes>, void>;
+  using word_type = std::conditional_t<(L.bytes <= 8), word_for<L.bytes>, void>;
 
   using address_type = decltype(Address);
 
@@ -131,6 +132,8 @@ struct reg {
   static constexpr Access access = L.access;
   static constexpr uint64_t reset = L.reset;
   static constexpr Endian endian = L.endian;
+
+  using fields = std::tuple<Fs...>;
 
   template <typename F>
   static constexpr bool holds = (std::same_as<F, Fs> || ...);
@@ -156,10 +159,10 @@ template <typename R, typename Address>
 concept at = Register<R> && std::same_as<typename R::address_type, Address>;
 
 template <typename R, typename... Fs>
-concept writable_with = Word<R> && R::access != Access::ReadOnly &&
-                        (R::template holds<Fs> && ...) &&
-                        ((Fs::access != Access::ReadOnly) && ...) &&
-                        disjoint<Fs...>();
+concept writable_with =
+    Word<R> && R::access != Access::ReadOnly &&
+    (R::template holds<Fs> && ...) &&
+    ((Fs::access != Access::ReadOnly) && ...) && disjoint<Fs...>();
 
 // a read-modify-write of a write-one-to-clear register writes back every bit
 // that was set, clearing events nobody asked to clear
@@ -172,8 +175,7 @@ concept modifiable_with =
 template <typename R, Field... Fs>
   requires writable_with<R, Fs...>
 REGISTERS_INLINE constexpr uint64_t write_word(Fs... fs) {
-  constexpr uint64_t base =
-      R::access == Access::WriteOneClear ? 0 : R::reset;
+  constexpr uint64_t base = R::access == Access::WriteOneClear ? 0 : R::reset;
 
   return (base & ~mask_of<Fs...>()) | (uint64_t{0} | ... | fs.bits());
 }
@@ -214,18 +216,21 @@ to_bytes(uint64_t word) {
   return prefixed<R>(std::array<std::byte, 0>{}, word);
 }
 
-template <Word R, size_t... Is>
+// whatever is already exactly R's octets -- an array a bus filled, a slice of a
+// frame -- read in place. Taking a span would cost a call per octet at -Og
+template <typename B, size_t N>
+concept octets_of = std::convertible_to<const B &, std::span<const std::byte, N>>;
+
+template <Word R, octets_of<R::bytes> B, size_t... Is>
 REGISTERS_INLINE constexpr uint64_t
-from_bytes(const std::array<std::byte, R::bytes> &raw,
-           std::index_sequence<Is...>) {
+from_bytes(const B &raw, std::index_sequence<Is...>) {
   return (uint64_t{0} | ... |
           (static_cast<uint64_t>(raw[Is])
            << 8 * (R::endian == Endian::Little ? Is : R::bytes - 1 - Is)));
 }
 
-template <Word R>
-REGISTERS_INLINE constexpr uint64_t
-from_bytes(const std::array<std::byte, R::bytes> &raw) {
+template <Word R, octets_of<R::bytes> B>
+REGISTERS_INLINE constexpr uint64_t from_bytes(const B &raw) {
   return from_bytes<R>(raw, std::make_index_sequence<R::bytes>{});
 }
 
@@ -257,7 +262,9 @@ REGISTERS_INLINE constexpr assignment<R> set(Fs... fs);
 // -- write it back to a write-one-to-clear register and every event clears
 template <Word R> class assignment {
 public:
-  REGISTERS_INLINE constexpr typename R::word_type word() const { return word_; }
+  REGISTERS_INLINE constexpr typename R::word_type word() const {
+    return word_;
+  }
 
 private:
   REGISTERS_INLINE constexpr explicit assignment(typename R::word_type word)
@@ -273,7 +280,8 @@ private:
 template <typename R, Field... Fs>
   requires writable_with<R, Fs...>
 REGISTERS_INLINE constexpr assignment<R> set(Fs... fs) {
-  return assignment<R>{static_cast<typename R::word_type>(write_word<R>(fs...))};
+  return assignment<R>{
+      static_cast<typename R::word_type>(write_word<R>(fs...))};
 }
 
 // what a bus write sends: the device's own header -- a register number, an
@@ -297,13 +305,16 @@ frame(const std::array<std::byte, H> &header, value<R> v) {
   return prefixed<R>(header, v.word);
 }
 
-template <Register R>
-REGISTERS_INLINE constexpr auto
-decode(std::array<std::byte, R::bytes> raw) {
+template <Register R, octets_of<R::bytes> B>
+REGISTERS_INLINE constexpr auto decode(const B &raw) {
   if constexpr (Word<R>) {
     return value<R>{static_cast<typename R::word_type>(from_bytes<R>(raw))};
-  } else {
+  } else if constexpr (std::same_as<B, std::array<std::byte, R::bytes>>) {
     return raw;
+  } else {
+    std::array<std::byte, R::bytes> out{};
+    std::ranges::copy(raw, out.begin());
+    return out;
   }
 }
 } // namespace Registers

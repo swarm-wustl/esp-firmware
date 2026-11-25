@@ -32,14 +32,22 @@ void check_octets(std::initializer_list<int> expected,
   }
 }
 
-using Pair = mac::layout<mac::part<mac::SEQUENCE>, mac::part<mac::KIND>>;
-
-constexpr auto kSeq = Registers::set<mac::part<mac::SEQUENCE>>(mac::SEQUENCE{1});
-constexpr auto kKind =
-    Registers::set<mac::part<mac::KIND>>(mac::KIND{mac::Kind::Poll});
+using Pair = mac::layout<mac::SEQUENCE, mac::KIND>;
 
 template <typename... As>
 concept encodes = requires(As... as) { Pair::encode(as...); };
+
+template <typename... Cs>
+concept lays_out = requires { typename mac::layout<Cs...>; };
+
+template <typename F>
+concept poll_gets = requires(const mac::Poll::wire::values &v) {
+  mac::Poll::wire::get<F>(v);
+};
+
+using NIBBLE = Registers::field<"NIBBLE", uint8_t, 3, 0>;
+using HIGH = Registers::field<"HIGH", uint8_t, 15, 8>;
+using HOLDS_SEQUENCE = Registers::reg<mac::Part{}, {.bytes = 1}, mac::SEQUENCE>;
 } // namespace
 
 TEST_CASE("mac: frame control is a PAN-compressed data frame, short at both "
@@ -56,13 +64,42 @@ TEST_CASE("mac: a frame's size is its parts'", "[dwm_frame]") {
   TEST_ASSERT_TRUE(true);
 }
 
-TEST_CASE("mac: a layout takes each part once, in any order", "[dwm_frame]") {
-  static_assert(encodes<decltype(kSeq), decltype(kKind)>);
-  static_assert(encodes<decltype(kKind), decltype(kSeq)>);
-  static_assert(!encodes<decltype(kSeq)>);
-  static_assert(!encodes<decltype(kSeq), decltype(kSeq)>);
+TEST_CASE("mac: encode takes each chunk once, in layout order",
+          "[dwm_frame]") {
+  static_assert(encodes<mac::SEQUENCE, mac::KIND>);
+  static_assert(!encodes<mac::KIND, mac::SEQUENCE>);
+  static_assert(!encodes<mac::SEQUENCE>);
+  static_assert(!encodes<mac::SEQUENCE, mac::SEQUENCE>);
 
-  check_octets({0x01, 0x01}, Pair::encode(kKind, kSeq));
+  check_octets({0x01, 0x01},
+               Pair::encode(mac::SEQUENCE{1}, mac::KIND{mac::Kind::Poll}));
+}
+
+TEST_CASE("mac: a layout takes whole-octet fields and registers, each field "
+          "named once",
+          "[dwm_frame]") {
+  static_assert(lays_out<mac::FRAME_CONTROL, mac::SEQUENCE>);
+  static_assert(!lays_out<NIBBLE>);
+  static_assert(!lays_out<HIGH>);
+  static_assert(!lays_out<mac::SEQUENCE, mac::SEQUENCE>);
+  // SEQUENCE once on its own and once inside a register
+  static_assert(!lays_out<HOLDS_SEQUENCE, mac::SEQUENCE>);
+  TEST_ASSERT_TRUE(true);
+}
+
+TEST_CASE("mac: get finds a field by name, alone or inside a register",
+          "[dwm_frame]") {
+  using Wire = mac::Poll::wire;
+  const auto raw = mac::encode(kToAnchor, mac::Poll{});
+  const auto values = Wire::decode(raw);
+
+  TEST_ASSERT_EQUAL_UINT8(7, Wire::get<mac::SEQUENCE>(values));
+  TEST_ASSERT_TRUE(Wire::get<mac::FRAME_TYPE>(values) == mac::FrameType::Data);
+  TEST_ASSERT_TRUE(Wire::get<mac::DEST_MODE>(values) == mac::AddressMode::Short);
+  TEST_ASSERT_TRUE(Wire::get<mac::PAN_COMPRESS>(values));
+
+  static_assert(poll_gets<mac::SRC_ADDR>);
+  static_assert(!poll_gets<mac::REPLY_TIME>);
 }
 
 TEST_CASE("mac: a poll is the header, its kind and nothing else",

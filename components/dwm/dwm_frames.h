@@ -42,10 +42,9 @@ using DEST_MODE = Registers::field<"DEST_MODE", AddressMode, 11, 10>;
 using FRAME_VERSION = Registers::field<"FRAME_VERSION", uint8_t, 13, 12>;
 using SRC_MODE = Registers::field<"SRC_MODE", AddressMode, 15, 14>;
 
-using FRAME_CONTROL =
-    Registers::reg<Part{}, {.bytes = 2}, FRAME_TYPE, SECURITY, PENDING,
-                   ACK_REQUEST, PAN_COMPRESS, DEST_MODE, FRAME_VERSION,
-                   SRC_MODE>;
+using FRAME_CONTROL = Registers::reg<Part{}, {.bytes = 2}, FRAME_TYPE, SECURITY,
+                                     PENDING, ACK_REQUEST, PAN_COMPRESS,
+                                     DEST_MODE, FRAME_VERSION, SRC_MODE>;
 
 inline constexpr auto DATA_FRAME = Registers::set<FRAME_CONTROL>(
     FRAME_TYPE{FrameType::Data}, PAN_COMPRESS{true},
@@ -61,54 +60,127 @@ using KIND = Registers::field<"KIND", Kind, 7, 0>;
 using REPLY_TIME =
     Registers::field<"REPLY_TIME", uint64_t, RX_STAMP::width - 1, 0>;
 
-template <Registers::Field F>
+template <typename F>
+concept OctetField =
+    Registers::Field<F> && F::width % 8 == 0 && (F::mask & 1) == 1;
+
+template <typename C>
+concept Chunk = OctetField<C> || Registers::Word<C>;
+
+namespace detail {
+template <OctetField F>
 using part = Registers::reg<Part{}, {.bytes = F::width / 8}, F>;
 
-template <size_t N>
-constexpr std::array<std::byte, N> octets(std::span<const std::byte, N> raw) {
-  std::array<std::byte, N> out{};
-  std::ranges::copy(raw, out.begin());
-  return out;
-}
+// a field chunk is wrapped in a register of its own width, so both kinds reach
+// the bytes through the same Registers code
+template <typename C> struct chunk;
+
+template <OctetField F> struct chunk<F> {
+  using reg = part<F>;
+  using in = F;
+  using out = F;
+  using fields = std::tuple<F>;
+
+  template <typename G> static constexpr bool names = std::same_as<F, G>;
+
+  static constexpr uint64_t word(F f) { return f.bits(); }
+  static constexpr F read(Registers::value<reg> v) {
+    return F{v.template get<F>()};
+  }
+
+  template <typename G> static constexpr typename G::type get(const F &f) {
+    return f.value;
+  }
+};
+
+template <Registers::Word R> struct chunk<R> {
+  using reg = R;
+  using in = Registers::assignment<R>;
+  using out = Registers::value<R>;
+  using fields = typename R::fields;
+
+  template <typename G> static constexpr bool names = R::template holds<G>;
+
+  static constexpr uint64_t word(in a) { return a.word(); }
+  static constexpr out read(out v) { return v; }
+
+  template <typename G> static constexpr typename G::type get(const out &v) {
+    return v.template get<G>();
+  }
+};
+
+template <typename G, typename... Cs>
+constexpr size_t holders =
+    (size_t{0} + ... + size_t{chunk<Cs>::template names<G>});
+
+template <typename Fields, typename... Cs> struct named_once;
+
+template <typename... Gs, typename... Cs>
+struct named_once<std::tuple<Gs...>, Cs...>
+    : std::bool_constant<((holders<Gs, Cs...> == 1) && ...)> {};
 
 template <typename T, typename... Ts>
-constexpr size_t count_of =
-    (size_t{0} + ... + std::same_as<T, std::remove_cvref_t<Ts>>);
+constexpr size_t count_of = (size_t{0} + ... + std::same_as<T, Ts>);
+} // namespace detail
 
-// parts back to back in the order listed. encode takes one assignment per part
-// in any order, and a part missing or given twice doesn't compile
-template <Registers::Word... Rs> struct layout {
-  static constexpr size_t bytes = (size_t{0} + ... + Rs::bytes);
+// every field name in exactly one chunk, on its own or inside a register, is
+// what lets get<F> find it without knowing how the chunks are grouped
+template <typename... Cs>
+concept Layable =
+    (Chunk<Cs> && ...) && ((detail::count_of<Cs, Cs...> == 1) && ...) &&
+    (detail::named_once<typename detail::chunk<Cs>::fields, Cs...>::value &&
+     ...);
 
-  static constexpr std::array<size_t, sizeof...(Rs)> offsets = [] {
-    constexpr std::array<size_t, sizeof...(Rs)> sizes{Rs::bytes...};
-    std::array<size_t, sizeof...(Rs)> out{};
+// chunks back to back in the order listed. A field chunk goes in and comes out
+// as itself, a register chunk as its assignment and its value
+template <typename... Cs>
+  requires Layable<Cs...>
+struct layout {
+  static constexpr size_t bytes =
+      (size_t{0} + ... + detail::chunk<Cs>::reg::bytes);
+
+  static constexpr std::array<size_t, sizeof...(Cs)> offsets = [] {
+    constexpr std::array<size_t, sizeof...(Cs)> sizes{
+        detail::chunk<Cs>::reg::bytes...};
+    std::array<size_t, sizeof...(Cs)> out{};
     std::exclusive_scan(sizes.begin(), sizes.end(), out.begin(), size_t{0});
     return out;
   }();
 
-  using values = std::tuple<Registers::value<Rs>...>;
+  using values = std::tuple<typename detail::chunk<Cs>::out...>;
 
-  template <typename... As>
-    requires(sizeof...(As) == sizeof...(Rs) &&
-             ((count_of<Registers::assignment<Rs>, As...> == 1) && ...))
-  static constexpr std::array<std::byte, bytes> encode(As... assignments) {
-    return place(std::tuple<As...>{assignments...},
-                 std::index_sequence_for<Rs...>{});
+  static constexpr std::array<std::byte, bytes>
+  encode(typename detail::chunk<Cs>::in... chunks) {
+    return place(std::index_sequence_for<Cs...>{}, chunks...);
   }
 
   static constexpr values decode(std::span<const std::byte, bytes> raw) {
-    return slice(raw, std::index_sequence_for<Rs...>{});
+    return slice(raw, std::index_sequence_for<Cs...>{});
+  }
+
+  template <Registers::Field F>
+    requires(detail::holders<F, Cs...> == 1)
+  static constexpr typename F::type get(const values &values) {
+    using C = std::tuple_element_t<holder<F>, std::tuple<Cs...>>;
+    return detail::chunk<C>::template get<F>(std::get<holder<F>>(values));
   }
 
 private:
-  template <typename Given, size_t... Is>
+  template <Registers::Field F>
+    requires(detail::holders<F, Cs...> == 1)
+  static constexpr size_t holder = [] {
+    constexpr std::array<bool, sizeof...(Cs)> holds{
+        detail::chunk<Cs>::template names<F>...};
+    return static_cast<size_t>(std::ranges::find(holds, true) - holds.begin());
+  }();
+
+  template <size_t... Is>
   static constexpr std::array<std::byte, bytes>
-  place(const Given &given, std::index_sequence<Is...>) {
+  place(std::index_sequence<Is...>, typename detail::chunk<Cs>::in... chunks) {
     std::array<std::byte, bytes> out{};
-    (std::ranges::copy(
-         Registers::to_bytes<Rs>(std::get<Registers::assignment<Rs>>(given).word()),
-         out.begin() + offsets[Is]),
+    (std::ranges::copy(Registers::to_bytes<typename detail::chunk<Cs>::reg>(
+                           detail::chunk<Cs>::word(chunks)),
+                       out.begin() + offsets[Is]),
      ...);
     return out;
   }
@@ -116,15 +188,11 @@ private:
   template <size_t... Is>
   static constexpr values slice(std::span<const std::byte, bytes> raw,
                                 std::index_sequence<Is...>) {
-    return {Registers::decode<Rs>(
-        octets(raw.template subspan<offsets[Is], Rs::bytes>()))...};
+    return {detail::chunk<Cs>::read(
+        Registers::decode<typename detail::chunk<Cs>::reg>(
+            raw.template subspan<offsets[Is], detail::chunk<Cs>::reg::bytes>()))...};
   }
 };
-
-template <Registers::Field F, typename Values>
-constexpr typename F::type unpack(const Values &values) {
-  return std::get<Registers::value<part<F>>>(values).template get<F>();
-}
 
 struct Header {
   uint8_t sequence;
@@ -138,8 +206,8 @@ template <Kind K, Registers::Field... Fs> struct message {
 
   // PAN_COMPRESS: with both addresses present the source PAN is left out and
   // taken to be the destination's
-  using wire = layout<FRAME_CONTROL, part<SEQUENCE>, part<DEST_PAN>,
-                      part<DEST_ADDR>, part<SRC_ADDR>, part<KIND>, part<Fs>...>;
+  using wire = layout<FRAME_CONTROL, SEQUENCE, DEST_PAN, DEST_ADDR, SRC_ADDR,
+                      KIND, Fs...>;
 
   std::tuple<Fs...> fields;
 
@@ -151,9 +219,8 @@ template <Kind K, Registers::Field... Fs> struct message {
     return std::get<F>(fields).value;
   }
 
-  template <typename Values>
-  static constexpr message from(const Values &values) {
-    return message{Fs{unpack<Fs>(values)}...};
+  static constexpr message from(const typename wire::values &values) {
+    return message{Fs{wire::template get<Fs>(values)}...};
   }
 };
 
@@ -181,14 +248,10 @@ constexpr std::array<std::byte, M::wire::bytes> encode(const Header &header,
                                                        const M &body) {
   return std::apply(
       [&header](auto... fs) {
-        return M::wire::encode(
-            DATA_FRAME,
-            Registers::set<part<SEQUENCE>>(SEQUENCE{header.sequence}),
-            Registers::set<part<DEST_PAN>>(DEST_PAN{header.pan}),
-            Registers::set<part<DEST_ADDR>>(DEST_ADDR{header.destination}),
-            Registers::set<part<SRC_ADDR>>(SRC_ADDR{header.source}),
-            Registers::set<part<KIND>>(KIND{M::kind}),
-            Registers::set<part<decltype(fs)>>(fs)...);
+        return M::wire::encode(DATA_FRAME, SEQUENCE{header.sequence},
+                               DEST_PAN{header.pan},
+                               DEST_ADDR{header.destination},
+                               SRC_ADDR{header.source}, KIND{M::kind}, fs...);
       },
       body.fields);
 }
@@ -208,22 +271,24 @@ decode(std::span<const std::byte> raw) {
       DATA_FRAME.word()) {
     return std::unexpected(FrameError::Control);
   }
-  if (unpack<KIND>(values) != M::kind) {
+  if (Wire::template get<KIND>(values) != M::kind) {
     return std::unexpected(FrameError::Kind);
   }
 
-  return frame<M>{.header = {.sequence = unpack<SEQUENCE>(values),
-                             .pan = unpack<DEST_PAN>(values),
-                             .destination = unpack<DEST_ADDR>(values),
-                             .source = unpack<SRC_ADDR>(values)},
-                  .body = M::from(values)};
+  return frame<M>{
+      .header = {.sequence = Wire::template get<SEQUENCE>(values),
+                 .pan = Wire::template get<DEST_PAN>(values),
+                 .destination = Wire::template get<DEST_ADDR>(values),
+                 .source = Wire::template get<SRC_ADDR>(values)},
+      .body = M::from(values)};
 }
 
 // the filter's rules (manual 5.2.1) as they apply to this one frame shape, so
 // software and FFEN agree on what a node hears
 constexpr bool accepts(Identity self, const Header &header) {
   return (header.pan == self.pan || header.pan == ANY_PAN) &&
-         (header.destination == self.address || header.destination == BROADCAST);
+         (header.destination == self.address ||
+          header.destination == BROADCAST);
 }
 } // namespace dw1000::mac
 
