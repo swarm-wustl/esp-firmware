@@ -7,6 +7,8 @@
 #include <numbers>
 #include <utility>
 
+#include "bits.h"
+
 namespace Imu {
 struct Vec3 {
   double x{};
@@ -150,7 +152,7 @@ private:
 };
 
 constexpr int16_t be16(std::byte high, std::byte low) {
-  return static_cast<int16_t>((static_cast<uint16_t>(high) << 8) |
+  return static_cast<int16_t>((static_cast<uint16_t>(high) << BITS_PER_BYTE) |
                               static_cast<uint16_t>(low));
 }
 } // namespace Imu

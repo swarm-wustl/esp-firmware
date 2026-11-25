@@ -13,6 +13,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "bits.h"
 #include "fixed_string.h"
 
 // everything below is description and arithmetic that should leave no trace in
@@ -22,7 +23,6 @@
 namespace Registers {
 using Strings::fixed_string;
 
-inline constexpr size_t BITS_PER_BYTE = std::numeric_limits<uint8_t>::digits;
 inline constexpr size_t MAX_WORD_BYTES = sizeof(uint64_t);
 
 enum class Access : uint8_t { ReadOnly, ReadWrite, WriteOneClear };

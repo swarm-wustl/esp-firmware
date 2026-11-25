@@ -9,6 +9,7 @@
 #include <tuple>
 #include <utility>
 
+#include "bits.h"
 #include "registers.h"
 
 // TODO: add this, and other related classes, to some sort of DWM namespace
@@ -90,11 +91,11 @@ constexpr std::array<std::byte, header_size<A>()> header(bool write) {
 // a single field, named for the register, and the size comes from it
 template <Strings::fixed_string Name, size_t Bytes>
 using whole = Registers::field<Name, Registers::word_for<Bytes>,
-                               Registers::BITS_PER_BYTE * Bytes - 1, 0>;
+                               BITS_PER_BYTE * Bytes - 1, 0>;
 
 template <Address A, typename F>
 using tuning =
-    Registers::reg<A, {.bytes = F::width / Registers::BITS_PER_BYTE}, F>;
+    Registers::reg<A, {.bytes = F::width / BITS_PER_BYTE}, F>;
 
 enum class PanId : uint16_t {};
 enum class ShortAddress : uint16_t {};
