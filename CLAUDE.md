@@ -238,11 +238,13 @@ every octet `configure()` sends.
 
 Radio frames are described the same way (`components/dwm/dwm_frames.h`): an
 IEEE 802.15.4 data frame, PAN-compressed with short addresses at both ends,
-since that is the one shape the DW1000's filter matches against `PANADR`. A
-`mac::layout` is the frame's chunks in order, each a whole-octet field or a
-register of fields (frame control), and both `mac::encode` and `mac::decode<M>`
-read it. Every field name sits in exactly one chunk, so `layout::get<F>` reads
-`DEST_MODE` out of frame control the same way it reads `SEQUENCE` on its own.
+since that is the one shape the DW1000's filter matches against `PANADR`. Its
+wire format is a `Registers::layout` (`components/swarm_hal/register_layouts.h`):
+parts in order, each a whole-octet field or a register of fields (frame
+control), and both `mac::encode` and `mac::decode<M>` read it. Every field name
+sits in exactly one part, so `layout::get<F>` reads `DEST_MODE` out of frame
+control the same way it reads `SEQUENCE` on its own. A layout's registers are
+addressed by `Registers::Offset`, which no driver's `read` accepts.
 `mac::accepts` is the filter's rule in software.
 
 The helpers are `always_inline` and expand packs rather than loop: at `-Og`,
@@ -486,7 +488,7 @@ patch applied yet.
 
 Tests live in `components/dwm/test/`, `components/mpu6050/test/`, `components/swarm_hal/test/` and `components/swarm_sched/test/` (tagged Unity `TEST_CASE`s) and split into two tiers, launched via `test/run.py` (which builds the app then hands off to `pytest-embedded`). Run from inside the container:
 
-- `./test/run.py host` — pure value-type, mock-bus and kinematics unit tests (`[registers]`, `[dwm_mock]`, `[dwm_frame]`, `[drive]`, `[motor]`, `[pid]`, `[odometry]`, `[control]`, `[watchdog]`, `[imu]`, `[mpu6050]`, `[sched]`), built for the `linux` target and run natively, no board
+- `./test/run.py host` — pure value-type, mock-bus and kinematics unit tests (`[registers]`, `[layout]`, `[dwm_mock]`, `[dwm_frame]`, `[drive]`, `[motor]`, `[pid]`, `[odometry]`, `[control]`, `[watchdog]`, `[imu]`, `[mpu6050]`, `[sched]`), built for the `linux` target and run natively, no board
 - `./test/run.py device` — on-device integration tests (`[dwm_reg]`, `[dwm]`) needing a real DW1000; pytest flashes and runs over serial
 - extra args pass through to pytest, e.g. `./test/run.py host -s`
 

@@ -104,6 +104,15 @@ TEST_CASE("registers: octet order follows the register's endianness",
   static_assert(Registers::from_bytes<WIDE_LE>(le) == 0x1234);
   static_assert(Registers::from_bytes<WIDE_BE>(be) == 0x1234);
 
+  // a register inside a bigger buffer, read and written at its offset
+  constexpr std::array inside{std::byte{0xAA}, std::byte{0x12}, std::byte{0x34}};
+  static_assert(Registers::from_bytes<WIDE_BE, 1>(inside) == 0x1234);
+  static_assert([] {
+    std::array<std::byte, 3> out{std::byte{0xAA}};
+    Registers::place_bytes<WIDE_BE, 1>(out, 0x1234);
+    return out;
+  }() == inside);
+
   constexpr auto framed =
       Registers::frame<WIDE_BE>(std::array{std::byte{0xAA}}, LOW{0x34});
   static_assert(framed.size() == 3 && framed[0] == std::byte{0xAA} &&

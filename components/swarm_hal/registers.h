@@ -190,11 +190,12 @@ REGISTERS_INLINE constexpr uint64_t modify_word(uint64_t current, Fs... fs) {
 }
 
 template <Word R, size_t Octet>
-REGISTERS_INLINE constexpr std::byte octet(uint64_t word) {
-  constexpr size_t shift =
-      BITS_PER_BYTE * (R::endian == Endian::Little ? Octet : R::bytes - 1 - Octet);
+constexpr size_t shift_of =
+    BITS_PER_BYTE * (R::endian == Endian::Little ? Octet : R::bytes - 1 - Octet);
 
-  return static_cast<std::byte>((word >> shift) & 0xFF);
+template <Word R, size_t Octet>
+REGISTERS_INLINE constexpr std::byte octet(uint64_t word) {
+  return static_cast<std::byte>((word >> shift_of<R, Octet>) & 0xFF);
 }
 
 // packs rather than loops: -Og keeps a loop as a loop, shifting a 64-bit word
@@ -219,22 +220,48 @@ to_bytes(uint64_t word) {
   return prefixed<R>(std::array<std::byte, 0>{}, word);
 }
 
-// whatever is already exactly R's octets -- an array a bus filled, a slice of a
-// frame -- read in place. Taking a span would cost a call per octet at -Og
-template <typename B, size_t N>
-concept octets_of = std::convertible_to<const B &, std::span<const std::byte, N>>;
-
-template <Word R, octets_of<R::bytes> B, size_t... Is>
-REGISTERS_INLINE constexpr uint64_t
-from_bytes(const B &raw, std::index_sequence<Is...>) {
-  return (uint64_t{0} | ... |
-          (static_cast<uint64_t>(raw[Is])
-           << BITS_PER_BYTE * (R::endian == Endian::Little ? Is : R::bytes - 1 - Is)));
+// R's octets written into a bigger buffer starting at At, so a register that
+// sits inside a frame is placed without building it on its own and copying
+template <Word R, size_t At = 0, size_t N, size_t... Is>
+  requires(At + R::bytes <= N)
+REGISTERS_INLINE constexpr void place_bytes(std::array<std::byte, N> &out,
+                                            uint64_t word,
+                                            std::index_sequence<Is...>) {
+  ((out[At + Is] = octet<R, Is>(word)), ...);
 }
 
-template <Word R, octets_of<R::bytes> B>
+template <Word R, size_t At = 0, size_t N>
+  requires(At + R::bytes <= N)
+REGISTERS_INLINE constexpr void place_bytes(std::array<std::byte, N> &out,
+                                            uint64_t word) {
+  place_bytes<R, At>(out, word, std::make_index_sequence<R::bytes>{});
+}
+
+template <typename B>
+using view_of = decltype(std::span{std::declval<const B &>()});
+
+// a fixed-size run of octets -- an array a bus filled, a slice of a frame --
+// read in place. Taking a span would cost a call per octet at -Og
+template <typename B, size_t N>
+concept octets_from =
+    requires { typename view_of<B>; } &&
+    std::same_as<std::remove_const_t<typename view_of<B>::element_type>, std::byte> &&
+    view_of<B>::extent != std::dynamic_extent && view_of<B>::extent >= N;
+
+template <typename B, size_t N>
+concept octets_of = octets_from<B, N> && view_of<B>::extent == N;
+
+// At is where R's octets start, so a register inside a frame is read out of
+// the whole frame without slicing it first
+template <Word R, size_t At = 0, octets_from<At + R::bytes> B, size_t... Is>
+REGISTERS_INLINE constexpr uint64_t
+from_bytes(const B &raw, std::index_sequence<Is...>) {
+  return (uint64_t{0} | ... | (static_cast<uint64_t>(raw[At + Is]) << shift_of<R, Is>));
+}
+
+template <Word R, size_t At = 0, octets_from<At + R::bytes> B>
 REGISTERS_INLINE constexpr uint64_t from_bytes(const B &raw) {
-  return from_bytes<R>(raw, std::make_index_sequence<R::bytes>{});
+  return from_bytes<R, At>(raw, std::make_index_sequence<R::bytes>{});
 }
 
 template <Word R> struct value {
