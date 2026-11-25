@@ -22,6 +22,9 @@
 namespace Registers {
 using Strings::fixed_string;
 
+inline constexpr size_t BITS_PER_BYTE = std::numeric_limits<uint8_t>::digits;
+inline constexpr size_t MAX_WORD_BYTES = sizeof(uint64_t);
+
 enum class Access : uint8_t { ReadOnly, ReadWrite, WriteOneClear };
 enum class Endian : uint8_t { Little, Big };
 
@@ -97,10 +100,10 @@ template <Field... Fs> constexpr bool disjoint() {
 }
 
 template <Layout L> constexpr bool within(uint64_t bits) {
-  if constexpr (L.bytes >= 8) {
+  if constexpr (L.bytes >= MAX_WORD_BYTES) {
     return true;
   } else {
-    return (bits >> (8 * L.bytes)) == 0;
+    return (bits >> (BITS_PER_BYTE * L.bytes)) == 0;
   }
 }
 
@@ -108,7 +111,7 @@ template <Layout L> constexpr bool within(uint64_t bits) {
 // anything longer is a block of bytes, like a burst or a frame buffer
 template <Layout L, Field... Fs>
 constexpr bool describable =
-    L.bytes > 0 && (L.bytes <= 8 || (sizeof...(Fs) == 0 && L.reset == 0)) &&
+    L.bytes > 0 && (L.bytes <= MAX_WORD_BYTES || (sizeof...(Fs) == 0 && L.reset == 0)) &&
     within<L>(L.reset) && within<L>(mask_of<Fs...>()) && disjoint<Fs...>();
 
 // the narrowest integer that holds the register, so a one-octet read isn't
@@ -123,7 +126,7 @@ template <auto Address, Layout L, Field... Fs>
   requires describable<L, Fs...>
 struct reg {
   // only a word has one; a block is bytes all the way through
-  using word_type = std::conditional_t<(L.bytes <= 8), word_for<L.bytes>, void>;
+  using word_type = std::conditional_t<(L.bytes <= MAX_WORD_BYTES), word_for<L.bytes>, void>;
 
   using address_type = decltype(Address);
 
@@ -148,10 +151,10 @@ template <typename R>
 concept Register = is_reg<R>;
 
 template <typename R>
-concept Word = Register<R> && R::bytes <= 8;
+concept Word = Register<R> && R::bytes <= MAX_WORD_BYTES;
 
 template <typename R>
-concept Block = Register<R> && R::bytes > 8;
+concept Block = Register<R> && R::bytes > MAX_WORD_BYTES;
 
 // a driver accepts only registers addressed in its own type, so a DWM
 // register can't be handed to the MPU6050
@@ -189,7 +192,7 @@ REGISTERS_INLINE constexpr uint64_t modify_word(uint64_t current, Fs... fs) {
 template <Word R, size_t Octet>
 REGISTERS_INLINE constexpr std::byte octet(uint64_t word) {
   constexpr size_t shift =
-      8 * (R::endian == Endian::Little ? Octet : R::bytes - 1 - Octet);
+      BITS_PER_BYTE * (R::endian == Endian::Little ? Octet : R::bytes - 1 - Octet);
 
   return static_cast<std::byte>((word >> shift) & 0xFF);
 }
@@ -226,7 +229,7 @@ REGISTERS_INLINE constexpr uint64_t
 from_bytes(const B &raw, std::index_sequence<Is...>) {
   return (uint64_t{0} | ... |
           (static_cast<uint64_t>(raw[Is])
-           << 8 * (R::endian == Endian::Little ? Is : R::bytes - 1 - Is)));
+           << BITS_PER_BYTE * (R::endian == Endian::Little ? Is : R::bytes - 1 - Is)));
 }
 
 template <Word R, octets_of<R::bytes> B>

@@ -89,10 +89,12 @@ constexpr std::array<std::byte, header_size<A>()> header(bool write) {
 // a tuning register the manual gives as one opaque number: the whole width is
 // a single field, named for the register, and the size comes from it
 template <Strings::fixed_string Name, size_t Bytes>
-using whole = Registers::field<Name, Registers::word_for<Bytes>, 8 * Bytes - 1, 0>;
+using whole = Registers::field<Name, Registers::word_for<Bytes>,
+                               Registers::BITS_PER_BYTE * Bytes - 1, 0>;
 
 template <Address A, typename F>
-using tuning = Registers::reg<A, {.bytes = (F::width / 8)}, F>;
+using tuning =
+    Registers::reg<A, {.bytes = F::width / Registers::BITS_PER_BYTE}, F>;
 
 enum class PanId : uint16_t {};
 enum class ShortAddress : uint16_t {};

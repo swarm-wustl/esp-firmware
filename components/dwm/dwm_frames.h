@@ -62,14 +62,14 @@ using REPLY_TIME =
 
 template <typename F>
 concept OctetField =
-    Registers::Field<F> && F::width % 8 == 0 && (F::mask & 1) == 1;
+    Registers::Field<F> && F::width % Registers::BITS_PER_BYTE == 0 && (F::mask & 1) == 1;
 
 template <typename C>
 concept Chunk = OctetField<C> || Registers::Word<C>;
 
 namespace detail {
 template <OctetField F>
-using part = Registers::reg<Part{}, {.bytes = F::width / 8}, F>;
+using part = Registers::reg<Part{}, {.bytes = F::width / Registers::BITS_PER_BYTE}, F>;
 
 // a field chunk is wrapped in a register of its own width, so both kinds reach
 // the bytes through the same Registers code
