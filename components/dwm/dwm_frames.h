@@ -153,3 +153,15 @@ constexpr bool accepts(Identity self, const Header &header) {
 } // namespace dw1000::mac
 
 #endif
+
+// TODO next steps for addressed ranging:
+// 3. each board's identity: Kconfig short address + PAN, and an address ->
+//    anchor_N frame rule in robot.h so uwb/range names the peer
+// 4. DWM transmit/receive in terms of mac::encode / mac::decode<M>, replacing
+//    the one-octet RANGE_POLL/RANGE_REPLY frames and the hand-rolled t_reply
+//    loops in dwm.h; check idf.py size once frames are in the app
+// 5. addressed range(anchor) / respond(): poll -> reply -> final, drop frames
+//    that fail mac::accepts or carry the wrong sequence
+// 6. [dwm_mock] tests pinning every octet of that exchange
+// 7. bench: software filter first, then SYS_CFG FFEN + FFAD + RXAUTR (without
+//    RXAUTR a rejected frame leaves the receiver idle)
